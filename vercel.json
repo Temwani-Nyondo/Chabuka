@@ -1,0 +1,1 @@
+{"framework":"vite","installCommand":"npm install","buildCommand":"npm run build --workspace @chabuka/shared && npm run build --workspace @chabuka/web","outputDirectory":"apps/web/dist"}
