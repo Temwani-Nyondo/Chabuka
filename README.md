@@ -59,6 +59,16 @@ Prerequisites: Node 20+ and npm, plus a Supabase cloud project.
 
 Landing Day 6 with the MCP server. Sample config goes here.
 
+## Maps (dual system)
+
+Leaflet + OpenStreetMap renders all public discovery (Explore, pins) — free,
+no key. Separately, Google Places may power place search/venue picking where
+Google's terms allow: Places results are displayed on a Google Map/attributed
+surface, only the `place_id` is stored, and saved coordinates always come from
+the user's own confirmed pin — never from cached Google content. Directions
+hand off to the phone's map app via Maps URLs. Partner venue registration UI
+is post-hackathon.
+
 ## Roadmap
 
 After the core (matches, challenges, tournament board): entry fees,

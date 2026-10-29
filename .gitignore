@@ -6,6 +6,9 @@ coverage/
 .env.*
 !.env.example
 .npm-cache/
+.supabase-home/
+.gcloud-config/
+supabase/.temp/
 *.docx
 .DS_Store
 *.local
