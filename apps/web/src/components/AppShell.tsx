@@ -1,8 +1,8 @@
 import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
+import CreateMatchForm from './CreateMatchForm';
 
 const SHEET_ITEMS = [
-  { label: 'Create match', arrives: 'Wed 28 Oct' },
   { label: 'Find opponent', arrives: 'Fri 30 Oct' },
   { label: 'Create team', arrives: 'Fri 30 Oct' },
   { label: 'Create tournament', arrives: 'Sat 31 Oct' },
@@ -11,6 +11,12 @@ const SHEET_ITEMS = [
 
 export default function AppShell() {
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  const closeSheet = () => {
+    setSheetOpen(false);
+    setCreating(false);
+  };
   const tabClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'tab tab-active' : 'tab');
 
   return (
@@ -19,23 +25,39 @@ export default function AppShell() {
         <Outlet />
       </main>
       {sheetOpen ? (
-        <div className="sheet-backdrop" role="presentation" onClick={() => setSheetOpen(false)}>
+        <div className="sheet-backdrop" role="presentation" onClick={closeSheet}>
           <div
             className="sheet"
             role="dialog"
             aria-label="Set something up"
             onClick={(e) => e.stopPropagation()}
           >
-            <h2>Set something up</h2>
-            {SHEET_ITEMS.map((item) => (
-              <div className="sheet-item" key={item.label}>
-                <span>{item.label}</span>
-                <span className="tag">{item.arrives}</span>
-              </div>
-            ))}
-            <button className="btn btn-ghost" type="button" onClick={() => setSheetOpen(false)}>
-              Close
-            </button>
+            {creating ? (
+              <>
+                <h2>Create match</h2>
+                <CreateMatchForm onDone={closeSheet} />
+                <button className="btn btn-ghost" type="button" onClick={() => setCreating(false)}>
+                  Back
+                </button>
+              </>
+            ) : (
+              <>
+                <h2>Set something up</h2>
+                <button className="sheet-item" type="button" onClick={() => setCreating(true)}>
+                  <span>Create match</span>
+                  <span className="tag">Now</span>
+                </button>
+                {SHEET_ITEMS.map((item) => (
+                  <div className="sheet-item" key={item.label}>
+                    <span>{item.label}</span>
+                    <span className="tag">{item.arrives}</span>
+                  </div>
+                ))}
+                <button className="btn btn-ghost" type="button" onClick={closeSheet}>
+                  Close
+                </button>
+              </>
+            )}
           </div>
         </div>
       ) : null}

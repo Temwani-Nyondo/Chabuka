@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { onboardingSchema, sportListSchema } from '@chabuka/shared';
@@ -23,6 +23,28 @@ export default function OnboardingPage() {
   const [picked, setPicked] = useState<string[]>([]);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
+  const [remoteAvatar, setRemoteAvatar] = useState<string | null>(null);
+  const didPrefill = useRef(false);
+
+  // Social sign-in prefill (Amendment 2, section 7): same profile row as
+  // email, prefilled with name and photo where the provider supplies them.
+  // Fills once so later typing is never clobbered.
+  useEffect(() => {
+    if (didPrefill.current || !user) return;
+    didPrefill.current = true;
+    const meta = (user.user_metadata ?? {}) as Record<string, unknown>;
+    const fullName = typeof meta['full_name'] === 'string' ? meta['full_name'].trim() : '';
+    const givenName = typeof meta['name'] === 'string' ? meta['name'].trim() : '';
+    const prefillName = fullName || givenName;
+    if (prefillName) setName(prefillName);
+    const avatar =
+      typeof meta['avatar_url'] === 'string' && meta['avatar_url'].length > 0
+        ? (meta['avatar_url'] as string)
+        : typeof meta['picture'] === 'string' && meta['picture'].length > 0
+          ? (meta['picture'] as string)
+          : null;
+    if (avatar) setRemoteAvatar(avatar);
+  }, [user]);
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -86,7 +108,7 @@ export default function OnboardingPage() {
     const parsed = onboardingSchema.safeParse({
       name: name.trim(),
       area: area.trim(),
-      photoUrl,
+      photoUrl: photoUrl ?? remoteAvatar ?? undefined,
       sportIds: picked,
       level,
     });
@@ -100,7 +122,7 @@ export default function OnboardingPage() {
         id: user.id,
         name: parsed.data.name,
         area: parsed.data.area,
-        photo_url: photoUrl ?? null,
+        photo_url: parsed.data.photoUrl ?? null,
       });
       if (pErr) throw pErr;
       const { error: dErr } = await supabase.from('user_sports').delete().eq('user_id', user.id);
@@ -156,8 +178,12 @@ export default function OnboardingPage() {
           Photo (optional)
           <input className="input" type="file" accept="image/*" onChange={onPhoto} />
         </label>
-        {preview ? (
-          <img className="avatar-preview" src={preview} alt="Profile photo preview" />
+        {preview ?? remoteAvatar ? (
+          <img
+            className="avatar-preview"
+            src={(preview ?? remoteAvatar) as string}
+            alt="Profile photo preview"
+          />
         ) : null}
         <div className="field">
           <span>My sports</span>

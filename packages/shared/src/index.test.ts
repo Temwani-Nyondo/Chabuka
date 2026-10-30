@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { levelSchema, onboardingSchema } from './index';
+import { availableActions, createMatchSchema, levelSchema, onboardingSchema } from './index';
 
 const SPORT_ID = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -66,5 +66,56 @@ describe('onboardingSchema', () => {
       level: 'pro',
     });
     expect(result.success).toBe(false);
+  });
+});
+
+describe('createMatchSchema', () => {
+  const base = {
+    sportId: SPORT_ID,
+    title: 'Saturday football',
+    startsAt: '2026-10-31T13:00:00.000Z',
+    area: 'Woodlands',
+    capacity: 10,
+    level: 'intermediate' as const,
+  };
+
+  it('accepts a valid match and defaults visibility to public', () => {
+    const result = createMatchSchema.safeParse(base);
+    expect(result.success).toBe(true);
+    if (result.success) expect(result.data.visibility).toBe('public');
+  });
+
+  it('rejects capacity under 2', () => {
+    expect(createMatchSchema.safeParse({ ...base, capacity: 1 }).success).toBe(false);
+  });
+
+  it('rejects a vague start time', () => {
+    expect(createMatchSchema.safeParse({ ...base, startsAt: 'Saturday' }).success).toBe(false);
+  });
+});
+
+describe('availableActions', () => {
+  it('offers join to a stranger when there is room', () => {
+    expect(
+      availableActions({ status: 'open', isOrganiser: false, isParticipant: false, joinedCount: 3, capacity: 10 }),
+    ).toEqual(['join']);
+  });
+
+  it('offers nothing when the match is full', () => {
+    expect(
+      availableActions({ status: 'full', isOrganiser: false, isParticipant: false, joinedCount: 10, capacity: 10 }),
+    ).toEqual([]);
+  });
+
+  it('offers withdraw and directions to a joined player', () => {
+    expect(
+      availableActions({ status: 'open', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
+    ).toEqual(['withdraw', 'directions']);
+  });
+
+  it('offers nothing once the match has started', () => {
+    expect(
+      availableActions({ status: 'game_on', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
+    ).toEqual([]);
   });
 });

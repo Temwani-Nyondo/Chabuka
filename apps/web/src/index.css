@@ -263,6 +263,37 @@ code {
   border: 1px solid var(--border);
   border-radius: 12px;
   font-weight: 600;
+  background: var(--surface);
+  color: var(--text);
+  width: 100%;
+  text-align: left;
+  font-size: 15px;
+}
+
+button.sheet-item {
+  cursor: pointer;
+}
+
+.sheet form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sheet {
+  max-height: 88dvh;
+  overflow-y: auto;
+}
+
+.actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.actions-row .btn {
+  text-decoration: none;
 }
 
 .tag {

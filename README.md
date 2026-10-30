@@ -14,8 +14,14 @@ Built for the Meta Global AI Developer Hackathon, Indie Developer track,
 
 - 2026-10-27 (Day 1): monorepo scaffold, Supabase schema (sports, profiles,
   user_sports), magic-link auth, onboarding, navigation shell, first deploy.
+- Day 2: one server action layer (`create_match`, `join_match`,
+  `withdraw_match`) shared by web, helper and MCP, returning the new state
+  plus the actions now available. Web wired to it: Create Match form, Explore
+  list with Join/Withdraw, Home showing your games. Social sign-in (Meta,
+  then Google, email as backup) and the Baseten-first model wrapper landed
+  with it.
 
-(Days 2–9 entries land with each day's work.)
+(Days 3–9 entries land with each day's work.)
 
 ## Screenshots
 
