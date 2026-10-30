@@ -7,19 +7,18 @@ export default function ProfilePage() {
   return (
     <div className="page">
       <h1>Profile</h1>
+      <div className="card player-card">
+        <span className="muted">Player card</span>
+        <span className="player-name">{profile?.name ?? 'New player'}</span>
+        <span className="muted">{profile?.area ?? 'Area not set'}</span>
+        <div className="player-stats">
+          <div className="player-stat">
+            <strong>{sportsCount}</strong>
+            <span>Sports</span>
+          </div>
+        </div>
+      </div>
       <div className="card">
-        <div className="row">
-          <span className="muted">Name</span>
-          <strong>{profile?.name ?? '—'}</strong>
-        </div>
-        <div className="row">
-          <span className="muted">Area</span>
-          <strong>{profile?.area ?? '—'}</strong>
-        </div>
-        <div className="row">
-          <span className="muted">Sports</span>
-          <strong>{sportsCount}</strong>
-        </div>
         <div className="row">
           <span className="muted">Theme</span>
           <button className="btn btn-ghost" type="button" onClick={toggle}>

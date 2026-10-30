@@ -7,7 +7,8 @@ const KEY = 'chabuka-theme';
 function initialTheme(): Theme {
   const saved = localStorage.getItem(KEY);
   if (saved === 'light' || saved === 'dark') return saved;
-  return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  // Brand default is the dark floodlight look; light stays one tap away.
+  return 'dark';
 }
 
 // Placeholder theme tokens live in index.css under [data-theme]; the real

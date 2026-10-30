@@ -23,18 +23,11 @@ const port = Number(process.env.PORT ?? 3001);
 
 // The web app runs on a different origin in dev, so the action API answers
 // CORS for the app origins only.
-const allowedOrigins = new Set(
-  [
-    process.env.APP_URL,
-    'http://localhost:5173',
-    'http://127.0.0.1:5173',
-    'http://localhost:4173',
-    'http://127.0.0.1:4173',
-  ].filter((v): v is string => Boolean(v)),
-);
+const appUrl = process.env.APP_URL;
+const localhostOrigin = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
 app.use((req, res, next) => {
   const origin = req.header('origin');
-  if (origin && allowedOrigins.has(origin)) {
+  if (origin && (origin === appUrl || localhostOrigin.test(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
