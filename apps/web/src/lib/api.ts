@@ -1,4 +1,10 @@
-import type { ActionName, ActionResult, CreateMatchInput } from '@chabuka/shared';
+import type {
+  ActionName,
+  ActionResult,
+  CreateMatchInput,
+  CreateTeamInput,
+  PostChallengeInput,
+} from '@chabuka/shared';
 
 // One action layer: every write goes through POST /api/actions/:name with
 // the signed-in user's token, so the API runs it as that user under RLS.
@@ -47,4 +53,30 @@ export function joinMatchAction(matchId: string, accessToken: string): Promise<A
 
 export function withdrawMatchAction(matchId: string, accessToken: string): Promise<ActionResult> {
   return runAction<ActionResult>('withdraw_match', { matchId }, accessToken);
+}
+
+export function createTeamAction(input: CreateTeamInput, accessToken: string): Promise<unknown> {
+  return runAction('create_team', input, accessToken);
+}
+
+export function postChallengeAction(input: PostChallengeInput, accessToken: string): Promise<unknown> {
+  return runAction('post_challenge', input, accessToken);
+}
+
+export function acceptChallengeAction(
+  body: { challengeId: string; opponentTeamId: string; startsAt?: string },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('accept_challenge', body, accessToken);
+}
+
+export function declineChallengeAction(challengeId: string, accessToken: string): Promise<unknown> {
+  return runAction('decline_challenge', { challengeId }, accessToken);
+}
+
+export function proposeTimeAction(
+  body: { challengeId: string; opponentTeamId: string; proposedStartsAt: string },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('propose_time', body, accessToken);
 }

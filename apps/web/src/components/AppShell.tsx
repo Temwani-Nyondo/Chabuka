@@ -1,21 +1,23 @@
 import { useState } from 'react';
 import { NavLink, Outlet } from 'react-router-dom';
 import CreateMatchForm from './CreateMatchForm';
+import CreateTeamForm from './CreateTeamForm';
+import FindOpponentForm from './FindOpponentForm';
 
 const SHEET_ITEMS = [
-  { label: 'Find opponent', arrives: 'Fri 30 Oct' },
-  { label: 'Create team', arrives: 'Fri 30 Oct' },
   { label: 'Create tournament', arrives: 'Sat 31 Oct' },
   { label: 'Ask the helper', arrives: 'Mon 2 Nov' },
 ];
 
+type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
+
 export default function AppShell() {
   const [sheetOpen, setSheetOpen] = useState(false);
-  const [creating, setCreating] = useState(false);
+  const [mode, setMode] = useState<SheetMode>('menu');
 
   const closeSheet = () => {
     setSheetOpen(false);
-    setCreating(false);
+    setMode('menu');
   };
   const tabClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'tab tab-active' : 'tab');
 
@@ -32,19 +34,43 @@ export default function AppShell() {
             aria-label="Set something up"
             onClick={(e) => e.stopPropagation()}
           >
-            {creating ? (
+            {mode === 'match' ? (
               <>
                 <h2>Create match</h2>
                 <CreateMatchForm onDone={closeSheet} />
-                <button className="btn btn-ghost" type="button" onClick={() => setCreating(false)}>
+                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
+                  Back
+                </button>
+              </>
+            ) : mode === 'team' ? (
+              <>
+                <h2>Create team</h2>
+                <CreateTeamForm onDone={closeSheet} />
+                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
+                  Back
+                </button>
+              </>
+            ) : mode === 'opponent' ? (
+              <>
+                <h2>Find opponent</h2>
+                <FindOpponentForm onDone={closeSheet} />
+                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
                   Back
                 </button>
               </>
             ) : (
               <>
                 <h2>Set something up</h2>
-                <button className="sheet-item" type="button" onClick={() => setCreating(true)}>
+                <button className="sheet-item" type="button" onClick={() => setMode('match')}>
                   <span>Create match</span>
+                  <span className="tag">Now</span>
+                </button>
+                <button className="sheet-item" type="button" onClick={() => setMode('opponent')}>
+                  <span>Find opponent</span>
+                  <span className="tag">Now</span>
+                </button>
+                <button className="sheet-item" type="button" onClick={() => setMode('team')}>
+                  <span>Create team</span>
                   <span className="tag">Now</span>
                 </button>
                 {SHEET_ITEMS.map((item) => (

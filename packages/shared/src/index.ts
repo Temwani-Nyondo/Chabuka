@@ -123,10 +123,149 @@ export const matchIdSchema = z.object({
 });
 export type MatchIdInput = z.infer<typeof matchIdSchema>;
 
-// Day 2 action names. The API contract returns the new state plus the
+// --- Teams + challenges (brief sections 6-7) ---
+export const TEAM_CATEGORIES = [
+  'corporate',
+  'neighbourhood',
+  'recreational',
+  'competitive',
+  'veterans',
+  'alumni',
+  'social',
+  'club',
+] as const;
+export const teamCategorySchema = z.enum(TEAM_CATEGORIES);
+export type TeamCategory = z.infer<typeof teamCategorySchema>;
+
+export const TEAM_CATEGORY_LABELS: Record<TeamCategory, string> = {
+  corporate: 'Corporate',
+  neighbourhood: 'Neighbourhood',
+  recreational: 'Recreational',
+  competitive: 'Competitive',
+  veterans: 'Veterans',
+  alumni: 'Alumni',
+  social: 'Social',
+  club: 'Club',
+};
+
+export const TEAM_ROLES = ['owner', 'captain', 'player'] as const;
+export const teamRoleSchema = z.enum(TEAM_ROLES);
+export type TeamRole = z.infer<typeof teamRoleSchema>;
+
+export const teamSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string().min(1).max(80),
+  logo_url: z.string().url().nullable().optional(),
+  sport_id: z.string().uuid(),
+  category: teamCategorySchema,
+  city: z.string().nullable().optional(),
+  area: z.string().nullable().optional(),
+  lat: z.number().nullable().optional(),
+  lng: z.number().nullable().optional(),
+  verified: z.boolean().optional(),
+  created_by: z.string().uuid(),
+});
+export type Team = z.infer<typeof teamSchema>;
+
+export const CHALLENGE_STATUSES = [
+  'open',
+  'accepted',
+  'reschedule_proposed',
+  'declined',
+  'expired',
+] as const;
+export const challengeStatusSchema = z.enum(CHALLENGE_STATUSES);
+export type ChallengeStatus = z.infer<typeof challengeStatusSchema>;
+
+export const challengeSchema = z.object({
+  id: z.string().uuid(),
+  team_id: z.string().uuid(),
+  sport_id: z.string().uuid(),
+  format: z.string().nullable().optional(),
+  level: levelSchema.nullable().optional(),
+  window_start: z.string(),
+  window_end: z.string(),
+  area: z.string().nullable().optional(),
+  lat: z.number().nullable().optional(),
+  lng: z.number().nullable().optional(),
+  radius_km: z.number().nullable().optional(),
+  status: challengeStatusSchema,
+  opponent_team_id: z.string().uuid().nullable().optional(),
+  proposed_starts_at: z.string().nullable().optional(),
+  match_id: z.string().uuid().nullable().optional(),
+  created_by: z.string().uuid(),
+});
+export type Challenge = z.infer<typeof challengeSchema>;
+
+export const createTeamSchema = z.object({
+  name: z.string().trim().min(1, 'Team name is required').max(80),
+  sportId: z.string().uuid(),
+  category: teamCategorySchema.default('recreational'),
+  city: z.string().trim().max(80).optional(),
+  area: z.string().trim().min(1, 'Area is required').max(80),
+  logoUrl: z.string().url().optional(),
+});
+export type CreateTeamInput = z.infer<typeof createTeamSchema>;
+
+export const postChallengeSchema = z.object({
+  teamId: z.string().uuid(),
+  format: z.string().trim().max(40).optional(),
+  level: levelSchema,
+  windowStart: z.iso.datetime({ offset: true }),
+  windowEnd: z.iso.datetime({ offset: true }),
+  area: z.string().trim().min(1, 'Area is required').max(80),
+  radiusKm: z.number().min(1).max(100).default(10),
+});
+export type PostChallengeInput = z.infer<typeof postChallengeSchema>;
+
+export const challengeIdSchema = z.object({
+  challengeId: z.string().uuid(),
+});
+export type ChallengeIdInput = z.infer<typeof challengeIdSchema>;
+
+export const acceptChallengeSchema = z.object({
+  challengeId: z.string().uuid(),
+  opponentTeamId: z.string().uuid(),
+  startsAt: z.iso.datetime({ offset: true }).optional(),
+});
+export type AcceptChallengeInput = z.infer<typeof acceptChallengeSchema>;
+
+export const proposeTimeSchema = z.object({
+  challengeId: z.string().uuid(),
+  opponentTeamId: z.string().uuid(),
+  proposedStartsAt: z.iso.datetime({ offset: true }),
+});
+export type ProposeTimeInput = z.infer<typeof proposeTimeSchema>;
+
+// Actions a viewer gets on a challenge. Captains/owners act for their team.
+export function availableChallengeActions(input: {
+  status: ChallengeStatus;
+  isPosterTeamMember: boolean;
+  isCaptainOrOwner: boolean;
+}): string[] {
+  if (!input.isCaptainOrOwner) return [];
+  if (input.status === 'open') {
+    return input.isPosterTeamMember ? [] : ['accept_challenge', 'propose_time', 'decline_challenge'];
+  }
+  if (input.status === 'reschedule_proposed') {
+    return input.isPosterTeamMember ? ['accept_challenge', 'decline_challenge'] : [];
+  }
+  return [];
+}
+
+// Action names. The API contract returns the new state plus the
 // actions now available, e.g. { state: 'joined', actions: ['withdraw'] },
 // and the web renders its buttons straight from that list.
-export const ACTION_NAMES = ['create_match', 'join_match', 'withdraw_match'] as const;
+export const ACTION_NAMES = [
+  'create_match',
+  'join_match',
+  'withdraw_match',
+  'create_team',
+  'post_challenge',
+  'accept_challenge',
+  'decline_challenge',
+  'propose_time',
+] as const;
 export const actionNameSchema = z.enum(ACTION_NAMES);
 export type ActionName = z.infer<typeof actionNameSchema>;
 
@@ -134,6 +273,9 @@ export const CTA_LABELS: Record<string, string> = {
   join: 'Join',
   withdraw: 'Withdraw',
   directions: 'Directions',
+  accept_challenge: 'Accept',
+  decline_challenge: 'Decline',
+  propose_time: 'Propose another time',
 };
 
 export const actionResultSchema = z.object({
