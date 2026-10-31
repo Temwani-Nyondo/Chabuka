@@ -74,6 +74,33 @@ export function declineChallengeAction(challengeId: string, accessToken: string)
   return runAction('decline_challenge', { challengeId }, accessToken);
 }
 
+export function createVenueAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('create_venue', input, accessToken);
+}
+
+export function createVenueSlotAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('create_venue_slot', input, accessToken);
+}
+
+export function requestBookingAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('request_booking', input, accessToken);
+}
+
+export function respondBookingAction(
+  body: { bookingId: string; decision: 'confirm' | 'decline' },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('respond_booking', body, accessToken);
+}
+
+export function cancelBookingAction(bookingId: string, accessToken: string): Promise<unknown> {
+  return runAction('cancel_booking', { bookingId }, accessToken);
+}
+
+export function checkInTicketAction(ticketId: string, accessToken: string): Promise<unknown> {
+  return runAction('check_in_ticket', { ticketId }, accessToken);
+}
+
 export function proposeTimeAction(
   body: { challengeId: string; opponentTeamId: string; proposedStartsAt: string },
   accessToken: string,

@@ -2,11 +2,17 @@ import { describe, expect, it } from 'vitest';
 import {
   ActionError,
   acceptChallenge,
+  cancelBooking,
+  checkInTicket,
   createMatch,
   createTeam,
+  createVenue,
+  createVenueSlot,
   joinMatch,
   postChallenge,
   proposeTime,
+  requestBooking,
+  respondBooking,
   withdrawMatch,
 } from './actions.js';
 
@@ -103,6 +109,10 @@ function fakeDb() {
   const teams = new Map<string, Row>();
   const members = new Map<string, Row>();
   const challenges = new Map<string, Row>();
+  const venues = new Map<string, Row>();
+  const slots = new Map<string, Row>();
+  const bookings = new Map<string, Row>();
+  const tickets = new Map<string, Row>();
   const client = {
     from(table: string) {
       if (table === 'matches') return new FakeQuery(matches, (r) => String(r['id']));
@@ -114,10 +124,14 @@ function fakeDb() {
         return new FakeQuery(members, (r) => `${String(r['team_id'])}:${String(r['user_id'])}`);
       }
       if (table === 'challenges') return new FakeQuery(challenges, (r) => String(r['id']));
+      if (table === 'venues') return new FakeQuery(venues, (r) => String(r['id']));
+      if (table === 'venue_slots') return new FakeQuery(slots, (r) => String(r['id']));
+      if (table === 'bookings') return new FakeQuery(bookings, (r) => String(r['id']));
+      if (table === 'tickets') return new FakeQuery(tickets, (r) => String(r['id']));
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -242,6 +256,71 @@ describe('teams and challenges', () => {
     await proposeTime(client, PLAYER_A, posted.challenge.id, awayId, '2026-11-01T10:00:00.000Z');
     const accepted = (await acceptChallenge(client, ORGANISER, posted.challenge.id, homeId)) as ChallengeResult;
     expect(matches.get(String(accepted.matchId))?.['starts_at']).toBe('2026-11-01T10:00:00.000Z');
+  });
+});
+
+type VenueResult = { venue: { id: string }; slot?: { id: string } };
+type BookingResult = { state: string; booking: { id: string }; ticket?: { id: string; code: string; status: string } | null };
+
+async function venueWithSlot(client: never, capacity = 1) {
+  const created = (await createVenue(client, ORGANISER, {
+    name: 'Woodlands Community Pitch',
+    area: 'Woodlands',
+    sports: ['Football'],
+    facilityTypes: ['grass pitch'],
+    priceNote: 'Free — MVP demo',
+  })) as VenueResult;
+  const slot = (await createVenueSlot(client, ORGANISER, {
+    venueId: created.venue.id,
+    startsAt: '2026-11-07T13:00:00.000Z',
+    endsAt: '2026-11-07T15:00:00.000Z',
+    capacity,
+  })) as { slot: { id: string } };
+  return { venueId: created.venue.id, slotId: slot.slot.id };
+}
+
+describe('venue bookings (free)', () => {
+  it('confirming a booking issues a free ticket the owner can check in', async () => {
+    const { client, tickets } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client);
+    const asked = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    expect(asked.state).toBe('requested');
+    const confirmed = (await respondBooking(client, ORGANISER, asked.booking.id, 'confirm')) as BookingResult;
+    expect(confirmed.state).toBe('confirmed');
+    expect(confirmed.ticket?.code).toMatch(/^CHB-/);
+    expect(confirmed.ticket?.status).toBe('issued');
+    const used = (await checkInTicket(client, ORGANISER, String(confirmed.ticket?.id))) as BookingResult;
+    expect(used.state).toBe('used');
+    expect([...tickets.values()][0]?.['status']).toBe('used');
+  });
+
+  it('refuses to confirm past slot capacity and refuses duplicate requests', async () => {
+    const { client } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client, 1);
+    const first = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    await expect(requestBooking(client, PLAYER_A, { venueId, slotId })).rejects.toMatchObject({ status: 409 });
+    const second = (await requestBooking(client, PLAYER_B, { venueId, slotId })) as BookingResult;
+    await respondBooking(client, ORGANISER, first.booking.id, 'confirm');
+    await expect(respondBooking(client, ORGANISER, second.booking.id, 'confirm')).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('only the venue owner can add slots or confirm, and cancelling voids the ticket', async () => {
+    const { client, tickets } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client);
+    await expect(
+      createVenueSlot(client, PLAYER_A, {
+        venueId,
+        startsAt: '2026-11-08T13:00:00.000Z',
+        endsAt: '2026-11-08T15:00:00.000Z',
+        capacity: 1,
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    const asked = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    await expect(respondBooking(client, PLAYER_B, asked.booking.id, 'confirm')).rejects.toMatchObject({ status: 403 });
+    await respondBooking(client, ORGANISER, asked.booking.id, 'confirm');
+    const cancelled = (await cancelBooking(client, PLAYER_A, asked.booking.id)) as BookingResult;
+    expect(cancelled.state).toBe('cancelled');
+    expect([...tickets.values()][0]?.['status']).toBe('cancelled');
   });
 });
 

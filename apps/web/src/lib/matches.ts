@@ -1,10 +1,11 @@
-import { matchSchema, sportListSchema } from '@chabuka/shared';
-import type { Match, Sport } from '@chabuka/shared';
+import { matchSchema, sportListSchema, venueListSchema } from '@chabuka/shared';
+import type { Match, Sport, Venue } from '@chabuka/shared';
 import { supabase } from './supabase';
 
 export interface MatchListing {
   match: Match;
   sport: Sport | null;
+  venue: Venue | null;
   joinedCount: number;
   isParticipant: boolean;
   isOrganiser: boolean;
@@ -40,9 +41,21 @@ async function buildListings(rows: unknown[], userId: string): Promise<MatchList
     if (p.user_id === userId) mine.add(p.match_id);
   }
 
+  const venueIds = [...new Set(matches.map((m) => m.venue_id).filter(Boolean))] as string[];
+  const venueById = new Map<string, Venue>();
+  if (venueIds.length > 0) {
+    const { data: venueRows } = await supabase
+      .from('venues')
+      .select('id,name,area,lat,lng,sports,facility_types,price_note,contact,photos')
+      .in('id', venueIds);
+    const venues = venueListSchema.safeParse(venueRows ?? []);
+    if (venues.success) for (const v of venues.data) venueById.set(v.id, v);
+  }
+
   return matches.map((match) => ({
     match,
     sport: sportById.get(match.sport_id) ?? null,
+    venue: match.venue_id ? (venueById.get(match.venue_id) ?? null) : null,
     joinedCount: counts.get(match.id) ?? 0,
     isParticipant: mine.has(match.id),
     isOrganiser: match.organiser_id === userId,

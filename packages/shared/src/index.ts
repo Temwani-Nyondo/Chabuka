@@ -80,6 +80,8 @@ export const matchSchema = z.object({
   title: z.string().min(1).max(80),
   starts_at: z.string(),
   venue_id: z.string().uuid().nullable().optional(),
+  place_id: z.string().nullable().optional(),
+  venue_name: z.string().nullable().optional(),
   lat: z.number().nullable().optional(),
   lng: z.number().nullable().optional(),
   area: z.string().nullable().optional(),
@@ -107,6 +109,8 @@ export const createMatchSchema = z.object({
   title: z.string().trim().min(1, 'Title is required').max(80),
   startsAt: z.iso.datetime({ offset: true }),
   venueId: z.string().uuid().optional(),
+  placeId: z.string().trim().max(300).optional(),
+  venueName: z.string().trim().max(120).optional(),
   lat: z.number().min(-90).max(90).optional(),
   lng: z.number().min(-180).max(180).optional(),
   area: z.string().trim().min(1, 'Area is required').max(80),
@@ -122,6 +126,114 @@ export const matchIdSchema = z.object({
   matchId: z.string().uuid(),
 });
 export type MatchIdInput = z.infer<typeof matchIdSchema>;
+
+// --- Venues (brief section 7): listed places to play, picked from the map
+// or a listing; a dropped pin on a match is venue_id-less lat/lng. ---
+export const venueSchema = z.object({
+  id: z.string().uuid(),
+  owner_id: z.string().uuid().nullable().optional(),
+  google_place_id: z.string().nullable().optional(),
+  name: z.string().min(1).max(80),
+  area: z.string().nullable().optional(),
+  lat: z.number().min(-90).max(90).nullable().optional(),
+  lng: z.number().min(-180).max(180).nullable().optional(),
+  sports: z.array(z.string()).default([]),
+  facility_types: z.array(z.string()).default([]),
+  price_note: z.string().nullable().optional(),
+  contact: z.string().nullable().optional(),
+  photos: z.array(z.string()).default([]),
+});
+export type Venue = z.infer<typeof venueSchema>;
+
+export const venueListSchema = z.array(venueSchema);
+
+// Lusaka centre: the map opens here until a venue or pin says otherwise.
+export const DEFAULT_MAP_CENTER = { lat: -15.3875, lng: 28.3228 } as const;
+
+// --- Venue system (Amendment 3): profiles, dashboard, free bookings ---
+// Every booking and ticket is free in the MVP; there is no price or payment
+// field anywhere in these schemas on purpose.
+export const createVenueSchema = z.object({
+  name: z.string().trim().min(1, 'Venue name is required').max(80),
+  area: z.string().trim().min(1, 'Area is required').max(80),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  googlePlaceId: z.string().trim().max(300).optional(),
+  sports: z.array(z.string().trim().min(1).max(40)).default([]),
+  facilityTypes: z.array(z.string().trim().min(1).max(60)).default([]),
+  priceNote: z.string().trim().max(120).default('Free — MVP demo'),
+  contact: z.string().trim().max(120).optional(),
+});
+export type CreateVenueInput = z.infer<typeof createVenueSchema>;
+
+export const venueSlotSchema = z.object({
+  id: z.string().uuid(),
+  venue_id: z.string().uuid(),
+  starts_at: z.string(),
+  ends_at: z.string(),
+  capacity: z.number().int().positive(),
+});
+export type VenueSlot = z.infer<typeof venueSlotSchema>;
+
+export const createVenueSlotSchema = z.object({
+  venueId: z.string().uuid(),
+  startsAt: z.iso.datetime({ offset: true }),
+  endsAt: z.iso.datetime({ offset: true }),
+  capacity: z.number().int().min(1).max(50).default(1),
+});
+export type CreateVenueSlotInput = z.infer<typeof createVenueSlotSchema>;
+
+export const BOOKING_STATUSES = ['requested', 'confirmed', 'declined', 'cancelled'] as const;
+export const bookingStatusSchema = z.enum(BOOKING_STATUSES);
+export type BookingStatus = z.infer<typeof bookingStatusSchema>;
+
+export const bookingSchema = z.object({
+  id: z.string().uuid(),
+  venue_id: z.string().uuid(),
+  slot_id: z.string().uuid().nullable().optional(),
+  match_id: z.string().uuid().nullable().optional(),
+  requester_id: z.string().uuid(),
+  requested_starts_at: z.string().nullable().optional(),
+  status: bookingStatusSchema,
+});
+export type Booking = z.infer<typeof bookingSchema>;
+
+export const requestBookingSchema = z
+  .object({
+    venueId: z.string().uuid(),
+    slotId: z.string().uuid().optional(),
+    matchId: z.string().uuid().optional(),
+    requestedStartsAt: z.iso.datetime({ offset: true }).optional(),
+  })
+  .refine((v) => Boolean(v.slotId || v.requestedStartsAt), {
+    message: 'Pick a listed slot or request a time.',
+  });
+export type RequestBookingInput = z.infer<typeof requestBookingSchema>;
+
+export const respondBookingSchema = z.object({
+  bookingId: z.string().uuid(),
+  decision: z.enum(['confirm', 'decline']),
+});
+export type RespondBookingInput = z.infer<typeof respondBookingSchema>;
+
+export const bookingIdSchema = z.object({ bookingId: z.string().uuid() });
+export type BookingIdInput = z.infer<typeof bookingIdSchema>;
+
+export const TICKET_STATUSES = ['issued', 'used', 'cancelled'] as const;
+export const ticketStatusSchema = z.enum(TICKET_STATUSES);
+export type TicketStatus = z.infer<typeof ticketStatusSchema>;
+
+export const ticketSchema = z.object({
+  id: z.string().uuid(),
+  booking_id: z.string().uuid(),
+  user_id: z.string().uuid(),
+  code: z.string().min(1),
+  status: ticketStatusSchema,
+});
+export type Ticket = z.infer<typeof ticketSchema>;
+
+export const ticketIdSchema = z.object({ ticketId: z.string().uuid() });
+export type TicketIdInput = z.infer<typeof ticketIdSchema>;
 
 // --- Teams + challenges (brief sections 6-7) ---
 export const TEAM_CATEGORIES = [
@@ -265,6 +377,12 @@ export const ACTION_NAMES = [
   'accept_challenge',
   'decline_challenge',
   'propose_time',
+  'create_venue',
+  'create_venue_slot',
+  'request_booking',
+  'respond_booking',
+  'cancel_booking',
+  'check_in_ticket',
 ] as const;
 export const actionNameSchema = z.enum(ACTION_NAMES);
 export type ActionName = z.infer<typeof actionNameSchema>;
@@ -276,6 +394,11 @@ export const CTA_LABELS: Record<string, string> = {
   accept_challenge: 'Accept',
   decline_challenge: 'Decline',
   propose_time: 'Propose another time',
+  request_booking: 'Book free',
+  confirm_booking: 'Confirm',
+  decline_booking: 'Decline',
+  cancel_booking: 'Cancel booking',
+  check_in_ticket: 'Check in',
 };
 
 export const actionResultSchema = z.object({

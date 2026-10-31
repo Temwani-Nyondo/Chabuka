@@ -6,6 +6,8 @@ import type { Level, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { createMatchAction } from '../lib/api';
 import { fetchSports } from '../lib/matches';
+import VenuePicker from './VenuePicker';
+import type { VenuePick } from './VenuePicker';
 
 export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const { session, profile } = useAuth();
@@ -20,6 +22,7 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const [level, setLevel] = useState<Level>('recreational');
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [notes, setNotes] = useState('');
+  const [venuePick, setVenuePick] = useState<VenuePick>({});
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -49,6 +52,11 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
       title: title.trim(),
       startsAt: startsAt ? new Date(startsAt).toISOString() : '',
       area: area.trim(),
+      venueId: venuePick.venueId,
+      placeId: venuePick.placeId,
+      venueName: venuePick.venueName,
+      lat: venuePick.lat,
+      lng: venuePick.lng,
       format: format || undefined,
       capacity,
       level,
@@ -130,16 +138,12 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
           onChange={(e) => setStartsAt(e.target.value)}
         />
       </label>
-      <label className="field">
-        Area
-        <input
-          className="input"
-          value={area}
-          onChange={(e) => setArea(e.target.value)}
-          placeholder="e.g. Woodlands"
-          maxLength={80}
-        />
-      </label>
+      <VenuePicker
+        sportName={sport?.name}
+        area={area}
+        onAreaChange={setArea}
+        onPick={setVenuePick}
+      />
       <label className="field">
         Players needed (including you)
         <input

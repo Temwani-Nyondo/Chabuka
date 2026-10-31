@@ -18,7 +18,7 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
 });
 
 export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) {
-  const { match, sport, joinedCount, isParticipant, isOrganiser } = listing;
+  const { match, sport, venue, joinedCount, isParticipant, isOrganiser } = listing;
   const [error, setError] = useState<string | null>(null);
   const actions = availableActions({
     status: match.status,
@@ -27,9 +27,11 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
     joinedCount,
     capacity: match.capacity,
   });
+  const destLat = match.lat ?? venue?.lat;
+  const destLng = match.lng ?? venue?.lng;
   const directionsUrl =
-    match.lat != null && match.lng != null
-      ? `https://www.google.com/maps/dir/?api=1&destination=${match.lat},${match.lng}`
+    destLat != null && destLng != null
+      ? `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}`
       : null;
 
   const act = (fn: (id: string) => void) => () => {
@@ -48,7 +50,8 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
         {dateFmt.format(new Date(match.starts_at))}
       </p>
       <p className="muted">
-        {match.area ?? 'Area to be confirmed'}
+        {venue ? `${venue.name} · ` : match.venue_name ? `${match.venue_name} · ` : ''}
+        {match.area ?? venue?.area ?? 'Area to be confirmed'}
         {match.level ? ` · ${LEVEL_LABELS[match.level]}` : ''} · {joinedCount}/{match.capacity}{' '}
         players in
       </p>

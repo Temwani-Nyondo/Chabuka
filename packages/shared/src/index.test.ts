@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { availableActions, createMatchSchema, levelSchema, onboardingSchema } from './index';
+import {
+  availableActions,
+  createMatchSchema,
+  levelSchema,
+  onboardingSchema,
+  requestBookingSchema,
+  venueListSchema,
+  venueSchema,
+} from './index';
 
 const SPORT_ID = '123e4567-e89b-12d3-a456-426614174000';
 
@@ -91,6 +99,61 @@ describe('createMatchSchema', () => {
 
   it('rejects a vague start time', () => {
     expect(createMatchSchema.safeParse({ ...base, startsAt: 'Saturday' }).success).toBe(false);
+  });
+});
+
+describe('venueSchema', () => {
+  const venue = {
+    id: SPORT_ID,
+    name: 'Woodlands Community Pitch',
+    area: 'Woodlands',
+    lat: -15.43,
+    lng: 28.35,
+    sports: ['Football'],
+    facility_types: ['grass pitch'],
+    price_note: 'Free',
+    photos: [],
+  };
+
+  it('accepts a listed venue and defaults facility photos', () => {
+    const result = venueSchema.safeParse(venue);
+    expect(result.success).toBe(true);
+  });
+
+  it('parses a venue list, dropping nothing valid', () => {
+    expect(venueListSchema.safeParse([venue, venue]).success).toBe(true);
+  });
+
+  it('rejects coordinates off the map', () => {
+    expect(venueSchema.safeParse({ ...venue, lat: -200 }).success).toBe(false);
+  });
+});
+
+describe('createMatchSchema venue input', () => {
+  it('accepts a venue id with its pin', () => {
+    const result = createMatchSchema.safeParse({
+      sportId: SPORT_ID,
+      title: 'Saturday football',
+      startsAt: '2026-10-31T13:00:00.000Z',
+      venueId: SPORT_ID,
+      lat: -15.43,
+      lng: 28.35,
+      area: 'Woodlands',
+      capacity: 10,
+      level: 'intermediate',
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe('requestBookingSchema', () => {
+  it('accepts a slot booking with no payment fields', () => {
+    const result = requestBookingSchema.safeParse({ venueId: SPORT_ID, slotId: SPORT_ID });
+    expect(result.success).toBe(true);
+  });
+
+  it('rejects a booking with neither slot nor time', () => {
+    expect(requestBookingSchema.safeParse({ venueId: SPORT_ID }).success).toBe(false);
   });
 });
 

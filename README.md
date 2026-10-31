@@ -65,23 +65,27 @@ Prerequisites: Node 20+ and npm, plus a Supabase cloud project.
 
 Landing Day 6 with the MCP server. Sample config goes here.
 
-## Maps (dual system)
+## Maps (Amendment 3)
 
-Leaflet + OpenStreetMap renders all public discovery (Explore, pins) — free,
-no key. Separately, Google Places may power place search/venue picking where
-Google's terms allow: Places results are displayed on a Google Map/attributed
-surface, only the `place_id` is stored, and saved coordinates always come from
-the user's own confirmed pin — never from cached Google content. Directions
-hand off to the phone's map app via Maps URLs. Partner venue registration UI
-is post-hackathon.
+Explore is list-first; its map toggle renders public discovery on Leaflet +
+OpenStreetMap — free, no key. Venue search and picking use Google Maps
+Platform: Places autocomplete renders the picked place on a Google Map, and
+dropping/dragging a pin reverse-geocodes back into the text box. A match
+stores the Google `place_id`, the place name, and the coordinates of the
+user's own confirmed pin. Directions hand off to the phone's map app via
+Maps URLs. Venues are browsed as lists first (cards, then a profile), with
+the map inside the picking/booking flow. See
+[docs/amendment-3-maps-venues.md](docs/amendment-3-maps-venues.md).
 
 ## Roadmap
 
 After the core (matches, challenges, tournament board): entry fees,
-fundraising, MVP and stat badges, ticketing, league tab, Hall of Fame,
-discipline icons, verified badges — each first as a clearly-labelled preview
-shell. Never: chat/DMs, real payments, knockout engine, rankings, venue
-calendars, partner dashboards, native app, social feeds.
+fundraising, MVP and stat badges, league tab, Hall of Fame, discipline
+icons, verified badges — each first as a clearly-labelled preview shell.
+Venue profiles, the venue dashboard, booking schedules, and free tickets
+are in the MVP (Amendment 3); every booking and ticket is free while
+demonstrating, with no payment gateway. Never: chat/DMs, real payments,
+knockout engine, rankings, native app, social feeds.
 
 ## License
 
