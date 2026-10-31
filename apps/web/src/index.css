@@ -1,29 +1,33 @@
 @import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Oswald:wght@500;600;700&display=swap');
 
-/* Placeholder theme tokens (light/dark). The real visual identity swaps in
-   here — components only reference these variables. */
+/* Chabuka visual system (UI Design Direction): night pitch, electric lime as
+   the one accent. Components only reference these variables. */
 :root {
-  --bg: #f4f7f5;
+  --bg: #eef2ee;
   --surface: #ffffff;
-  --surface-2: #eef3f0;
+  --surface-2: #e4eae4;
   --text: #101713;
   --muted: #5b6d63;
-  --border: #dce5de;
-  --accent: #16a34a;
-  --accent-ink: #ffffff;
-  --danger: #dc2626;
-  --radius: 14px;
+  --border: #d3dcd3;
+  --accent: #c6ff00;
+  --accent-ink: #0b0f14;
+  --danger: #ff4d4f;
+  --radius: 12px;
+  --tier-bronze: #c68a4e;
+  --tier-silver: #c9d1d9;
+  --tier-gold: #f5c542;
 }
 
 [data-theme='dark'] {
-  --bg: #0a100d;
-  --surface: #111a15;
-  --surface-2: #1a261f;
-  --text: #eef6f1;
-  --muted: #9db3a5;
-  --border: #24352b;
-  --accent: #2fd672;
-  --accent-ink: #06130c;
+  --bg: #0b0f14;
+  --surface: #151b23;
+  --surface-2: #1c2530;
+  --text: #f2f5f8;
+  --muted: #8b98a5;
+  --border: #26313d;
+  --accent: #c6ff00;
+  --accent-ink: #0b0f14;
 }
 
 * {
@@ -34,19 +38,147 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
 h1 {
-  font-size: 28px;
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-size: 30px;
   margin: 8px 0 4px;
-  line-height: 1.15;
+  line-height: 1.1;
 }
 
 h2 {
-  font-size: 20px;
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  font-size: 22px;
   margin: 4px 0 8px;
+}
+
+/* Soft floodlight glow (lime, low opacity) behind the main card. */
+.floodlight {
+  position: relative;
+}
+
+.floodlight::before {
+  content: '';
+  position: absolute;
+  inset: -40px -16px auto;
+  height: 180px;
+  background: radial-gradient(ellipse at 50% 0%, rgba(198, 255, 0, 0.12), transparent 70%);
+  pointer-events: none;
+}
+
+/* Nudge card: one lime Join button, fits-AAA readably on dark or light. */
+.nudge {
+  border-left: 4px solid var(--accent);
+}
+
+/* Full-screen Match Found reveal. Badges slide in, VS punches in, ~1s,
+   tap to skip; reduced motion collapses everything to a fade. */
+.match-found {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.85);
+  color: #f2f5f8;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 16px;
+  cursor: pointer;
+  animation: match-found-fade 200ms ease-out;
+}
+
+.match-found .versus {
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  font-size: 56px;
+  text-transform: uppercase;
+  color: var(--accent);
+  animation: versus-punch 600ms ease-out;
+}
+
+.match-found .side {
+  font-weight: 800;
+  font-size: 20px;
+  animation: side-slide 500ms ease-out;
+}
+
+@keyframes side-slide {
+  from {
+    opacity: 0;
+    transform: translateX(-24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes versus-punch {
+  0% {
+    opacity: 0;
+    transform: scale(0.6);
+  }
+  60% {
+    opacity: 1;
+    transform: scale(1.08);
+  }
+  100% {
+    transform: none;
+  }
+}
+
+@keyframes match-found-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Team join flip, under 600ms. */
+.card-flip {
+  animation: card-flip 500ms ease-out;
+}
+
+@keyframes card-flip {
+  from {
+    transform: rotateY(70deg);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .match-found,
+  .match-found .versus,
+  .match-found .side,
+  .card-flip {
+    animation: match-found-fade 150ms linear;
+  }
+}
+
+/* Collapsible "What the Gaffer did" trace under agent results. */
+.trace {
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  font-size: 14px;
+}
+
+.trace summary {
+  cursor: pointer;
+  font-weight: 700;
+  color: var(--muted);
 }
 
 p {
@@ -361,6 +493,32 @@ button.sheet-item {
   background: var(--surface-2);
   padding: 20px 16px;
   gap: 6px;
+  /* Angled shield hint from the design direction (full shield art later). */
+  clip-path: polygon(0 0, 100% 0, 100% calc(100% - 18px), calc(100% - 18px) 100%, 0 100%);
+}
+
+.tier-bronze {
+  border-top: 4px solid var(--tier-bronze);
+}
+
+.tier-silver {
+  border-top: 4px solid var(--tier-silver);
+}
+
+.tier-gold {
+  border-top: 4px solid var(--tier-gold);
+}
+
+.badge-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.ticket {
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  padding: 12px;
 }
 
 .player-name {

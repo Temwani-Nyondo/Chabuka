@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { CTA_LABELS, LEVEL_LABELS, availableActions } from '@chabuka/shared';
+import { CTA_LABELS, LEVEL_LABELS, availableActions, googleCalendarUrl } from '@chabuka/shared';
+import { useAuth } from '../auth/AuthContext';
+import { downloadMatchIcs } from '../lib/api';
 import type { MatchListing } from '../lib/matches';
 
 interface Props {
@@ -19,6 +21,7 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
 
 export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) {
   const { match, sport, venue, joinedCount, isParticipant, isOrganiser } = listing;
+  const { session } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const actions = availableActions({
     status: match.status,
@@ -78,6 +81,37 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
       ) : (
         <p className="hint">{match.status === 'full' || joinedCount >= match.capacity ? 'Full' : match.status}</p>
       )}
+      <div className="actions-row">
+          <button
+            className="btn"
+            type="button"
+            disabled={busy || !session?.access_token}
+            onClick={() => {
+              const token = session?.access_token;
+              if (!token) {
+                setError('Sign in to add this to your calendar.');
+                return;
+              }
+              void downloadMatchIcs(match.id, token).catch((err: unknown) =>
+                setError(err instanceof Error ? err.message : 'Could not download the calendar file.'),
+              );
+            }}
+          >
+            Add to calendar (.ics)
+          </button>
+          <a
+            className="btn btn-ghost"
+            href={googleCalendarUrl({
+              title: match.title,
+              startsAt: match.starts_at,
+              location: venue?.name ?? match.venue_name ?? match.area ?? null,
+            })}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Google Calendar
+          </a>
+      </div>
     </article>
   );
 }

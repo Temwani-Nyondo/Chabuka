@@ -1,19 +1,15 @@
 import { useState } from 'react';
-import { NavLink, Outlet } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
 import FindOpponentForm from './FindOpponentForm';
-
-const SHEET_ITEMS = [
-  { label: 'Create tournament', arrives: 'Sat 31 Oct' },
-  { label: 'Ask the helper', arrives: 'Mon 2 Nov' },
-];
 
 type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
 
 export default function AppShell() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [mode, setMode] = useState<SheetMode>('menu');
+  const navigate = useNavigate();
 
   const closeSheet = () => {
     setSheetOpen(false);
@@ -73,12 +69,50 @@ export default function AppShell() {
                   <span>Create team</span>
                   <span className="tag">Now</span>
                 </button>
-                {SHEET_ITEMS.map((item) => (
-                  <div className="sheet-item" key={item.label}>
-                    <span>{item.label}</span>
-                    <span className="tag">{item.arrives}</span>
-                  </div>
-                ))}
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/gaffer');
+                  }}
+                >
+                  <span>Ask the Gaffer</span>
+                  <span className="tag">Now</span>
+                </button>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/notifications');
+                  }}
+                >
+                  <span>Notifications</span>
+                  <span className="tag">Now</span>
+                </button>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/circles');
+                  }}
+                >
+                  <span>Circles</span>
+                  <span className="tag">Now</span>
+                </button>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/board');
+                  }}
+                >
+                  <span>Create tournament</span>
+                  <span className="tag">Now</span>
+                </button>
                 <button className="btn btn-ghost" type="button" onClick={closeSheet}>
                   Close
                 </button>

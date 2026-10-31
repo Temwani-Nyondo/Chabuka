@@ -1,9 +1,14 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import express from 'express';
+import { z } from 'zod';
 import { actionNameSchema } from '@chabuka/shared';
 import { runAction, toHttpError } from './actions.js';
+import { runHelperTurn } from './helper.js';
+import { handleMcpRequest } from './mcp.js';
+import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
 import { createUserClient } from './supabase.js';
+import { buildIcs, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 
 // Load the repo-root .env when present (local dev); deployed hosts set real
 // environment variables and this is a no-op there.
@@ -45,7 +50,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'chabuka-api' });
 });
 
-// One action layer: the web app, the helper and the MCP tools all land
+// One action layer: the web app, the Gaffer and the MCP tools all land
 // here. Writes run as the signed-in user so RLS enforces permissions.
 app.post('/api/actions/:name', async (req, res) => {
   const parsedName = actionNameSchema.safeParse(req.params['name']);
@@ -72,6 +77,143 @@ app.post('/api/actions/:name', async (req, res) => {
     const { status, message } = toHttpError(err);
     if (status >= 500) console.error(err);
     res.status(status).json({ error: message });
+  }
+});
+
+const helperBodySchema = z.object({
+  message: z.string().min(1).max(2000),
+  history: z
+    .array(z.object({ role: z.enum(['system', 'user']), content: z.string().max(4000) }))
+    .max(10)
+    .optional(),
+});
+
+// "Ask the Gaffer" in the web nav lands here. Same auth shape as the
+// action layer; the model acts as the signed-in user via runAction.
+app.post('/api/helper', async (req, res) => {
+  const auth = req.header('authorization') ?? '';
+  const token = /^Bearer\s+(.+)$/.exec(auth)?.[1];
+  if (!token) {
+    res.status(401).json({ error: 'Missing sign-in token.' });
+    return;
+  }
+  const parsed = helperBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the input and try again.' });
+    return;
+  }
+  try {
+    const db = createUserClient(token);
+    const { data, error } = await db.auth.getUser(token);
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Invalid or expired sign-in.' });
+      return;
+    }
+    const turn = await runHelperTurn({
+      db,
+      userId: data.user.id,
+      message: parsed.data.message,
+      history: parsed.data.history,
+    });
+    res.json(turn);
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    if (status >= 500) console.error(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// Agent access tokens (brief section 10): the profile page mints these (JWT
+// auth here), MCP requests present them as Bearer. Raw shown once at mint.
+async function authedUserId(req: express.Request, res: express.Response): Promise<string | null> {
+  const auth = req.header('authorization') ?? '';
+  const token = /^Bearer\s+(.+)$/.exec(auth)?.[1];
+  if (!token) {
+    res.status(401).json({ error: 'Missing sign-in token.' });
+    return null;
+  }
+  const db = createUserClient(token);
+  const { data, error } = await db.auth.getUser(token);
+  if (error || !data.user) {
+    res.status(401).json({ error: 'Invalid or expired sign-in.' });
+    return null;
+  }
+  return data.user.id;
+}
+
+app.post('/api/agent-tokens', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    const db = createUserClient((/^Bearer\s+(.+)$/.exec(req.header('authorization') ?? '')?.[1] ?? ''));
+    const label = typeof req.body?.label === 'string' && req.body.label.trim() ? req.body.label.trim().slice(0, 60) : 'Agent';
+    const { token } = await createAgentToken(db, userId, label);
+    res.json({ token, note: 'Copy it now. It will not be shown again.' });
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.get('/api/agent-tokens', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    const db = createUserClient((/^Bearer\s+(.+)$/.exec(req.header('authorization') ?? '')?.[1] ?? ''));
+    res.json(await listAgentTokens(db, userId));
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.delete('/api/agent-tokens/:id', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    const db = createUserClient((/^Bearer\s+(.+)$/.exec(req.header('authorization') ?? '')?.[1] ?? ''));
+    await revokeAgentToken(db, userId, req.params['id'] ?? '');
+    res.json({ revoked: true });
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.get('/api/calendar/:matchId.ics', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    const db = createUserClient((/^Bearer\s+(.+)$/.exec(req.header('authorization') ?? '')?.[1] ?? ''));
+    const { data, error } = await db.from('matches').select('*').eq('id', req.params['matchId'] ?? '').maybeSingle();
+    if (error) throw error;
+    if (!data) {
+      res.status(404).json({ error: 'Match not found.' });
+      return;
+    }
+    const match = matchSchema.parse(data);
+    const ics = buildIcs({
+      id: match.id,
+      title: match.title,
+      startsAt: match.starts_at,
+      location: match.venue_name ?? match.area ?? null,
+      description: `Chabuka match. Add to Google Calendar: ${googleCalendarUrl({ title: match.title, startsAt: match.starts_at, location: match.venue_name ?? match.area ?? null })}`,
+    });
+    res.setHeader('content-type', 'text/calendar; charset=utf-8');
+    res.setHeader('content-disposition', `attachment; filename="chabuka-${match.id}.ics"`);
+    res.send(ics);
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.post('/mcp', async (req, res) => {
+  try {
+    await handleMcpRequest(req, res as never);
+  } catch (err) {
+    console.error(err);
+    if (!res.headersSent) res.status(500).json({ error: 'MCP request failed.' });
   }
 });
 

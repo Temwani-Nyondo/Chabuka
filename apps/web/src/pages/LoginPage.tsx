@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Navigate } from 'react-router-dom';
+import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
 export default function LoginPage() {
@@ -99,6 +99,11 @@ export default function LoginPage() {
           </form>
         </div>
       )}
+      <p className="muted">
+        By continuing you agree to our <Link to="/terms">Terms</Link>. Read our{' '}
+        <Link to="/privacy">Privacy</Link> and <Link to="/community">Community &amp; safety</Link>{' '}
+        pages.
+      </p>
     </div>
   );
 }

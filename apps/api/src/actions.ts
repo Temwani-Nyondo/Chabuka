@@ -1,35 +1,60 @@
 import {
   acceptChallengeSchema,
+  announcementSchema,
+  circleEligibility,
+  circleIdSchema,
+  circleSchema,
+  createCircleSchema,
   bookingIdSchema,
   bookingSchema,
   challengeIdSchema,
   challengeSchema,
+  competitionEntrySchema,
+  competitionIdSchema,
+  competitionSchema,
+  computeStandings,
+  createCompetitionSchema,
   createMatchSchema,
   createTeamSchema,
   createVenueSchema,
   createVenueSlotSchema,
+  fixtureSchema,
   matchIdSchema,
   matchSchema,
+  postAnnouncementSchema,
   postChallengeSchema,
+  postResultSchema,
   proposeTimeSchema,
+  registerEntrySchema,
   requestBookingSchema,
   respondBookingSchema,
+  roundRobinPairings,
   teamSchema,
   ticketIdSchema,
   ticketSchema,
   venueSchema,
+  venueSupportsSport,
   venueSlotSchema,
 } from '@chabuka/shared';
 import type {
   ActionResult,
+  Announcement,
   Booking,
   Challenge,
+  Circle,
+  Competition,
+  CreateCircleInput,
+  CreateCompetitionInput,
   CreateMatchInput,
   CreateTeamInput,
   CreateVenueInput,
   CreateVenueSlotInput,
+  Fixture,
   Match,
+  PostAnnouncementInput,
   PostChallengeInput,
+  PostResultInput,
+  RegisterEntryInput,
   RequestBookingInput,
   Team,
   Ticket,
@@ -113,6 +138,17 @@ export async function createMatch(
   userId: string,
   input: CreateMatchInput,
 ): Promise<ActionResult & { matchId: string }> {
+  if (input.venueId) {
+    const venue = await loadVenue(db, input.venueId);
+    const { data: sportRow } = await db.from('sports').select('name').eq('id', input.sportId).maybeSingle();
+    const sportName = (sportRow as { name?: string } | null)?.name ?? '';
+    if (!venueSupportsSport(venue.sports, sportName)) {
+      throw new ActionError(
+        400,
+        `${venue.name} doesn't host ${sportName || 'that sport'} — pick a venue with the right courts, or drop a pin.`,
+      );
+    }
+  }
   const { data, error } = await db
     .from('matches')
     .insert({
@@ -133,6 +169,7 @@ export async function createMatch(
       visibility: input.visibility,
       status: 'open',
       notes: input.notes ?? null,
+      circle_id: input.circleId ?? null,
     })
     .select('id')
     .single();
@@ -146,6 +183,16 @@ export async function createMatch(
 
   const match = await loadMatch(db, matchId);
   const count = await joinedCount(db, matchId);
+  if (input.circleId) {
+    const { data: memberRows } = await db
+      .from('circle_members')
+      .select('user_id')
+      .eq('circle_id', input.circleId);
+    const memberIds = ((memberRows ?? []) as { user_id: string }[])
+      .map((r) => r.user_id)
+      .filter((id) => id !== userId);
+    await notifyUsers(db, memberIds, 'circle_event', { matchId, title: input.title });
+  }
   return { matchId, ...resultFor(match, userId, true, count, 'organiser') };
 }
 
@@ -173,6 +220,9 @@ export async function joinMatch(
     .from('match_participants')
     .upsert({ match_id: matchId, user_id: userId, status: 'joined' }, { onConflict: 'match_id,user_id' });
   if (error) throw dbError(error);
+  if (match.organiser_id !== userId) {
+    await notifyUsers(db, [match.organiser_id], 'player_joined', { matchId, title: match.title });
+  }
   const after = await joinedCount(db, matchId);
   return resultFor(match, userId, true, after, 'joined');
 }
@@ -559,6 +609,7 @@ export async function respondBooking(
   if (decision === 'decline') {
     const { error } = await db.from('bookings').update({ status: 'declined' }).eq('id', booking.id);
     if (error) throw dbError(error);
+    await notifyUsers(db, [booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
     return { state: 'declined', actions: [], booking: await loadBooking(db, booking.id) };
   }
   let capacity = 1;
@@ -572,6 +623,7 @@ export async function respondBooking(
   }
   const { error } = await db.from('bookings').update({ status: 'confirmed' }).eq('id', booking.id);
   if (error) throw dbError(error);
+  await notifyUsers(db, [booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
   const code = `CHB-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
   const { data: ticketRow, error: ticketErr } = await db
     .from('tickets')
@@ -631,6 +683,339 @@ export async function checkInTicket(
   return { state: 'used', actions: [], ticket: updated ? ticketSchema.parse(updated) : null };
 }
 
+// --- Tournaments (Day 5 board, brief sections 6-7) ---
+
+async function loadCompetition(db: SupabaseClient, competitionId: string): Promise<Competition> {
+  const { data, error } = await db
+    .from('competitions')
+    .select('*')
+    .eq('id', competitionId)
+    .maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(404, 'Tournament not found.');
+  return competitionSchema.parse(data);
+}
+
+async function loadFixture(db: SupabaseClient, fixtureId: string): Promise<Fixture> {
+  const { data, error } = await db.from('fixtures').select('*').eq('id', fixtureId).maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(404, 'Fixture not found.');
+  return fixtureSchema.parse(data);
+}
+
+async function loadEntries(db: SupabaseClient, competitionId: string): Promise<string[]> {
+  const { data, error } = await db
+    .from('competition_entries')
+    .select('team_id')
+    .eq('competition_id', competitionId);
+  if (error) throw dbError(error);
+  const rows = (data as { team_id: string }[] | null) ?? [];
+  return rows.map((r) => competitionEntrySchema.parse({ competition_id: competitionId, team_id: r.team_id, status: 'registered' }).team_id);
+}
+
+async function loadFixtures(db: SupabaseClient, competitionId: string): Promise<Fixture[]> {
+  const { data, error } = await db
+    .from('fixtures')
+    .select('*')
+    .eq('competition_id', competitionId)
+    .order('created_at');
+  if (error) throw dbError(error);
+  return ((data as unknown[] | null) ?? []).map((row) => fixtureSchema.parse(row));
+}
+
+export async function createCompetition(
+  db: SupabaseClient,
+  userId: string,
+  input: CreateCompetitionInput,
+): Promise<unknown> {
+  const { data, error } = await db
+    .from('competitions')
+    .insert({
+      organiser_id: userId,
+      sport_id: input.sportId,
+      name: input.name,
+      kind: 'tournament',
+      format: 'round_robin',
+      area: input.area,
+      starts_on: input.startsOn,
+      ends_on: input.endsOn ?? null,
+      max_entries: input.maxEntries,
+      status: 'registration',
+    })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  const competition = await loadCompetition(db, (data as { id: string }).id);
+  return { state: competition.status, actions: ['register_entry'], competition };
+}
+
+export async function registerEntry(
+  db: SupabaseClient,
+  userId: string,
+  input: RegisterEntryInput,
+): Promise<unknown> {
+  const competition = await loadCompetition(db, input.competitionId);
+  if (competition.status !== 'registration') {
+    throw new ActionError(409, 'Entries are closed for this tournament.');
+  }
+  await requireCaptain(db, input.teamId, userId);
+  const team = await loadTeam(db, input.teamId);
+  if (team.sport_id !== competition.sport_id) {
+    throw new ActionError(409, 'That team plays a different sport.');
+  }
+  const entries = await loadEntries(db, competition.id);
+  if (entries.includes(team.id)) {
+    return { state: competition.status, actions: [], competition, entries };
+  }
+  if (entries.length >= competition.max_entries) {
+    throw new ActionError(409, 'This tournament is full.');
+  }
+  const { error } = await db
+    .from('competition_entries')
+    .insert({ competition_id: competition.id, team_id: team.id, status: 'registered' });
+  if (error) throw dbError(error);
+  return { state: competition.status, actions: [], competition, entries: [...entries, team.id] };
+}
+
+export async function closeRegistration(
+  db: SupabaseClient,
+  userId: string,
+  competitionId: string,
+): Promise<unknown> {
+  const competition = await loadCompetition(db, competitionId);
+  if (competition.organiser_id !== userId) {
+    throw new ActionError(403, 'Only the tournament organiser can start it.');
+  }
+  if (competition.status !== 'registration') {
+    throw new ActionError(409, 'This tournament has already started.');
+  }
+  const entries = await loadEntries(db, competition.id);
+  if (entries.length < 2) {
+    throw new ActionError(409, 'At least 2 teams must enter before fixtures can be made.');
+  }
+  const pairings = roundRobinPairings(entries);
+  for (const [homeTeamId, awayTeamId] of pairings) {
+    const { error } = await db.from('fixtures').insert({
+      competition_id: competition.id,
+      home_team_id: homeTeamId,
+      away_team_id: awayTeamId,
+      status: 'scheduled',
+    });
+    if (error) throw dbError(error);
+  }
+  const { error: updErr } = await db
+    .from('competitions')
+    .update({ status: 'live' })
+    .eq('id', competition.id);
+  if (updErr) throw dbError(updErr);
+  const fixtures = await loadFixtures(db, competition.id);
+  return { state: 'live', actions: ['post_result'], competition: { ...competition, status: 'live' as const }, fixtures };
+}
+
+export async function postResult(
+  db: SupabaseClient,
+  userId: string,
+  input: PostResultInput,
+): Promise<unknown> {
+  const fixture = await loadFixture(db, input.fixtureId);
+  const competition = await loadCompetition(db, fixture.competition_id);
+  if (competition.organiser_id !== userId) {
+    throw new ActionError(403, 'Only the tournament organiser can post results.');
+  }
+  if (competition.status !== 'live') {
+    throw new ActionError(409, 'This tournament is not live.');
+  }
+  if (fixture.status !== 'scheduled') {
+    throw new ActionError(409, 'This result is already in.');
+  }
+  const { error } = await db
+    .from('fixtures')
+    .update({ status: 'finished', home_score: input.homeScore, away_score: input.awayScore })
+    .eq('id', fixture.id);
+  if (error) throw dbError(error);
+  const entries = await loadEntries(db, competition.id);
+  const fixtures = await loadFixtures(db, competition.id);
+  const standings = computeStandings(entries, fixtures);
+  const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
+  await notifyUsers(
+    db,
+    ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== userId),
+    'result_posted',
+    { competitionId: competition.id, fixtureId: fixture.id },
+  );
+  const allFinished = fixtures.every((f) => f.status === 'finished');
+  if (allFinished) {
+    const { error: finishErr } = await db
+      .from('competitions')
+      .update({ status: 'finished' })
+      .eq('id', competition.id);
+    if (finishErr) throw dbError(finishErr);
+    return { state: 'finished', actions: [], competition: { ...competition, status: 'finished' as const }, fixtures, standings };
+  }
+  return { state: competition.status, actions: ['post_result'], competition, fixtures, standings };
+}
+
+export async function postAnnouncement(
+  db: SupabaseClient,
+  userId: string,
+  input: PostAnnouncementInput,
+): Promise<unknown> {
+  const competition = await loadCompetition(db, input.competitionId);
+  if (competition.organiser_id !== userId) {
+    throw new ActionError(403, 'Only the tournament organiser can announce.');
+  }
+  const { data, error } = await db
+    .from('announcements')
+    .insert({
+      competition_id: competition.id,
+      author_id: userId,
+      type: input.type,
+      text: input.text,
+    })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  const { data: row } = await db
+    .from('announcements')
+    .select('*')
+    .eq('id', (data as { id: string }).id)
+    .maybeSingle();
+  const announcement: Announcement | null = row ? announcementSchema.parse(row) : null;
+  return { state: competition.status, actions: [], announcement };
+}
+
+export async function followCompetition(
+  db: SupabaseClient,
+  userId: string,
+  competitionId: string,
+): Promise<unknown> {
+  await loadCompetition(db, competitionId);
+  const { data: existing } = await db
+    .from('follows')
+    .select('user_id')
+    .eq('user_id', userId)
+    .eq('competition_id', competitionId)
+    .maybeSingle();
+  if (existing) return { state: 'following', actions: [] };
+  const { error } = await db
+    .from('follows')
+    .insert({ user_id: userId, competition_id: competitionId });
+  if (error) throw dbError(error);
+  return { state: 'following', actions: [] };
+}
+
+// --- Circles ---
+
+async function loadCircle(db: SupabaseClient, circleId: string): Promise<Circle> {
+  const { data, error } = await db.from('circles').select('*').eq('id', circleId).maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(404, 'Circle not found.');
+  return circleSchema.parse(data);
+}
+
+async function notifyUsers(
+  db: SupabaseClient,
+  userIds: string[],
+  type: string,
+  payload: Record<string, unknown>,
+): Promise<void> {
+  // Best-effort: a failed notification must never fail the game action.
+  if (userIds.length === 0) return;
+  const rows = userIds.map((user_id) => ({ user_id, type, payload }));
+  try {
+    const { error } = await db.from('notifications').insert(rows);
+    if (error) console.error('notification failed', type, error.message);
+  } catch (err) {
+    console.error('notification failed', type, err instanceof Error ? err.message : 'unknown');
+  }
+}
+
+export async function createCircle(
+  db: SupabaseClient,
+  userId: string,
+  input: CreateCircleInput,
+): Promise<unknown> {
+  const { data, error } = await db
+    .from('circles')
+    .insert({
+      name: input.name,
+      sport_id: input.sportId ?? null,
+      area: input.area,
+      description: input.description ?? null,
+      age_bands: input.ageBands,
+      genders: input.genders,
+      levels: input.levels,
+      created_by: userId,
+    })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  const circle = await loadCircle(db, (data as { id: string }).id);
+  const { error: memberErr } = await db
+    .from('circle_members')
+    .insert({ circle_id: circle.id, user_id: userId });
+  if (memberErr) throw dbError(memberErr);
+  return { state: 'created', actions: ['join_circle'], circle };
+}
+
+export async function joinCircle(
+  db: SupabaseClient,
+  userId: string,
+  circleId: string,
+): Promise<unknown> {
+  const circle = await loadCircle(db, circleId);
+  const { data: profileRow } = await db
+    .from('profiles')
+    .select('birth_year,gender')
+    .eq('id', userId)
+    .maybeSingle();
+  const profile = (profileRow ?? {}) as { birth_year: number | null; gender: string | null };
+  const reason = circleEligibility({
+    birthYear: profile.birth_year,
+    gender: profile.gender,
+    ageBands: circle.age_bands,
+    genders: circle.genders,
+  });
+  if (reason) throw new ActionError(403, reason);
+  if (circle.sport_id && circle.levels.length > 0) {
+    const { data: sportRow } = await db
+      .from('user_sports')
+      .select('level')
+      .eq('user_id', userId)
+      .eq('sport_id', circle.sport_id)
+      .maybeSingle();
+    const level = (sportRow as { level?: string } | null)?.level;
+    if (!level || !(circle.levels as string[]).includes(level)) {
+      throw new ActionError(403, `This circle is for ${circle.levels.join(', ')} players.`);
+    }
+  }
+  const { data: existing } = await db
+    .from('circle_members')
+    .select('user_id')
+    .eq('circle_id', circle.id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (existing) return { state: 'joined', actions: ['leave_circle'], circle };
+  const { error } = await db.from('circle_members').insert({ circle_id: circle.id, user_id: userId });
+  if (error) throw dbError(error);
+  return { state: 'joined', actions: ['leave_circle'], circle };
+}
+
+export async function leaveCircle(
+  db: SupabaseClient,
+  userId: string,
+  circleId: string,
+): Promise<unknown> {
+  const circle = await loadCircle(db, circleId);
+  const { error } = await db
+    .from('circle_members')
+    .delete()
+    .eq('circle_id', circle.id)
+    .eq('user_id', userId);
+  if (error) throw dbError(error);
+  return { state: 'left', actions: ['join_circle'], circle };
+}
+
 // HTTP entry points: parse once with the shared schema, then dispatch.
 // Notifications land with the Day 5 board; the matches migrations have
 // no notifications table yet, so no notification rows are written here.
@@ -677,6 +1062,24 @@ export async function runAction(
       return cancelBooking(db, userId, bookingIdSchema.parse(body).bookingId);
     case 'check_in_ticket':
       return checkInTicket(db, userId, ticketIdSchema.parse(body).ticketId);
+    case 'create_competition':
+      return createCompetition(db, userId, createCompetitionSchema.parse(body));
+    case 'register_entry':
+      return registerEntry(db, userId, registerEntrySchema.parse(body));
+    case 'close_registration':
+      return closeRegistration(db, userId, competitionIdSchema.parse(body).competitionId);
+    case 'post_result':
+      return postResult(db, userId, postResultSchema.parse(body));
+    case 'post_announcement':
+      return postAnnouncement(db, userId, postAnnouncementSchema.parse(body));
+    case 'follow_competition':
+      return followCompetition(db, userId, competitionIdSchema.parse(body).competitionId);
+    case 'create_circle':
+      return createCircle(db, userId, createCircleSchema.parse(body));
+    case 'join_circle':
+      return joinCircle(db, userId, circleIdSchema.parse(body).circleId);
+    case 'leave_circle':
+      return leaveCircle(db, userId, circleIdSchema.parse(body).circleId);
     default:
       throw new ActionError(404, 'Unknown action.');
   }

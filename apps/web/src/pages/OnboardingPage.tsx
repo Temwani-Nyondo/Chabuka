@@ -19,6 +19,9 @@ export default function OnboardingPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [name, setName] = useState('');
   const [area, setArea] = useState('');
+  const [town, setTown] = useState('');
+  const [birthYear, setBirthYear] = useState('');
+  const [gender, setGender] = useState('');
   const [level, setLevel] = useState<Level>('recreational');
   const [picked, setPicked] = useState<string[]>([]);
   const [photoFile, setPhotoFile] = useState<File | null>(null);
@@ -111,6 +114,9 @@ export default function OnboardingPage() {
       photoUrl: photoUrl ?? remoteAvatar ?? undefined,
       sportIds: picked,
       level,
+      town: town.trim() || undefined,
+      birthYear: birthYear ? Number(birthYear) : undefined,
+      gender: gender.trim() || undefined,
     });
     if (!parsed.success) {
       setError(parsed.error.issues[0]?.message ?? 'Check the form and try again.');
@@ -122,6 +128,9 @@ export default function OnboardingPage() {
         id: user.id,
         name: parsed.data.name,
         area: parsed.data.area,
+        city: parsed.data.town ?? null,
+        birth_year: parsed.data.birthYear ?? null,
+        gender: parsed.data.gender ?? null,
         photo_url: parsed.data.photoUrl ?? null,
       });
       if (pErr) throw pErr;
@@ -172,6 +181,37 @@ export default function OnboardingPage() {
             onChange={(e) => setArea(e.target.value)}
             placeholder="e.g. Woodlands"
             maxLength={80}
+          />
+        </label>
+        <label className="field">
+          Town / locality (optional)
+          <input
+            className="input"
+            value={town}
+            onChange={(e) => setTown(e.target.value)}
+            placeholder="e.g. Lusaka"
+            maxLength={80}
+          />
+        </label>
+        <label className="field">
+          Year of birth (optional — shown only as an age band)
+          <input
+            className="input"
+            inputMode="numeric"
+            value={birthYear}
+            onChange={(e) => setBirthYear(e.target.value)}
+            placeholder="e.g. 1998"
+            maxLength={4}
+          />
+        </label>
+        <label className="field">
+          Gender (optional)
+          <input
+            className="input"
+            value={gender}
+            onChange={(e) => setGender(e.target.value)}
+            placeholder="How you describe yourself"
+            maxLength={40}
           />
         </label>
         <label className="field">

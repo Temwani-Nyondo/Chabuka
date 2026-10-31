@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import MatchCard from '../components/MatchCard';
 import { useAuth } from '../auth/AuthContext';
-import { fetchMyMatches } from '../lib/matches';
+import { fetchMyMatches, fetchOpenMatches } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
 import { useMatchActions } from '../lib/useMatchActions';
 
@@ -11,13 +11,22 @@ export default function HomePage() {
   const { user, profile } = useAuth();
   const firstName = profile?.name ? profile.name.split(' ')[0] : null;
   const [listings, setListings] = useState<MatchListing[]>([]);
+  const [nudge, setNudge] = useState<MatchListing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     if (!user) return;
-    setListings(await fetchMyMatches(user.id));
-  }, [user]);
+    const [mine, open] = await Promise.all([fetchMyMatches(user.id), fetchOpenMatches(user.id)]);
+    setListings(mine);
+    const joined = new Set(mine.map((l) => l.match.id));
+    const mineArea = profile?.area?.toLowerCase() ?? '';
+    const candidate =
+      open.find((l) => !joined.has(l.match.id) && (l.match.area ?? '').toLowerCase() === mineArea) ??
+      open.find((l) => !joined.has(l.match.id)) ??
+      null;
+    setNudge(candidate);
+  }, [user, profile?.area]);
 
   useEffect(() => {
     reload()
@@ -41,6 +50,37 @@ export default function HomePage() {
           hint="Find an open game on Explore, or tap + to create one."
         />
       ) : null}
+      {nudge && !loading ? (
+        <div className="card nudge">
+          <div className="row">
+            <strong>
+              {nudge.sport ? `${nudge.sport.name} · ` : ''}
+              {new Date(nudge.match.starts_at).toLocaleDateString(undefined, {
+                weekday: 'short',
+                hour: 'numeric',
+                minute: '2-digit',
+              })}
+            </strong>
+            <span className="tag">
+              {nudge.joinedCount}/{nudge.match.capacity} in
+            </span>
+          </div>
+          <p className="muted">
+            {nudge.match.title} · {nudge.match.area ?? 'Area TBC'}
+            {(profile?.area ?? '').toLowerCase() === (nudge.match.area ?? '').toLowerCase()
+              ? ' · fits your area'
+              : ''}
+          </p>
+          <button
+            className="btn btn-primary"
+            type="button"
+            disabled={busyId === nudge.match.id}
+            onClick={() => onJoin(nudge.match.id)}
+          >
+            Join
+          </button>
+        </div>
+      ) : null}
       {listings.map((listing) => (
         <MatchCard
           key={listing.match.id}
@@ -53,8 +93,15 @@ export default function HomePage() {
       <p>
         <Link to="/explore">Browse open games →</Link>
       </p>
-      <EmptyState title="Challenges" hint="Team challenges arrive Fri 30 Oct." />
-      <EmptyState title="Competitions" hint="The tournament board arrives Sat 31 Oct." />
+      <p>
+        <Link to="/teams">Teams and challenges →</Link>
+      </p>
+      <p>
+        <Link to="/board">Season board →</Link>
+      </p>
+      <p>
+        <Link to="/roadmap">Coming next →</Link>
+      </p>
     </div>
   );
 }

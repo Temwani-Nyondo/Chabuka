@@ -40,6 +40,98 @@ export async function runAction<T = ActionResult>(
   return data as T;
 }
 
+export interface GafferTurn {
+  reply: string;
+  actionsTaken: { name: string; ok: boolean }[];
+  provider: string;
+}
+
+export interface AgentTokenRow {
+  id: string;
+  label: string;
+  created_at: string;
+  revoked_at: string | null;
+}
+
+async function agentTokenFetch<T>(path: string, method: string, accessToken: string, body?: unknown): Promise<T> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      method,
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+    });
+  } catch {
+    throw new Error('Could not reach the Chabuka server. Is the API running?');
+  }
+  const data = (await res.json().catch(() => null)) as (T & { error?: string }) | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? 'Something went wrong. Try again.');
+  }
+  return data as T;
+}
+
+export function mintAgentToken(label: string, accessToken: string): Promise<{ token: string; note: string }> {
+  return agentTokenFetch('/api/agent-tokens', 'POST', accessToken, { label });
+}
+
+export function fetchAgentTokens(accessToken: string): Promise<AgentTokenRow[]> {
+  return agentTokenFetch('/api/agent-tokens', 'GET', accessToken);
+}
+
+export function revokeAgentToken(tokenId: string, accessToken: string): Promise<unknown> {
+  return agentTokenFetch(`/api/agent-tokens/${tokenId}`, 'DELETE', accessToken);
+}
+
+export async function downloadMatchIcs(matchId: string, accessToken: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/calendar/${matchId}.ics`, {
+      headers: { authorization: `Bearer ${accessToken}` },
+    });
+  } catch {
+    throw new Error('Could not reach the Chabuka server. Is the API running?');
+  }
+  if (!res.ok) throw new Error('Could not build the calendar file. Try again.');
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `chabuka-${matchId}.ics`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// The Gaffer chats through the internal helper endpoint (path kept);
+// only the external name is the Gaffer.
+export async function askGaffer(
+  message: string,
+  history: { role: 'user'; content: string }[],
+  accessToken: string,
+): Promise<GafferTurn> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/helper`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ message, history }),
+    });
+  } catch {
+    throw new Error('Could not reach the Chabuka server. Is the API running?');
+  }
+  const data = (await res.json().catch(() => null)) as (GafferTurn & { error?: string }) | null;
+  if (!res.ok) {
+    throw new Error(data?.error ?? 'Something went wrong. Try again.');
+  }
+  return data as GafferTurn;
+}
+
 export function createMatchAction(
   input: CreateMatchInput,
   accessToken: string,
@@ -99,6 +191,51 @@ export function cancelBookingAction(bookingId: string, accessToken: string): Pro
 
 export function checkInTicketAction(ticketId: string, accessToken: string): Promise<unknown> {
   return runAction('check_in_ticket', { ticketId }, accessToken);
+}
+
+export function createCompetitionAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('create_competition', input, accessToken);
+}
+
+export function registerEntryAction(
+  body: { competitionId: string; teamId: string },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('register_entry', body, accessToken);
+}
+
+export function closeRegistrationAction(competitionId: string, accessToken: string): Promise<unknown> {
+  return runAction('close_registration', { competitionId }, accessToken);
+}
+
+export function postResultAction(
+  body: { fixtureId: string; homeScore: number; awayScore: number },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('post_result', body, accessToken);
+}
+
+export function postAnnouncementAction(
+  body: { competitionId: string; text: string },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('post_announcement', body, accessToken);
+}
+
+export function followCompetitionAction(competitionId: string, accessToken: string): Promise<unknown> {
+  return runAction('follow_competition', { competitionId }, accessToken);
+}
+
+export function createCircleAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('create_circle', input, accessToken);
+}
+
+export function joinCircleAction(circleId: string, accessToken: string): Promise<unknown> {
+  return runAction('join_circle', { circleId }, accessToken);
+}
+
+export function leaveCircleAction(circleId: string, accessToken: string): Promise<unknown> {
+  return runAction('leave_circle', { circleId }, accessToken);
 }
 
 export function proposeTimeAction(

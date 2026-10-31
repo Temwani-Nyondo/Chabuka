@@ -145,7 +145,11 @@ export default function VenuePicker({ sportName, area, onAreaChange, onPick }: P
           />
           {loadError ? <p className="error">{loadError}</p> : null}
           {!loadError && venues.length === 0 ? (
-            <p className="hint">No listed venues yet — drop a pin or type the area below.</p>
+            <p className="hint">
+              {sportName
+                ? `No listed venues with ${sportName} courts yet — drop a pin or type the area below.`
+                : 'No listed venues yet — drop a pin or type the area below.'}
+            </p>
           ) : null}
           {visible.map((venue) => (
             <button
