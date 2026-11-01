@@ -1,0 +1,14 @@
+.gcloud-config
+.supabase-home
+.npm-cache
+.tmp
+.git
+.hg
+.sl
+.eden
+node_modules
+dist
+*.log
+test_baseten.py
+chat 2.png
+chat UI.png

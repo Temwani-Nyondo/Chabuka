@@ -12,3 +12,5 @@ supabase/.temp/
 *.docx
 .DS_Store
 *.local
+.vercel
+.env*
