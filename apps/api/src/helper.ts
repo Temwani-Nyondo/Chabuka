@@ -38,7 +38,11 @@ async function readMyTeams(db: SupabaseClient, userId: string): Promise<unknown>
   const rows = (memberships ?? []) as { team_id: string; role: string }[];
   if (rows.length === 0) return [];
   const { data: teams, error: teamsError } = await db.from('teams').select('id,name,sport_id,level').in('id', rows.map((r) => r.team_id));
-  if (teamsError) throw new Error(teamsError.message);
+  if (teamsError) {
+    // A denied teams lookup must not poison the whole turn: report the
+    // memberships with the failure attached instead of throwing.
+    return { memberships: rows, teams: [], teamsError: teamsError.message };
+  }
   const byId = new Map(((teams ?? []) as { id: string }[]).map((t) => [t.id, t]));
   return rows.map((r) => ({ ...byId.get(r.team_id), role: r.role }));
 }
@@ -304,7 +308,8 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn }[] = [
   },
   {
     name: 'get_my_teams',
-    description: 'Teams the user belongs to, with roles. No arguments.',
+    description:
+      'Teams the user belongs to, with roles. No arguments. If team rows are unreadable, returns memberships plus teamsError instead of failing — use what is there.',
     read: (db, userId) => readMyTeams(db, userId),
   },
   {
@@ -366,8 +371,11 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn }[] = [
 
 const HELPER_SYSTEM_PROMPT = [
   'Rule zero, highest priority, applies to EVERY reply including the first: never say who you are,',
-  'never greet, never describe what you can do. No preamble of any kind.',
+  'never greet, never describe what you can do. No preamble of any kind. No acknowledgements',
+  'either: never open with "Got you", "Noted", "All ears", "I\'m here" or anything like them.',
   'Start immediately with the answer, the decision, or the one question you need.',
+  'Restating the player\'s name, area, sport, time preference or anything else they already',
+  'know is a defect, not warmth — never do it.',
   'Keep replies short and speakable: one or two short sentences, plain words, no emojis, no lists',
   'unless the user asked for detail. Replies are read aloud, so never say anything you would not speak.',
   'You are the Gaffer, the Chabuka assistant. Chabuka arranges real-life grassroots sport:',
@@ -393,6 +401,15 @@ const HELPER_SYSTEM_PROMPT = [
   'or times. If nothing is open, say so plainly and offer the next best real option: another',
   'venue, an open game from search_matches, or creating a match others can join.',
   'Then call request_booking only after the user confirms venue and time.',
+  'A venue with no listed slots is NOT unbookable: venue_slots rows are optional. When a listed',
+  'venue hosts the sport but shows no slots, offer a direct booking request for the user\'s time',
+  'via request_booking with requestedStartsAt and no slot — the owner confirms. Only say "fully',
+  'booked" when slot rows exist and their booking counts show no room left.',
+  'After ANY write action (create_match, create_challenge, request_booking, post_result,',
+  'report_score and the rest), the reply MUST say plainly what was created or changed: what,',
+  'when, where, and where to see it. A venue booking and an open game or challenge are different',
+  'things — never report one as the other, and never re-ask for an action the user already',
+  'approved. Act, then say what you did.',
   'Memory: pull get_my_memories alongside the profile at the start of planning and use what you',
   'learned. When the user states a durable fact — position, availability, home ground, team,',
   'preferences — save it with save_memory so they never repeat it. If corrected, forget_memory',
@@ -564,6 +581,33 @@ export async function runHelperTurn(
       });
     }
     messages.push(...toolMessages);
+  }
+  if (!reply.trim() && messages.length > 0) {
+    // The model burned its rounds on tool calls without saying anything.
+    // Force one text-only closing round so the reply is never empty.
+    try {
+      const closing = await chat({
+        messages: [
+          ...messages,
+          {
+            role: 'user',
+            content:
+              'Summarise what you just did, or what you need next, in one or two short spoken sentences. Plain text, no tools.',
+          },
+        ],
+        tools: [],
+      });
+      reply = closing.content ?? '';
+    } catch {
+      // Fall through to the deterministic fallback below.
+    }
+  }
+  if (!reply.trim()) {
+    const done = [...new Set(actionsTaken.filter((a) => a.ok).map((a) => a.name))];
+    reply =
+      done.length > 0
+        ? `Done: ${done.join(', ')}. What next?`
+        : 'I could not finish that. Try again.';
   }
   return { reply, actionsTaken, provider };
 }

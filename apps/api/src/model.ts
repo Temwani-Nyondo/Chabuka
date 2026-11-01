@@ -62,10 +62,20 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // Spark Open always reasons. The reasoning rides alongside the answer in a
 // non-standard field (`reasoning_content`, sometimes `reasoning`). It is
 // dropped here and never reaches callers: the "What I did" trace shows tool
-// calls, not reasoning.
+// calls, not reasoning. Vision turns can also return the answer as content
+// parts instead of a plain string — join the text parts so those replies
+// survive instead of arriving empty.
 function extractResult(message: unknown, provider: ModelProvider): ModelResult {
   const msg = isRecord(message) ? message : {};
-  const content = typeof msg['content'] === 'string' ? (msg['content'] as string) : null;
+  const raw = msg['content'] as unknown;
+  const content =
+    typeof raw === 'string'
+      ? raw
+      : Array.isArray(raw)
+        ? raw
+            .map((p) => (isRecord(p) && typeof p['text'] === 'string' ? (p['text'] as string) : ''))
+            .join('') || null
+        : null;
   const rawCalls = Array.isArray(msg['tool_calls']) ? (msg['tool_calls'] as unknown[]) : [];
   const toolCalls: ModelToolCall[] = [];
   for (const call of rawCalls) {

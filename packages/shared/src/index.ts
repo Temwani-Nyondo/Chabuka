@@ -753,9 +753,132 @@ export const ACTION_NAMES = [
   'create_circle',
   'join_circle',
   'leave_circle',
+  'update_profile',
+  'set_availability',
+  'add_place',
+  'remove_place',
+  'set_game_types',
+  'set_position',
+  'add_discipline',
+  'create_invite_link',
+  'revoke_invite_link',
+  'claim_invite_link',
+  'report_user',
+  'report_team',
+  'block_user',
+  'unblock_user',
 ] as const;
 export const actionNameSchema = z.enum(ACTION_NAMES);
 export type ActionName = z.infer<typeof actionNameSchema>;
+
+// --- Onboarding wizard (Amendment 3): one shared profile, every step
+// skippable. Game types filter and rank suggestions; they never hide a
+// directly searched game. Availability and exact free days stay private. ---
+export const GAME_TYPES = [
+  'corporate',
+  'charitable',
+  'awareness',
+  'neighbourhood',
+  'skill_based',
+  'reunion',
+  'routine',
+] as const;
+export const gameTypeSchema = z.enum(GAME_TYPES);
+export type GameType = z.infer<typeof gameTypeSchema>;
+
+export const TIME_BANDS = ['morning', 'afternoon', 'evening'] as const;
+export const timeBandSchema = z.enum(TIME_BANDS);
+
+export const updateProfileSchema = z.object({
+  name: z.string().trim().min(1).max(80).optional(),
+  area: z.string().trim().min(1).max(80).optional(),
+  city: z.string().trim().max(80).nullable().optional(),
+  birthYear: z.number().int().min(1900).max(2100).nullable().optional(),
+  gender: z.string().trim().max(40).nullable().optional(),
+  photoUrl: z.string().url().max(2000).nullable().optional(),
+  travelKm: z.number().int().min(1).max(200).nullable().optional(),
+  termsAcceptedAt: z.iso.datetime({ offset: true }).optional(),
+});
+export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+export const setAvailabilitySchema = z.object({
+  slots: z
+    .array(z.object({ day: z.number().int().min(0).max(6), timeBand: timeBandSchema }))
+    .max(21),
+});
+export type SetAvailabilityInput = z.infer<typeof setAvailabilitySchema>;
+
+export const addPlaceSchema = z.object({
+  label: z.string().trim().min(1).max(80),
+  area: z.string().trim().max(80).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lng: z.number().min(-180).max(180).optional(),
+  venueId: z.string().uuid().optional(),
+});
+export type AddPlaceInput = z.infer<typeof addPlaceSchema>;
+
+export const setGameTypesSchema = z.object({
+  gameTypes: z.array(gameTypeSchema).max(GAME_TYPES.length),
+});
+export type SetGameTypesInput = z.infer<typeof setGameTypesSchema>;
+
+export const setPositionSchema = z.object({
+  teamId: z.string().uuid(),
+  position: z.string().trim().min(1).max(40),
+});
+export type SetPositionInput = z.infer<typeof setPositionSchema>;
+
+// Open-ended disciplines (Amendment 4, section 3): anyone can add one;
+// names are normalised so "Hiking" and "hikes" share one row.
+export function normaliseDisciplineName(name: string): string {
+  const cleaned = name.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim().replace(/\s+/g, ' ');
+  const stem = cleaned
+    .split(' ')
+    .map((w) =>
+      w
+        .replace(/(ies)$/, 'y')
+        .replace(/(ing|ers|es|s)$/, '')
+        .replace(/([^aeiou])\1$/, '$1'),
+    )
+    .join(' ');
+  return stem.length > 0 ? stem : cleaned;
+}
+
+export const addDisciplineSchema = z.object({
+  name: z.string().trim().min(1).max(80),
+});
+export type AddDisciplineInput = z.infer<typeof addDisciplineSchema>;
+
+// Platform invite links (Amendment 4, section 2): invite someone onto
+// Chabuka itself, optionally into a team. Revocable, expirable.
+export const createInviteLinkSchema = z.object({
+  teamId: z.string().uuid().optional(),
+  expiresInHours: z.number().int().min(1).max(24 * 30).optional(),
+});
+export type CreateInviteLinkInput = z.infer<typeof createInviteLinkSchema>;
+
+export const inviteCodeSchema = z.object({
+  code: z.string().trim().min(4).max(64),
+});
+export type InviteCodeInput = z.infer<typeof inviteCodeSchema>;
+
+// Safety basics (Amendment 4, section 4): one-tap report and block.
+export const reportUserSchema = z.object({
+  userId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(500),
+});
+export type ReportUserInput = z.infer<typeof reportUserSchema>;
+
+export const reportTeamSchema = z.object({
+  teamId: z.string().uuid(),
+  reason: z.string().trim().min(1).max(500),
+});
+export type ReportTeamInput = z.infer<typeof reportTeamSchema>;
+
+export const blockUserSchema = z.object({
+  userId: z.string().uuid(),
+});
+export type BlockUserInput = z.infer<typeof blockUserSchema>;
 
 export const CTA_LABELS: Record<string, string> = {
   join: 'Join',

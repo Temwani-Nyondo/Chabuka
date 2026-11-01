@@ -161,4 +161,60 @@ describe('runHelperTurn', () => {
     expect(texts).toContain('old 13');
     expect(texts.at(-1)).toBe('new');
   });
+
+  it('never returns an empty reply when the model only calls tools', async () => {
+    const toolOnly = result({
+      toolCalls: [{ id: 'c1', name: 'get_my_brief', arguments: '{}' }],
+    });
+    const chat = vi.fn(async (params: { tools?: unknown[] }) =>
+      params.tools !== undefined && (params.tools as unknown[]).length === 0
+        ? result({ content: 'Checked your week — nothing new.' })
+        : toolOnly,
+    );
+    const read = vi.fn(async () => ({ schedule: [] }));
+
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'Anything on?' }, { chat, read });
+
+    expect(turn.reply).toBe('Checked your week — nothing new.');
+    const calls = chat.mock.calls as { tools?: unknown[] }[][];
+    expect((calls[calls.length - 1]?.[0]?.tools as unknown[]).length).toBe(0);
+  });
+
+  it('falls back to an action summary when even the closing round is empty', async () => {
+    const chat = vi.fn(async () =>
+      result({ toolCalls: [{ id: 'c1', name: 'get_my_brief', arguments: '{}' }] }),
+    );
+    const read = vi.fn(async () => ({ schedule: [] }));
+
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'Anything on?' }, { chat, read });
+
+    expect(turn.reply).toContain('get_my_brief');
+    expect(turn.actionsTaken.length).toBeGreaterThan(1);
+    expect(turn.actionsTaken.every((a) => a.name === 'get_my_brief' && a.ok)).toBe(true);
+  });
+
+  it('keeps team memberships when the teams lookup is denied', async () => {
+    const teamsDeniedDb = {
+      from: (table: string) => ({
+        select: () =>
+          table === 'team_members'
+            ? { eq: async () => ({ data: [{ team_id: 't1', role: 'player' }], error: null }) }
+            : { in: async () => ({ data: null, error: { message: 'denied' } }) },
+      }),
+    } as unknown as SupabaseClient;
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({ toolCalls: [{ id: 'c1', name: 'get_my_teams', arguments: '{}' }] }),
+      )
+      .mockResolvedValueOnce(result({ content: 'You play for one team.' }));
+
+    const turn = await runHelperTurn(
+      { db: teamsDeniedDb, userId: 'u1', message: 'My teams?' },
+      { chat },
+    );
+
+    expect(turn.actionsTaken).toEqual([{ name: 'get_my_teams', ok: true }]);
+    expect(turn.reply).toBe('You play for one team.');
+  });
 });

@@ -43,6 +43,17 @@ describe('chatOnce', () => {
     expect(result.toolCalls).toEqual([{ id: 'c1', name: 'search_games', arguments: '{"sport":"football"}' }]);
   });
 
+  it('joins array content parts from vision turns', async () => {
+    vi.stubEnv('BASETEN_API_KEY', 'test-key');
+    const fetchStub = async (): Promise<Response> =>
+      chatBody({ content: [{ type: 'text', text: 'Nice ' }, { type: 'text', text: 'court.' }] });
+    const result = await chatOnce(
+      { messages: [{ role: 'user', content: 'What do you see?' }] },
+      { fetch: fetchStub as typeof fetch },
+    );
+    expect(result.content).toBe('Nice court.');
+  });
+
   it('falls back to the Meta API when Baseten fails', async () => {
     vi.stubEnv('BASETEN_API_KEY', 'test-key');
     vi.stubEnv('META_API_KEY', 'meta-key');

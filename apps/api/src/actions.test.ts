@@ -2,9 +2,14 @@ import { describe, expect, it } from 'vitest';
 import {
   ActionError,
   acceptChallenge,
+  addDiscipline,
+  addPlace,
   answerPoll,
+  blockUser,
   cancelBooking,
   checkInTicket,
+  claimInviteLink,
+  createInviteLink,
   createMatch,
   createPoll,
   createTeam,
@@ -13,9 +18,18 @@ import {
   joinMatch,
   postChallenge,
   proposeTime,
+  removePlace,
   reportScore,
+  reportTeam,
+  reportUser,
   requestBooking,
   respondBooking,
+  revokeInviteLink,
+  setAvailability,
+  setGameTypes,
+  setPosition,
+  unblockUser,
+  updateProfile,
   withdrawMatch,
 } from './actions.js';
 
@@ -23,7 +37,8 @@ type Row = Record<string, unknown>;
 
 class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; error: null }> {
   private filters: { col: string; val: unknown }[] = [];
-  private op: 'select' | 'insert' | 'upsert' | 'update' = 'select';
+  private nullFilters: string[] = [];
+  private op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
   private payload: Row | Row[] | null = null;
   private wantCount = false;
   private conflict: string | null = null;
@@ -40,6 +55,17 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
 
   eq(col: string, val: unknown): this {
     this.filters.push({ col, val });
+    return this;
+  }
+
+  is(col: string, val: null): this {
+    if (val === null) this.nullFilters.push(col);
+    else this.filters.push({ col, val });
+    return this;
+  }
+
+  delete(): this {
+    this.op = 'delete';
     return this;
   }
 
@@ -78,24 +104,42 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
   }
 
   private matches(row: Row): boolean {
-    return this.filters.every((f) => row[f.col] === f.val);
+    return (
+      this.filters.every((f) => row[f.col] === f.val) &&
+      this.nullFilters.every((c) => row[c] == null)
+    );
   }
 
   private run(single: boolean): { data: unknown; count: number | null; error: null } {
     if (this.op === 'insert' || this.op === 'upsert') {
-      const row = { ...(this.payload as Row) };
-      if (row['id'] === undefined) row['id'] = crypto.randomUUID();
-      const key = this.keyOf(row);
-      const existing = this.table.get(key);
-      if (this.op === 'insert' && existing && this.conflict === null) {
-        return { data: null, count: null, error: null };
+      const rows = (Array.isArray(this.payload) ? this.payload : [this.payload]) as Row[];
+      const written: Row[] = [];
+      for (const item of rows) {
+        const row = { ...item };
+        if (row['id'] === undefined) row['id'] = crypto.randomUUID();
+        const key = this.keyOf(row);
+        const existing = this.table.get(key);
+        if (this.op === 'insert' && existing && this.conflict === null) {
+          return { data: null, count: null, error: null };
+        }
+        this.table.set(key, { ...(existing ?? {}), ...row });
+        written.push(this.table.get(key) ?? row);
       }
-      this.table.set(key, { ...(existing ?? {}), ...row });
-      return { data: this.table.get(key) ?? null, count: null, error: null };
+      if (single) return { data: written[written.length - 1] ?? null, count: null, error: null };
+      return { data: written.length === 1 ? (written[0] ?? null) : written, count: null, error: null };
     }
     if (this.op === 'update') {
+      // Match first, like WHERE, then return the updated rows the way
+      // RETURNING does — never re-filter on the new values.
+      const matched = [...this.table.entries()].filter(([, row]) => this.matches(row));
+      for (const [key, row] of matched) this.table.set(key, { ...row, ...(this.payload as Row) });
+      const rows = matched.map(([, row]) => ({ ...row, ...(this.payload as Row) }));
+      if (single) return { data: rows[0] ?? null, count: null, error: null };
+      return { data: rows, count: null, error: null };
+    }
+    if (this.op === 'delete') {
       for (const [key, row] of this.table.entries()) {
-        if (this.matches(row)) this.table.set(key, { ...row, ...(this.payload as Row) });
+        if (this.matches(row)) this.table.delete(key);
       }
       return { data: null, count: null, error: null };
     }
@@ -118,6 +162,14 @@ function fakeDb() {
   const tickets = new Map<string, Row>();
   const polls = new Map<string, Row>();
   const pollResponses = new Map<string, Row>();
+  const profiles = new Map<string, Row>();
+  const availability = new Map<string, Row>();
+  const places = new Map<string, Row>();
+  const gameTypes = new Map<string, Row>();
+  const sports = new Map<string, Row>();
+  const invites = new Map<string, Row>();
+  const reports = new Map<string, Row>();
+  const blocks = new Map<string, Row>();
   const client = {
     from(table: string) {
       if (table === 'matches') return new FakeQuery(matches, (r) => String(r['id']));
@@ -137,10 +189,24 @@ function fakeDb() {
       if (table === 'poll_responses') {
         return new FakeQuery(pollResponses, (r) => `${String(r['poll_id'])}:${String(r['user_id'])}`);
       }
+      if (table === 'profiles') return new FakeQuery(profiles, (r) => String(r['id']));
+      if (table === 'user_availability') {
+        return new FakeQuery(availability, (r) => `${String(r['user_id'])}:${String(r['day'])}:${String(r['time_band'])}`);
+      }
+      if (table === 'user_places') return new FakeQuery(places, (r) => String(r['id']));
+      if (table === 'user_game_types') {
+        return new FakeQuery(gameTypes, (r) => `${String(r['user_id'])}:${String(r['game_type'])}`);
+      }
+      if (table === 'sports') return new FakeQuery(sports, (r) => String(r['id']));
+      if (table === 'invite_links') return new FakeQuery(invites, (r) => String(r['code']));
+      if (table === 'reports') return new FakeQuery(reports, (r) => String(r['id']));
+      if (table === 'blocks') {
+        return new FakeQuery(blocks, (r) => `${String(r['blocker_id'])}:${String(r['blocked_user_id'])}`);
+      }
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, invites, reports, blocks };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -218,6 +284,16 @@ async function twoTeams(client: never) {
     area: 'Riverside',
   })) as TeamResult;
   return { homeId: a.team.id, awayId: b.team.id };
+}
+
+async function oneTeam(client: never, owner: string) {
+  const t = (await createTeam(client, owner, {
+    name: 'Avondale Hoops',
+    sportId: SPORT_ID,
+    category: 'neighbourhood',
+    area: 'Avondale',
+  })) as TeamResult;
+  return t.team.id;
 }
 
 function challengeInput(teamId: string) {
@@ -429,5 +505,141 @@ describe('reportScore', () => {
     await expect(
       reportScore(client, PLAYER_A, { matchId: created.matchId, homeScore: 1, awayScore: 0 }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('onboarding profile (Amendment 3)', () => {
+  it('updates only the fields given', async () => {
+    const { client, profiles } = fakeDb();
+    profiles.set(PLAYER_A, { id: PLAYER_A, name: 'Old', area: 'Old Area' });
+    const out = (await updateProfile(client, PLAYER_A, {
+      area: 'Kabulonga',
+      travelKm: 5,
+      termsAcceptedAt: '2026-11-01T00:00:00.000Z',
+    })) as { profile: Record<string, unknown> };
+    expect(out.profile['area']).toBe('Kabulonga');
+    expect(out.profile['travel_km']).toBe(5);
+    expect(out.profile['terms_accepted_at']).toBe('2026-11-01T00:00:00.000Z');
+    expect(out.profile['name']).toBe('Old');
+    await expect(updateProfile(client, PLAYER_A, {})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('replaces availability slots', async () => {
+    const { client, availability } = fakeDb();
+    await setAvailability(client, PLAYER_A, {
+      slots: [
+        { day: 6, timeBand: 'evening' },
+        { day: 0, timeBand: 'morning' },
+      ],
+    });
+    expect(availability.size).toBe(2);
+    await setAvailability(client, PLAYER_A, { slots: [{ day: 3, timeBand: 'afternoon' }] });
+    expect(availability.size).toBe(1);
+  });
+
+  it('adds and removes places, and replaces game types', async () => {
+    const { client, places, gameTypes } = fakeDb();
+    const added = (await addPlace(client, PLAYER_A, { label: 'Home court', area: 'Avondale' })) as {
+      place: { id: string };
+    };
+    expect(places.size).toBe(1);
+    await removePlace(client, PLAYER_A, added.place.id);
+    expect(places.size).toBe(0);
+    const saved = (await setGameTypes(client, PLAYER_A, { gameTypes: ['corporate', 'routine'] })) as {
+      gameTypes: string[];
+    };
+    expect(saved.gameTypes).toEqual(['corporate', 'routine']);
+    expect(gameTypes.size).toBe(2);
+  });
+
+  it('sets a position and joins the team when needed', async () => {
+    const { client, members } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    const out = (await setPosition(client, PLAYER_A, { teamId: TEAM, position: 'Point guard' })) as {
+      position: string;
+    };
+    expect(out.position).toBe('Point guard');
+    expect(members.get(`${TEAM}:${PLAYER_A}`)?.['role']).toBe('player');
+    expect(members.get(`${TEAM}:${PLAYER_A}`)?.['position']).toBe('Point guard');
+  });
+
+  it('dedups disciplines by normalised name', async () => {
+    const { client, sports } = fakeDb();
+    sports.set('s1', { id: 's1', name: 'Hiking', formats: [] });
+    const same = (await addDiscipline(client, PLAYER_A, { name: 'hikes' })) as { state: string };
+    expect(same.state).toBe('exists');
+    expect(sports.size).toBe(1);
+    const created = (await addDiscipline(client, PLAYER_A, { name: 'Chess' })) as {
+      state: string;
+      sport: { name: string };
+    };
+    expect(created.state).toBe('created');
+    expect(created.sport.name).toBe('Chess');
+  });
+});
+
+describe('invites, reports and blocks (Amendment 4)', () => {
+  it('runs the invite link lifecycle', async () => {
+    const { client, members } = fakeDb();
+    const TEAM = await oneTeam(client, PLAYER_A);
+    const created = (await createInviteLink(client, PLAYER_A, { teamId: TEAM })) as {
+      invite: { code: string };
+    };
+    expect(created.invite.code).toMatch(/^CHB-/);
+    const claimed = (await claimInviteLink(client, PLAYER_B, created.invite.code)) as {
+      teamId: string;
+    };
+    expect(claimed.teamId).toBe(TEAM);
+    expect(members.get(`${TEAM}:${PLAYER_B}`)?.['role']).toBe('player');
+    await expect(claimInviteLink(client, ORGANISER, created.invite.code)).rejects.toMatchObject({
+      status: 409,
+    });
+    const revoked = (await revokeInviteLink(client, PLAYER_A, created.invite.code)) as {
+      state: string;
+    };
+    expect(revoked.state).toBe('revoked');
+  });
+
+  it('rejects expired and foreign invite links', async () => {
+    const { client, invites } = fakeDb();
+    invites.set('OLD', {
+      code: 'OLD',
+      created_by: PLAYER_A,
+      team_id: null,
+      expires_at: '2020-01-01T00:00:00.000Z',
+      revoked_at: null,
+      claimed_by: null,
+    });
+    await expect(claimInviteLink(client, PLAYER_B, 'OLD')).rejects.toMatchObject({ status: 410 });
+    await expect(claimInviteLink(client, PLAYER_B, 'NOPE')).rejects.toMatchObject({ status: 404 });
+    await expect(revokeInviteLink(client, PLAYER_B, 'OLD')).rejects.toMatchObject({ status: 404 });
+  });
+
+  it('requires team membership to mint a team link', async () => {
+    const { client } = fakeDb();
+    const TEAM = await oneTeam(client, PLAYER_A);
+    await expect(createInviteLink(client, PLAYER_B, { teamId: TEAM })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it('records reports and blocks, never against yourself', async () => {
+    const { client, profiles, reports, blocks } = fakeDb();
+    profiles.set(PLAYER_A, { id: PLAYER_A });
+    profiles.set(PLAYER_B, { id: PLAYER_B });
+    const TEAM = await oneTeam(client, PLAYER_A);
+    await reportUser(client, PLAYER_A, { userId: PLAYER_B, reason: 'spam' });
+    await reportTeam(client, PLAYER_A, { teamId: TEAM, reason: 'no-show' });
+    expect(reports.size).toBe(2);
+    await expect(reportUser(client, PLAYER_A, { userId: PLAYER_A, reason: 'x' })).rejects.toMatchObject({
+      status: 400,
+    });
+    await blockUser(client, PLAYER_A, { userId: PLAYER_B });
+    expect(blocks.size).toBe(1);
+    await expect(blockUser(client, PLAYER_A, { userId: PLAYER_A })).rejects.toMatchObject({
+      status: 400,
+    });
+    await unblockUser(client, PLAYER_A, { userId: PLAYER_B });
+    expect(blocks.size).toBe(0);
   });
 });

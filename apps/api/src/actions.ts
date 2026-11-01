@@ -1,7 +1,10 @@
 import {
   acceptChallengeSchema,
+  addDisciplineSchema,
+  addPlaceSchema,
   announcementSchema,
   answerPollSchema,
+  blockUserSchema,
   circleEligibility,
   circleIdSchema,
   circleSchema,
@@ -16,13 +19,16 @@ import {
   competitionSchema,
   computeStandings,
   createCompetitionSchema,
+  createInviteLinkSchema,
   createMatchSchema,
   createTeamSchema,
   createVenueSchema,
   createVenueSlotSchema,
   fixtureSchema,
+  inviteCodeSchema,
   matchIdSchema,
   matchSchema,
+  normaliseDisciplineName,
   pollSchema,
   postAnnouncementSchema,
   postChallengeSchema,
@@ -30,26 +36,36 @@ import {
   proposeTimeSchema,
   registerEntrySchema,
   reportScoreSchema,
+  reportTeamSchema,
+  reportUserSchema,
   requestBookingSchema,
   respondBookingSchema,
   roundRobinPairings,
+  setAvailabilitySchema,
+  setGameTypesSchema,
+  setPositionSchema,
   teamSchema,
   ticketIdSchema,
   ticketSchema,
+  updateProfileSchema,
   venueSchema,
   venueSupportsSport,
   venueSlotSchema,
 } from '@chabuka/shared';
 import type {
   ActionResult,
+  AddDisciplineInput,
+  AddPlaceInput,
   Announcement,
   AnswerPollInput,
+  BlockUserInput,
   Booking,
   Challenge,
   Circle,
   Competition,
   CreateCircleInput,
   CreateCompetitionInput,
+  CreateInviteLinkInput,
   CreateMatchInput,
   CreatePollInput,
   CreateTeamInput,
@@ -63,9 +79,15 @@ import type {
   PostResultInput,
   RegisterEntryInput,
   ReportScoreInput,
+  ReportTeamInput,
+  ReportUserInput,
   RequestBookingInput,
+  SetAvailabilityInput,
+  SetGameTypesInput,
+  SetPositionInput,
   Team,
   Ticket,
+  UpdateProfileInput,
   Venue,
   VenueSlot,
 } from '@chabuka/shared';
@@ -1104,6 +1126,278 @@ export async function leaveCircle(
   return { state: 'left', actions: ['join_circle'], circle };
 }
 
+// --- Onboarding wizard (Amendment 3): one shared profile, every step
+// skippable. Writes go through here so the web app, Gaffer and MCP share
+// the same rules. Availability rows stay private to their owner. ---
+export async function updateProfile(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateProfileInput,
+): Promise<unknown> {
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name;
+  if (input.area !== undefined) patch.area = input.area;
+  if (input.city !== undefined) patch.city = input.city;
+  if (input.birthYear !== undefined) patch.birth_year = input.birthYear;
+  if (input.gender !== undefined) patch.gender = input.gender;
+  if (input.photoUrl !== undefined) patch.photo_url = input.photoUrl;
+  if (input.travelKm !== undefined) patch.travel_km = input.travelKm;
+  if (input.termsAcceptedAt !== undefined) patch.terms_accepted_at = input.termsAcceptedAt;
+  if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to update.');
+  const { data, error } = await db
+    .from('profiles')
+    .upsert({ id: userId, ...patch }, { onConflict: 'id' })
+    .select('*')
+    .single();
+  if (error) throw dbError(error);
+  return { profile: data };
+}
+
+export async function setAvailability(
+  db: SupabaseClient,
+  userId: string,
+  input: SetAvailabilityInput,
+): Promise<unknown> {
+  const { error: delError } = await db.from('user_availability').delete().eq('user_id', userId);
+  if (delError) throw dbError(delError);
+  if (input.slots.length > 0) {
+    const rows = input.slots.map((s) => ({ user_id: userId, day: s.day, time_band: s.timeBand }));
+    const { error } = await db.from('user_availability').insert(rows);
+    if (error) throw dbError(error);
+  }
+  return { state: 'saved', slots: input.slots };
+}
+
+export async function addPlace(
+  db: SupabaseClient,
+  userId: string,
+  input: AddPlaceInput,
+): Promise<unknown> {
+  const { data, error } = await db
+    .from('user_places')
+    .insert({
+      user_id: userId,
+      label: input.label,
+      area: input.area ?? null,
+      lat: input.lat ?? null,
+      lng: input.lng ?? null,
+      venue_id: input.venueId ?? null,
+    })
+    .select('*')
+    .single();
+  if (error) throw dbError(error);
+  return { place: data };
+}
+
+export async function removePlace(
+  db: SupabaseClient,
+  userId: string,
+  placeId: string,
+): Promise<unknown> {
+  const { error } = await db.from('user_places').delete().eq('id', placeId).eq('user_id', userId);
+  if (error) throw dbError(error);
+  return { state: 'removed', placeId };
+}
+
+export async function setGameTypes(
+  db: SupabaseClient,
+  userId: string,
+  input: SetGameTypesInput,
+): Promise<unknown> {
+  const { error: delError } = await db.from('user_game_types').delete().eq('user_id', userId);
+  if (delError) throw dbError(delError);
+  const unique = [...new Set(input.gameTypes)];
+  if (unique.length > 0) {
+    const { error } = await db
+      .from('user_game_types')
+      .insert(unique.map((game_type) => ({ user_id: userId, game_type })));
+    if (error) throw dbError(error);
+  }
+  return { state: 'saved', gameTypes: unique };
+}
+
+export async function setPosition(
+  db: SupabaseClient,
+  userId: string,
+  input: SetPositionInput,
+): Promise<unknown> {
+  await loadTeam(db, input.teamId);
+  const { error: joinError } = await db
+    .from('team_members')
+    .upsert({ team_id: input.teamId, user_id: userId, role: 'player' }, { onConflict: 'team_id,user_id' });
+  if (joinError) throw dbError(joinError);
+  const { error } = await db
+    .from('team_members')
+    .update({ position: input.position })
+    .eq('team_id', input.teamId)
+    .eq('user_id', userId);
+  if (error) throw dbError(error);
+  return { state: 'saved', teamId: input.teamId, position: input.position };
+}
+
+// Open-ended disciplines (Amendment 4, section 3): normalised, so "Hiking"
+// and "hikes" share one row. Anyone can add one straight away for now.
+export async function addDiscipline(
+  db: SupabaseClient,
+  _userId: string,
+  input: AddDisciplineInput,
+): Promise<unknown> {
+  const wanted = normaliseDisciplineName(input.name);
+  const { data: existing, error: listError } = await db.from('sports').select('id,name,formats');
+  if (listError) throw dbError(listError);
+  const hit = ((existing ?? []) as { id: string; name: string }[]).find(
+    (s) => normaliseDisciplineName(s.name) === wanted,
+  );
+  if (hit) return { state: 'exists', sport: hit };
+  const { data, error } = await db
+    .from('sports')
+    .insert({ name: input.name.trim(), formats: [] })
+    .select('id,name,formats')
+    .single();
+  if (error) throw dbError(error);
+  return { state: 'created', sport: data };
+}
+
+// Platform invite links (Amendment 4, section 2): any member can generate
+// one; a team link also joins the claimer to that team.
+function mintInviteCode(): string {
+  return `CHB-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+}
+
+export async function createInviteLink(
+  db: SupabaseClient,
+  userId: string,
+  input: CreateInviteLinkInput,
+): Promise<unknown> {
+  if (input.teamId) {
+    await loadTeam(db, input.teamId);
+    await requireTeamMember(db, input.teamId, userId);
+  }
+  const expires_at =
+    input.expiresInHours != null
+      ? new Date(Date.now() + input.expiresInHours * 3600_000).toISOString()
+      : null;
+  const { data, error } = await db
+    .from('invite_links')
+    .insert({ code: mintInviteCode(), created_by: userId, team_id: input.teamId ?? null, expires_at })
+    .select('code,team_id,expires_at')
+    .single();
+  if (error) throw dbError(error);
+  return { invite: data };
+}
+
+export async function revokeInviteLink(
+  db: SupabaseClient,
+  userId: string,
+  code: string,
+): Promise<unknown> {
+  const { data, error } = await db
+    .from('invite_links')
+    .update({ revoked_at: new Date().toISOString() })
+    .eq('code', code)
+    .eq('created_by', userId)
+    .is('revoked_at', null)
+    .select('code')
+    .maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(404, 'Invite link not found.');
+  return { state: 'revoked', code };
+}
+
+export async function claimInviteLink(
+  db: SupabaseClient,
+  userId: string,
+  code: string,
+): Promise<unknown> {
+  const { data: link, error } = await db.from('invite_links').select('*').eq('code', code).maybeSingle();
+  if (error) throw dbError(error);
+  const row = link as {
+    code: string;
+    team_id: string | null;
+    expires_at: string | null;
+    revoked_at: string | null;
+    claimed_by: string | null;
+  } | null;
+  if (!row) throw new ActionError(404, 'Invite link not found.');
+  if (row.revoked_at) throw new ActionError(410, 'This invite link was revoked.');
+  if (row.expires_at && new Date(row.expires_at).getTime() < Date.now()) {
+    throw new ActionError(410, 'This invite link expired.');
+  }
+  if (row.claimed_by) throw new ActionError(409, 'This invite link was already used.');
+  const { error: claimError } = await db
+    .from('invite_links')
+    .update({ claimed_by: userId, claimed_at: new Date().toISOString() })
+    .eq('code', code);
+  if (claimError) throw dbError(claimError);
+  if (row.team_id) {
+    const { error: joinError } = await db
+      .from('team_members')
+      .upsert({ team_id: row.team_id, user_id: userId, role: 'player' }, { onConflict: 'team_id,user_id' });
+    if (joinError) throw dbError(joinError);
+  }
+  return { state: 'claimed', teamId: row.team_id };
+}
+
+// Safety basics (Amendment 4, section 4): one-tap report and block.
+export async function reportUser(
+  db: SupabaseClient,
+  userId: string,
+  input: ReportUserInput,
+): Promise<unknown> {
+  if (input.userId === userId) throw new ActionError(400, 'You cannot report yourself.');
+  const { data: target } = await db.from('profiles').select('id').eq('id', input.userId).maybeSingle();
+  if (!target) throw new ActionError(404, 'Profile not found.');
+  const { data, error } = await db
+    .from('reports')
+    .insert({ reporter_id: userId, target_user_id: input.userId, reason: input.reason })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  return { state: 'reported', reportId: (data as { id: string }).id };
+}
+
+export async function reportTeam(
+  db: SupabaseClient,
+  userId: string,
+  input: ReportTeamInput,
+): Promise<unknown> {
+  await loadTeam(db, input.teamId);
+  const { data, error } = await db
+    .from('reports')
+    .insert({ reporter_id: userId, target_team_id: input.teamId, reason: input.reason })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  return { state: 'reported', reportId: (data as { id: string }).id };
+}
+
+export async function blockUser(
+  db: SupabaseClient,
+  userId: string,
+  input: BlockUserInput,
+): Promise<unknown> {
+  if (input.userId === userId) throw new ActionError(400, 'You cannot block yourself.');
+  const { error } = await db
+    .from('blocks')
+    .upsert({ blocker_id: userId, blocked_user_id: input.userId }, { onConflict: 'blocker_id,blocked_user_id' });
+  if (error) throw dbError(error);
+  return { state: 'blocked' };
+}
+
+export async function unblockUser(
+  db: SupabaseClient,
+  userId: string,
+  input: BlockUserInput,
+): Promise<unknown> {
+  const { error } = await db
+    .from('blocks')
+    .delete()
+    .eq('blocker_id', userId)
+    .eq('blocked_user_id', input.userId);
+  if (error) throw dbError(error);
+  return { state: 'unblocked' };
+}
+
 // HTTP entry points: parse once with the shared schema, then dispatch.
 // Notifications land with the Day 5 board; the matches migrations have
 // no notifications table yet, so no notification rows are written here.
@@ -1174,6 +1468,34 @@ export async function runAction(
       return joinCircle(db, userId, circleIdSchema.parse(body).circleId);
     case 'leave_circle':
       return leaveCircle(db, userId, circleIdSchema.parse(body).circleId);
+    case 'update_profile':
+      return updateProfile(db, userId, updateProfileSchema.parse(body));
+    case 'set_availability':
+      return setAvailability(db, userId, setAvailabilitySchema.parse(body));
+    case 'add_place':
+      return addPlace(db, userId, addPlaceSchema.parse(body));
+    case 'remove_place':
+      return removePlace(db, userId, z.object({ placeId: z.string().uuid() }).parse(body).placeId);
+    case 'set_game_types':
+      return setGameTypes(db, userId, setGameTypesSchema.parse(body));
+    case 'set_position':
+      return setPosition(db, userId, setPositionSchema.parse(body));
+    case 'add_discipline':
+      return addDiscipline(db, userId, addDisciplineSchema.parse(body));
+    case 'create_invite_link':
+      return createInviteLink(db, userId, createInviteLinkSchema.parse(body));
+    case 'revoke_invite_link':
+      return revokeInviteLink(db, userId, inviteCodeSchema.parse(body).code);
+    case 'claim_invite_link':
+      return claimInviteLink(db, userId, inviteCodeSchema.parse(body).code);
+    case 'report_user':
+      return reportUser(db, userId, reportUserSchema.parse(body));
+    case 'report_team':
+      return reportTeam(db, userId, reportTeamSchema.parse(body));
+    case 'block_user':
+      return blockUser(db, userId, blockUserSchema.parse(body));
+    case 'unblock_user':
+      return unblockUser(db, userId, blockUserSchema.parse(body));
     default:
       throw new ActionError(404, 'Unknown action.');
   }

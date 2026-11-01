@@ -97,6 +97,53 @@ function blobToDataUrl(blob: Blob): Promise<string> {
   });
 }
 
+// Phone photos are megabytes; downscale to ~1024px JPEG before upload so
+// vision turns stay fast and cheap. Resolves null when anything fails, and
+// the caller falls back to the original file.
+const PHOTO_MAX_DIM = 1024;
+
+function downscalePhoto(file: File): Promise<string | null> {
+  return new Promise((resolve) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      try {
+        const scale = Math.min(1, PHOTO_MAX_DIM / Math.max(img.width, img.height));
+        const w = Math.max(1, Math.round(img.width * scale));
+        const h = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) throw new Error('No 2d context.');
+        ctx.drawImage(img, 0, 0, w, h);
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) {
+              resolve(null);
+              return;
+            }
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(blob);
+          },
+          'image/jpeg',
+          0.85,
+        );
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      resolve(null);
+    };
+    img.src = url;
+  });
+}
+
 // Live voice chat runs fully in the browser: the mic stays open, an
 // energy-based voice activity detector ends your turn on ~1.4s of silence,
 // and while the Gaffer speaks the same detector lets you talk over him
@@ -339,10 +386,16 @@ export default function GafferPage() {
             resolve(null);
             return;
           }
-          const reader = new FileReader();
-          reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(file);
+          const readOriginal = () => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(typeof reader.result === 'string' ? reader.result : null);
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+          };
+          void downscalePhoto(file).then((small) => {
+            if (small) resolve(small);
+            else readOriginal();
+          });
         }),
     );
     void Promise.all(readers).then((results) => {
