@@ -670,3 +670,117 @@ button.sheet-item {
   font-weight: 600;
   color: var(--muted);
 }
+
+/* Landing page: flat cards, thin borders, one accent. Phone-first. */
+.landing {
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 0 16px 48px;
+}
+
+.landing-header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 0;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.landing-logo {
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 24px;
+  color: var(--text);
+  text-decoration: none;
+  margin-right: auto;
+}
+
+.landing-nav {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.landing-nav a {
+  color: var(--text);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.landing-auth {
+  display: flex;
+  gap: 8px;
+}
+
+.landing-auth .btn {
+  text-decoration: none;
+}
+
+.landing-hero {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 32px;
+}
+
+@media (min-width: 760px) {
+  .landing-hero {
+    grid-template-columns: 1fr 1fr;
+    align-items: start;
+  }
+}
+
+.landing-search {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.landing section {
+  margin-bottom: 32px;
+}
+
+.landing-steps {
+  display: grid;
+  gap: 12px;
+}
+
+@media (min-width: 760px) {
+  .landing-steps {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+.landing-step {
+  border-left: 3px solid transparent;
+}
+
+.landing-step-active {
+  border-left-color: var(--accent);
+}
+
+.landing-cta {
+  text-align: left;
+}
+
+.landing-cta .btn {
+  text-decoration: none;
+}
+
+.landing-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.landing-footer a {
+  color: var(--muted);
+}

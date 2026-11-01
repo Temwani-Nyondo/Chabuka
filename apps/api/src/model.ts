@@ -34,7 +34,7 @@ export interface ModelAudioPart {
 export type ModelContentPart = ModelTextPart | ModelImagePart | ModelAudioPart;
 
 export interface ModelMessage {
-  role: 'system' | 'user';
+  role: 'system' | 'user' | 'assistant';
   content: string | ModelContentPart[];
 }
 

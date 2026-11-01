@@ -128,7 +128,7 @@ export async function downloadMatchIcs(matchId: string, accessToken: string): Pr
 // only the external name is the Gaffer.
 export async function askGaffer(
   message: string,
-  history: { role: 'user'; content: string }[],
+  history: { role: 'user' | 'assistant'; content: string }[],
   accessToken: string,
   images: string[] = [],
 ): Promise<GafferTurn> {

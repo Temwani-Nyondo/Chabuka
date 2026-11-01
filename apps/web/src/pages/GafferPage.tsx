@@ -146,7 +146,13 @@ function micLevel(stream: MediaStream): MicMeter {
   };
 }
 
-function captureUtterance(stream: MediaStream, onManualStop: (stop: () => void) => void): Promise<Blob> {
+function captureUtterance(
+  stream: MediaStream,
+  onManualStop: (stop: () => void) => void,
+  opts?: { minSpeechMs?: number; silenceMs?: number },
+): Promise<Blob> {
+  const minSpeechMs = opts?.minSpeechMs ?? VAD_MIN_SPEECH_MS;
+  const silenceMs = opts?.silenceMs ?? VAD_SILENCE_MS;
   return new Promise((resolve, reject) => {
     let recorder: MediaRecorder;
     try {
@@ -190,7 +196,7 @@ function captureUtterance(stream: MediaStream, onManualStop: (stop: () => void) 
       if (meter.rms() > VAD_SPEECH_RMS) heardAt = now;
       const spoken = heardAt > 0;
       const silentFor = spoken ? now - heardAt : 0;
-      if (spoken && now - startedAt > VAD_MIN_SPEECH_MS && silentFor > VAD_SILENCE_MS) finish();
+      if (spoken && now - startedAt > minSpeechMs && silentFor > silenceMs) finish();
       else if (now - startedAt > VAD_MAX_UTTERANCE_MS) finish();
     }, 100);
     recorder.start();
@@ -250,8 +256,16 @@ function speakText(text: string, stream: MediaStream | null): Promise<'done' | '
     }
     synth.cancel();
     const utter = new SpeechSynthesisUtterance(text.slice(0, 600));
-    const voice = synth.getVoices().find((v) => v.lang.toLowerCase().startsWith('en')) ?? null;
-    if (voice) utter.voice = voice;
+    // Prefer a natural/online voice over the flat default; fall back to any
+    // English voice. Slightly slower and warmer than the defaults.
+    const voices = synth.getVoices();
+    const preferred =
+      voices.find((v) => v.lang.toLowerCase().startsWith('en') && /natural|online|google/i.test(v.name)) ??
+      voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
+      null;
+    if (preferred) utter.voice = preferred;
+    utter.rate = 0.95;
+    utter.pitch = 1.1;
     utter.onend = () => finish('done');
     utter.onerror = () => finish('done');
     synth.speak(utter);
@@ -291,9 +305,12 @@ export default function GafferPage() {
     setError(null);
     setBusy(true);
     const history = messages
-      .filter((m) => m.from === 'user')
       .slice(-HISTORY_LIMIT)
-      .map((m) => ({ role: 'user' as const, content: m.text }));
+      .map((m) =>
+        m.from === 'user'
+          ? { role: 'user' as const, content: m.text }
+          : { role: 'assistant' as const, content: m.text },
+      );
     setMessages((prev) => [
       ...prev,
       { from: 'user', text: message || '(photo)' },
@@ -414,29 +431,49 @@ export default function GafferPage() {
       }
       convoActiveRef.current = true;
       const transcript = messages
-        .filter((m) => m.from === 'user')
         .slice(-HISTORY_LIMIT)
-        .map((m) => ({ role: 'user' as const, content: m.text }));
+        .map((m) =>
+          m.from === 'user'
+            ? { role: 'user' as const, content: m.text }
+            : { role: 'assistant' as const, content: m.text },
+        );
       let turns = 0;
+      // Set when the user talks over the Gaffer: the interruption itself is
+      // mid-sentence, so the next capture listens with a shorter fuse.
+      let interrupted = false;
       try {
         while (convoActiveRef.current && turns < 30) {
           turns += 1;
           setConvo('listening');
-          const blob = await captureUtterance(stream, (stop) => {
-            convoStopCaptureRef.current = stop;
-          }).catch(() => null);
+          const blob = await captureUtterance(
+            stream,
+            (stop) => {
+              convoStopCaptureRef.current = stop;
+            },
+            interrupted ? { minSpeechMs: 200, silenceMs: 800 } : undefined,
+          ).catch(() => null);
+          interrupted = false;
           convoStopCaptureRef.current = null;
           if (!convoActiveRef.current || !blob) break;
           setConvo('thinking');
           let heard = '';
+          let heardError: string | null = null;
           try {
             heard = (await transcribeVoiceNote(await blobToDataUrl(await recordingToWav(blob)), token)).trim();
-          } catch {
+          } catch (err) {
             heard = '';
+            heardError = err instanceof Error ? err.message : null;
           }
           if (!convoActiveRef.current) break;
           if (!heard) {
-            await speakText("Sorry, I didn't catch that. Say that again?", stream);
+            // A server problem (keys missing, API down) is not a hearing
+            // problem: say so instead of blaming the user's voice.
+            const setupProblem =
+              heardError && /not set up|transcription key|model key|could not reach/i.test(heardError);
+            await speakText(
+              setupProblem && heardError ? heardError : "Sorry, I didn't catch that. Say that again?",
+              stream,
+            );
             continue;
           }
           setMessages((prev) => [...prev, { from: 'user', text: heard }]);
@@ -452,8 +489,9 @@ export default function GafferPage() {
           }
           if (!convoActiveRef.current) break;
           setMessages((prev) => [...prev, { from: 'gaffer', text: reply, actionsTaken }]);
+          transcript.push({ role: 'assistant', content: reply });
           setConvo('speaking');
-          await speakText(reply, stream);
+          interrupted = (await speakText(reply, stream)) === 'barged';
         }
       } finally {
         convoActiveRef.current = false;
@@ -498,9 +536,10 @@ export default function GafferPage() {
           <div className="card" key={i}>
             <div className="row">
               <strong>Gaffer</strong>
-              {m.actionsTaken && m.actionsTaken.length > 0 ? (
+              {m.actionsTaken && m.actionsTaken.some((a) => !a.ok) ? (
                 <span className="tag">
-                  {m.actionsTaken.filter((a) => a.ok).length}/{m.actionsTaken.length} sorted
+                  {m.actionsTaken.filter((a) => a.ok).length}/{m.actionsTaken.length} worked — see
+                  details
                 </span>
               ) : null}
             </div>

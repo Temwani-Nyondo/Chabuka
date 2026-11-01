@@ -13,4 +13,5 @@ supabase/.temp/
 .DS_Store
 *.local
 .vercel
+.tmp/
 .env*

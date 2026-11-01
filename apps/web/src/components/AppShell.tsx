@@ -122,7 +122,7 @@ export default function AppShell() {
         </div>
       ) : null}
       <nav className="tabbar">
-        <NavLink to="/" end className={tabClass}>
+        <NavLink to="/home" end className={tabClass}>
           Home
         </NavLink>
         <NavLink to="/explore" className={tabClass}>

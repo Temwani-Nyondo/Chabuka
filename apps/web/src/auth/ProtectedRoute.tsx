@@ -31,6 +31,6 @@ export default function ProtectedRoute() {
   if (needsOnboarding && location.pathname !== '/onboarding')
     return <Navigate to="/onboarding" replace />;
   if (!needsOnboarding && location.pathname === '/onboarding')
-    return <Navigate to="/" replace />;
+    return <Navigate to="/home" replace />;
   return <Outlet />;
 }

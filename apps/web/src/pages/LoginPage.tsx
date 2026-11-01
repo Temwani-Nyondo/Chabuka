@@ -1,17 +1,23 @@
 import { useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, Navigate } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
 export default function LoginPage() {
   const { loading, user, needsOnboarding, signInWithPassword, signInWithOAuth } = useAuth();
+  const location = useLocation();
+  const from = (location.state as { from?: string } | null)?.from;
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<'meta' | 'google' | 'password' | null>(null);
 
-  if (!loading && user)
-    return <Navigate to={needsOnboarding ? '/onboarding' : '/'} replace />;
+  if (!loading && user) {
+    if (needsOnboarding) return <Navigate to="/onboarding" replace />;
+    // After Join-on-landing, land back where the visitor started.
+    const safeFrom = from && from.startsWith('/') && !from.startsWith('//') ? from : '/home';
+    return <Navigate to={safeFrom} replace />;
+  }
 
   const oauth = async (provider: 'facebook' | 'google', label: 'meta' | 'google') => {
     setBusy(label);
