@@ -13,6 +13,7 @@ interface AuthValue {
   sportsCount: number;
   needsOnboarding: boolean;
   signInWithOtp: (email: string) => Promise<void>;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
   signInWithOAuth: (provider: 'facebook' | 'google') => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -98,6 +99,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   // Social sign-in through Supabase Auth's built-in providers. No custom
   // OAuth code anywhere: the App ID/secret live in Supabase settings.
+  // Password sign-in sends no email, so Supabase's email rate limits
+  // never apply. This is the scalable path for real users.
+  const signInWithPassword = async (email: string, password: string) => {
+    if (!supabase) throw new Error('Supabase is not configured.');
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) throw error;
+  };
+
   const signInWithOAuth = async (provider: 'facebook' | 'google') => {
     if (!supabase) throw new Error('Supabase is not configured.');
     const { error } = await supabase.auth.signInWithOAuth({
@@ -119,7 +128,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ loading, session, user, profile, sportsCount, needsOnboarding, signInWithOtp, signInWithOAuth, signOut, refreshProfile }}
+      value={{ loading, session, user, profile, sportsCount, needsOnboarding, signInWithOtp, signInWithPassword, signInWithOAuth, signOut, refreshProfile }}
     >
       {children}
     </AuthContext.Provider>

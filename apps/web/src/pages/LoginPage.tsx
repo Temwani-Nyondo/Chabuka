@@ -4,11 +4,13 @@ import { Link, Navigate } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 
 export default function LoginPage() {
-  const { loading, user, needsOnboarding, signInWithOtp, signInWithOAuth } = useAuth();
+  const { loading, user, needsOnboarding, signInWithOtp, signInWithPassword, signInWithOAuth } =
+    useAuth();
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState<'meta' | 'google' | 'email' | null>(null);
+  const [busy, setBusy] = useState<'meta' | 'google' | 'email' | 'password' | null>(null);
 
   if (!loading && user)
     return <Navigate to={needsOnboarding ? '/onboarding' : '/'} replace />;
@@ -34,6 +36,18 @@ export default function LoginPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Sign-in failed.');
     } finally {
+      setBusy(null);
+    }
+  };
+
+  const submitPassword = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy('password');
+    setError(null);
+    try {
+      await signInWithPassword(email.trim(), password);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sign-in failed.');
       setBusy(null);
     }
   };
@@ -95,6 +109,30 @@ export default function LoginPage() {
             {error ? <p className="error">{error}</p> : null}
             <button className="btn btn-primary" type="submit" disabled={busy !== null}>
               {busy === 'email' ? 'Sending…' : 'Send sign-in link'}
+            </button>
+          </form>
+          <div className="divider" role="separator">
+            or sign in with a password
+          </div>
+          <form
+            onSubmit={(e) => {
+              void submitPassword(e);
+            }}
+          >
+            <label className="field">
+              Password
+              <input
+                className="input"
+                type="password"
+                required
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Your password"
+                autoComplete="current-password"
+              />
+            </label>
+            <button className="btn btn-primary" type="submit" disabled={busy !== null}>
+              {busy === 'password' ? 'Signing in…' : 'Sign in'}
             </button>
           </form>
         </div>
