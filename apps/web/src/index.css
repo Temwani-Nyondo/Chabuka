@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Oswald:wght@500;600;700&display=swap');
 
 /* Chabuka visual system (UI Design Direction): night pitch, electric lime as
    the one accent. Components only reference these variables. */
@@ -277,6 +276,132 @@ code {
 .btn:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.btn-recording {
+  background: #d92d20;
+  border-color: #d92d20;
+  color: #fff;
+}
+
+.btn .btn-icon {
+  margin-right: 8px;
+  display: inline-flex;
+}
+
+.rec-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  margin-right: 8px;
+  animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes rec-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.3;
+  }
+}
+
+/* Chat composer: one box, input on top, icon buttons inside below. */
+.composer {
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface-2);
+  padding: 10px 10px 8px;
+}
+
+.composer-input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: 15px;
+  padding: 8px;
+  resize: none;
+}
+
+.composer-input:focus {
+  outline: none;
+}
+
+.composer:focus-within {
+  border-color: var(--accent);
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding-top: 4px;
+}
+
+.composer-spacer {
+  flex: 1;
+}
+
+.iconbtn {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.iconbtn:hover {
+  background: var(--surface-3, rgba(128, 128, 128, 0.15));
+}
+
+.iconbtn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.iconbtn:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.iconbtn-send {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+
+.iconbtn-send:disabled {
+  opacity: 0.4;
+  background: var(--surface-3, rgba(128, 128, 128, 0.25));
+  border-color: transparent;
+  color: var(--muted);
+}
+
+.iconbtn-live {
+  width: auto;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.iconbtn-recording {
+  background: #d92d20;
+  border-color: #d92d20;
+  color: #fff;
 }
 
 .error {

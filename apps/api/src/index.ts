@@ -1,27 +1,18 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import express from 'express';
 import { z } from 'zod';
 import { actionNameSchema } from '@chabuka/shared';
 import { runAction, toHttpError } from './actions.js';
 import { runHelperTurn } from './helper.js';
+import { transcribeVoice } from './model.js';
 import { handleMcpRequest } from './mcp.js';
 import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
 import { createUserClient } from './supabase.js';
 import { buildIcs, googleCalendarUrl, matchSchema } from '@chabuka/shared';
+import { loadServerEnv } from './env.js';
 
 // Load the repo-root .env when present (local dev); deployed hosts set real
 // environment variables and this is a no-op there.
-for (const candidate of [resolve(process.cwd(), '.env'), resolve(process.cwd(), '../../.env')]) {
-  if (existsSync(candidate)) {
-    try {
-      process.loadEnvFile(candidate);
-    } catch {
-      // A malformed .env should not stop the server booting.
-    }
-    break;
-  }
-}
+loadServerEnv();
 
 const app = express();
 const port = Number(process.env.PORT ?? 3001);
@@ -42,6 +33,45 @@ app.use((req, res, next) => {
     return;
   }
   next();
+});
+
+// Voice notes arrive as base64 (~4/3 wire size), so this route is
+// registered BEFORE the default-limit parser and parses its own body.
+app.post('/api/helper/transcribe', express.json({ limit: '15mb' }), async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    const audio = typeof req.body?.audio === 'string' ? req.body.audio : '';
+    const match = /^data:(audio\/[^;,]+(?:;[^;,=]+=[^;,]+)*);base64,([\s\S]+)$/.exec(audio);
+    const payload = (match?.[2] ?? '').replace(/\s/g, '');
+    if (!match || payload.length === 0 || payload.length > 12_000_000) {
+      res.status(400).json({ error: 'Send a base64 audio data URL (max ~9 MB).' });
+      return;
+    }
+    const mimeType = (match[1] ?? 'audio/webm').split(';')[0] ?? 'audio/webm';
+    const audioBytes = Buffer.from(payload, 'base64');
+    // Meta's transcribe endpoint only takes RIFF/WAVE (mono 16-bit PCM).
+    // The Gaffer page converts recordings to WAV before sending; anything
+    // else is rejected here instead of failing obscurely upstream.
+    const isWav =
+      audioBytes.length > 12 &&
+      audioBytes.subarray(0, 4).toString('ascii') === 'RIFF' &&
+      audioBytes.subarray(8, 12).toString('ascii') === 'WAVE';
+    if (!isWav) {
+      res.status(400).json({ error: 'Voice note must be WAV audio. Record it again in the app and retry.' });
+      return;
+    }
+    const text = await transcribeVoice({ audio: audioBytes, mimeType });
+    res.json({ text });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Transcription failed.';
+    if (message.includes('META_TRANSCRIBE_MODEL_ID')) {
+      res.status(503).json({ error: 'Voice notes are not set up yet. The server is missing its transcription key.' });
+      return;
+    }
+    console.error(err);
+    res.status(500).json({ error: 'Transcription failed. Try again.' });
+  }
 });
 
 app.use(express.json());
@@ -86,6 +116,8 @@ const helperBodySchema = z.object({
     .array(z.object({ role: z.enum(['system', 'user']), content: z.string().max(4000) }))
     .max(10)
     .optional(),
+  // Optional attached photos as data URLs (jpeg/png/webp, max 3).
+  images: z.array(z.string().max(5_000_000)).max(3).optional(),
 });
 
 // "Ask the Gaffer" in the web nav lands here. Same auth shape as the
@@ -114,6 +146,7 @@ app.post('/api/helper', async (req, res) => {
       userId: data.user.id,
       message: parsed.data.message,
       history: parsed.data.history,
+      images: parsed.data.images,
     });
     res.json(turn);
   } catch (err) {
@@ -151,6 +184,7 @@ app.post('/api/agent-tokens', async (req, res) => {
     res.json({ token, note: 'Copy it now. It will not be shown again.' });
   } catch (err) {
     const { status, message } = toHttpError(err);
+    if (status >= 500) console.error('agent-token mint failed:', err);
     res.status(status).json({ error: message });
   }
 });
@@ -163,6 +197,7 @@ app.get('/api/agent-tokens', async (req, res) => {
     res.json(await listAgentTokens(db, userId));
   } catch (err) {
     const { status, message } = toHttpError(err);
+    if (status >= 500) console.error('agent-token list failed:', err);
     res.status(status).json({ error: message });
   }
 });
@@ -176,6 +211,7 @@ app.delete('/api/agent-tokens/:id', async (req, res) => {
     res.json({ revoked: true });
   } catch (err) {
     const { status, message } = toHttpError(err);
+    if (status >= 500) console.error('agent-token revoke failed:', err);
     res.status(status).json({ error: message });
   }
 });

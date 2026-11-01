@@ -74,6 +74,25 @@ async function agentTokenFetch<T>(path: string, method: string, accessToken: str
   return data as T;
 }
 
+export async function transcribeVoiceNote(audioDataUrl: string, accessToken: string): Promise<string> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/helper/transcribe`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        authorization: `Bearer ${accessToken}`,
+      },
+      body: JSON.stringify({ audio: audioDataUrl }),
+    });
+  } catch {
+    throw new Error('Could not reach the Chabuka server. Is the API running?');
+  }
+  const data = (await res.json().catch(() => null)) as { text?: string; error?: string } | null;
+  if (!res.ok) throw new Error(data?.error ?? 'Transcription failed. Try again.');
+  return data?.text ?? '';
+}
+
 export function mintAgentToken(label: string, accessToken: string): Promise<{ token: string; note: string }> {
   return agentTokenFetch('/api/agent-tokens', 'POST', accessToken, { label });
 }
@@ -111,6 +130,7 @@ export async function askGaffer(
   message: string,
   history: { role: 'user'; content: string }[],
   accessToken: string,
+  images: string[] = [],
 ): Promise<GafferTurn> {
   let res: Response;
   try {
@@ -120,7 +140,7 @@ export async function askGaffer(
         'content-type': 'application/json',
         authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ message, history }),
+      body: JSON.stringify({ message, history, images }),
     });
   } catch {
     throw new Error('Could not reach the Chabuka server. Is the API running?');

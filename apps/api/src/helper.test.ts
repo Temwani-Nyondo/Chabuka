@@ -75,6 +75,80 @@ describe('runHelperTurn', () => {
     });
   });
 
+  it('attaches photos as image parts', async () => {
+    const chat = vi.fn(async () => result({ content: 'Nice court.' }));
+    const execute = vi.fn(async () => {
+      throw new Error('must not be called');
+    });
+
+    await runHelperTurn(
+      { db, userId: 'u1', message: 'Book this court.', images: ['data:image/jpeg;base64,AAA'] },
+      { chat, execute },
+    );
+
+    const sent = (chat.mock.calls as unknown[][])[0]?.[0] as {
+      messages: { role: string; content: unknown }[];
+    };
+    const last = sent.messages[sent.messages.length - 1];
+    expect(JSON.stringify(last?.content)).toContain('image_url');
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it('offers context reads alongside the actions', async () => {
+    const chat = vi.fn(async () => result({ content: 'ok' }));
+
+    await runHelperTurn({ db, userId: 'u1', message: 'Plan something.' }, { chat });
+
+    const sent = (chat.mock.calls as unknown[][])[0]?.[0] as {
+      tools: { function: { name: string } }[];
+    };
+    const names = sent.tools.map((t) => t.function.name);
+    for (const read of [
+      'get_my_profile',
+      'get_my_teams',
+      'get_my_schedule',
+      'search_matches',
+      'search_venues',
+      'venue_slots',
+      'get_my_memories',
+      'save_memory',
+      'forget_memory',
+      'get_my_brief',
+      'get_my_results',
+      'poll_status',
+      'get_my_venues',
+    ]) {
+      expect(names).toContain(read);
+    }
+    expect(names).toContain('request_booking');
+    expect(names).toContain('create_match');
+  });
+
+  it('routes read-only calls to the reader, not the action layer', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({
+          toolCalls: [{ id: 'c1', name: 'search_venues', arguments: '{"sport":"football","area":"Woodlands"}' }],
+        }),
+      )
+      .mockResolvedValueOnce(result({ content: 'Found one venue.' }));
+    const execute = vi.fn(async () => {
+      throw new Error('must not be called');
+    });
+    const read = vi.fn(async () => [{ id: 'v1', name: 'Woodlands Stadium' }]);
+
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'Find a pitch.' }, { chat, execute, read });
+
+    expect(read).toHaveBeenCalledWith('search_venues', { sport: 'football', area: 'Woodlands' });
+    expect(execute).not.toHaveBeenCalled();
+    expect(turn.actionsTaken).toEqual([{ name: 'search_venues', ok: true }]);
+    expect(turn.reply).toBe('Found one venue.');
+    const calls = chat.mock.calls as unknown[][];
+    const followUp = calls[1]?.[0] as { messages: { content: string }[] };
+    expect(JSON.stringify(followUp.messages)).toContain('Woodlands Stadium');
+  });
+
   it('keeps only recent history', async () => {
     const chat = vi.fn(async () => result({ content: 'ok' }));
     const history = Array.from({ length: 14 }, (_, i) => ({ role: 'user' as const, content: `old ${i}` }));

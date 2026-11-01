@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import OpenAI from 'openai';
 
 // Single model wrapper (Amendment 2, section 3). Every AI call in the API
@@ -78,6 +79,68 @@ function extractResult(message: unknown, provider: ModelProvider): ModelResult {
     });
   }
   return { provider, content, toolCalls };
+}
+
+// Voice notes (brief section 9): speech to text on the Meta Model API.
+// Needs META_API_KEY, META_BASE_URL and META_TRANSCRIBE_MODEL_ID on the
+// API server. Throws a 503-style error when the key is missing so the web
+// app can say so honestly instead of pretending.
+//
+// Real contract (Meta speech-to-text docs): multipart POST to
+// {META_BASE_URL}/asr/transcribe?sessionId=<uuid> with a `request` JSON
+// part {mode, model, audioEncoding} and an `audio` part holding a
+// RIFF/WAVE file (mono 16-bit PCM, 16 or 24 kHz). Audio that is not WAV
+// must be converted to WAV before calling — the client records WAV.
+export async function transcribeVoice(
+  params: { audio: Buffer; mimeType: string },
+  deps?: { fetch?: typeof fetch; sessionId?: string },
+): Promise<string> {
+  const metaKey = readEnv('META_API_KEY');
+  const metaBaseUrl = readEnv('META_BASE_URL');
+  const metaModel = readEnv('META_TRANSCRIBE_MODEL_ID');
+  if (!metaKey || !metaBaseUrl || !metaModel) {
+    throw new Error('Voice notes need the server model key (META_TRANSCRIBE_MODEL_ID).');
+  }
+  const fetchImpl = deps?.fetch ?? fetch;
+  const sessionId = deps?.sessionId ?? randomUUID();
+  const url = `${metaBaseUrl.replace(/\/+$/, '')}/asr/transcribe?sessionId=${encodeURIComponent(sessionId)}`;
+  const form = new FormData();
+  form.append(
+    'request',
+    new Blob([JSON.stringify({ mode: 'PUSH_TO_TALK', model: metaModel, audioEncoding: 'WAV' })], {
+      type: 'application/json',
+    }),
+  );
+  form.append(
+    'audio',
+    new Blob([Uint8Array.from(params.audio)], { type: 'audio/wav' }),
+    'voice-note.wav',
+  );
+  let res: Response;
+  try {
+    res = await fetchImpl(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${metaKey}`, Accept: 'application/json' },
+      body: form,
+    });
+  } catch (err) {
+    throw new Error(`Transcription request failed: ${err instanceof Error ? err.message : 'network error'}.`);
+  }
+  if (!res.ok) {
+    throw new Error(`Transcription failed (HTTP ${res.status}). Try again.`);
+  }
+  const data: unknown = await res.json();
+  let text = isRecord(data) && typeof data['transcript'] === 'string' ? (data['transcript'] as string).trim() : '';
+  if (!text && isRecord(data) && Array.isArray(data['turns'])) {
+    text = (data['turns'] as unknown[])
+      .map((turn) => (isRecord(turn) && typeof turn['transcript'] === 'string' ? turn['transcript'] : ''))
+      .join(' ')
+      .trim();
+  }
+  if (!text) {
+    throw new Error('Transcription came back empty. Try again.');
+  }
+  return text;
 }
 
 export async function chatOnce(

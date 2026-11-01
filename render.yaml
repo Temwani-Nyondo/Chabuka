@@ -1,0 +1,32 @@
+# Render blueprint for the Chabuka API (plain Express, always-on free tier).
+# The web app deploys separately on Vercel (see vercel.json).
+# All secrets are sync:false — set them in the Render dashboard, never here.
+services:
+  - type: web
+    name: chabuka-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build --workspace @chabuka/shared && npm run build --workspace @chabuka/api
+    startCommand: npm start --workspace @chabuka/api
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_URL
+        sync: false # web URL, e.g. https://chabuka.vercel.app (CORS + calendar links)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: BASETEN_API_KEY
+        sync: false
+      - key: META_API_KEY
+        sync: false
+      - key: META_BASE_URL
+        sync: false
+      - key: META_MODEL_ID
+        sync: false
+      - key: META_TRANSCRIBE_MODEL_ID
+        sync: false

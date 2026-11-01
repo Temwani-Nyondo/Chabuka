@@ -2,15 +2,18 @@ import { describe, expect, it } from 'vitest';
 import {
   ActionError,
   acceptChallenge,
+  answerPoll,
   cancelBooking,
   checkInTicket,
   createMatch,
+  createPoll,
   createTeam,
   createVenue,
   createVenueSlot,
   joinMatch,
   postChallenge,
   proposeTime,
+  reportScore,
   requestBooking,
   respondBooking,
   withdrawMatch,
@@ -113,6 +116,8 @@ function fakeDb() {
   const slots = new Map<string, Row>();
   const bookings = new Map<string, Row>();
   const tickets = new Map<string, Row>();
+  const polls = new Map<string, Row>();
+  const pollResponses = new Map<string, Row>();
   const client = {
     from(table: string) {
       if (table === 'matches') return new FakeQuery(matches, (r) => String(r['id']));
@@ -128,10 +133,14 @@ function fakeDb() {
       if (table === 'venue_slots') return new FakeQuery(slots, (r) => String(r['id']));
       if (table === 'bookings') return new FakeQuery(bookings, (r) => String(r['id']));
       if (table === 'tickets') return new FakeQuery(tickets, (r) => String(r['id']));
+      if (table === 'polls') return new FakeQuery(polls, (r) => String(r['id']));
+      if (table === 'poll_responses') {
+        return new FakeQuery(pollResponses, (r) => `${String(r['poll_id'])}:${String(r['user_id'])}`);
+      }
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -341,5 +350,84 @@ describe('withdrawMatch', () => {
     const created = await createMatch(client, ORGANISER, matchInput(3));
     const left = await withdrawMatch(client, ORGANISER, created.matchId);
     expect(left.state).toBe('organiser');
+  });
+});
+
+const TEAM_ID = '44444444-4444-4444-8444-444444444444';
+
+describe('availability polls', () => {
+  it('lets a member poll the team', async () => {
+    const { client, members, polls } = fakeDb();
+    members.set(`${TEAM_ID}:${ORGANISER}`, { team_id: TEAM_ID, user_id: ORGANISER, role: 'captain' });
+    members.set(`${TEAM_ID}:${PLAYER_A}`, { team_id: TEAM_ID, user_id: PLAYER_A, role: 'player' });
+    const result = (await createPoll(client, ORGANISER, {
+      teamId: TEAM_ID,
+      question: 'In for Saturday 9am?',
+    })) as { state: string; poll: { id: string } };
+    expect(result.state).toBe('open');
+    expect(polls.size).toBe(1);
+  });
+
+  it('refuses polls from non-members', async () => {
+    const { client } = fakeDb();
+    await expect(
+      createPoll(client, PLAYER_B, { teamId: TEAM_ID, question: 'In?' }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('records and updates answers, and refuses closed polls', async () => {
+    const { client, members, polls } = fakeDb();
+    members.set(`${TEAM_ID}:${ORGANISER}`, { team_id: TEAM_ID, user_id: ORGANISER, role: 'captain' });
+    members.set(`${TEAM_ID}:${PLAYER_A}`, { team_id: TEAM_ID, user_id: PLAYER_A, role: 'player' });
+    const created = (await createPoll(client, ORGANISER, { teamId: TEAM_ID, question: 'In?' })) as {
+      poll: { id: string };
+    };
+    const first = (await answerPoll(client, PLAYER_A, { pollId: created.poll.id, response: 'in' })) as {
+      response: string;
+    };
+    expect(first.response).toBe('in');
+    const changed = (await answerPoll(client, PLAYER_A, { pollId: created.poll.id, response: 'out' })) as {
+      response: string;
+    };
+    expect(changed.response).toBe('out');
+    const poll = polls.get(created.poll.id);
+    if (poll) poll['status'] = 'closed';
+    await expect(
+      answerPoll(client, PLAYER_A, { pollId: created.poll.id, response: 'in' }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('refuses answers from non-members', async () => {
+    const { client, members } = fakeDb();
+    members.set(`${TEAM_ID}:${ORGANISER}`, { team_id: TEAM_ID, user_id: ORGANISER, role: 'captain' });
+    const created = (await createPoll(client, ORGANISER, { teamId: TEAM_ID, question: 'In?' })) as {
+      poll: { id: string };
+    };
+    await expect(
+      answerPoll(client, PLAYER_B, { pollId: created.poll.id, response: 'in' }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('reportScore', () => {
+  it('lets the organiser report the score', async () => {
+    const { client, matches } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    const result = (await reportScore(client, ORGANISER, {
+      matchId: created.matchId,
+      homeScore: 3,
+      awayScore: 2,
+    })) as { state: string; match: { home_score: number; away_score: number } };
+    expect(result.state).toBe('reported');
+    expect(result.match.home_score).toBe(3);
+    expect(matches.get(created.matchId)?.['away_score']).toBe(2);
+  });
+
+  it('refuses scores from non-organisers', async () => {
+    const { client } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    await expect(
+      reportScore(client, PLAYER_A, { matchId: created.matchId, homeScore: 1, awayScore: 0 }),
+    ).rejects.toMatchObject({ status: 403 });
   });
 });

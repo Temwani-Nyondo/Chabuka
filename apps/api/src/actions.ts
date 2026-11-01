@@ -1,10 +1,12 @@
 import {
   acceptChallengeSchema,
   announcementSchema,
+  answerPollSchema,
   circleEligibility,
   circleIdSchema,
   circleSchema,
   createCircleSchema,
+  createPollSchema,
   bookingIdSchema,
   bookingSchema,
   challengeIdSchema,
@@ -21,11 +23,13 @@ import {
   fixtureSchema,
   matchIdSchema,
   matchSchema,
+  pollSchema,
   postAnnouncementSchema,
   postChallengeSchema,
   postResultSchema,
   proposeTimeSchema,
   registerEntrySchema,
+  reportScoreSchema,
   requestBookingSchema,
   respondBookingSchema,
   roundRobinPairings,
@@ -39,6 +43,7 @@ import {
 import type {
   ActionResult,
   Announcement,
+  AnswerPollInput,
   Booking,
   Challenge,
   Circle,
@@ -46,15 +51,18 @@ import type {
   CreateCircleInput,
   CreateCompetitionInput,
   CreateMatchInput,
+  CreatePollInput,
   CreateTeamInput,
   CreateVenueInput,
   CreateVenueSlotInput,
   Fixture,
   Match,
+  Poll,
   PostAnnouncementInput,
   PostChallengeInput,
   PostResultInput,
   RegisterEntryInput,
+  ReportScoreInput,
   RequestBookingInput,
   Team,
   Ticket,
@@ -63,6 +71,7 @@ import type {
 } from '@chabuka/shared';
 import { availableActions, availableChallengeActions } from '@chabuka/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { createServiceClient } from './supabase.js';
 import { z } from 'zod';
 
 export class ActionError extends Error {
@@ -191,7 +200,7 @@ export async function createMatch(
     const memberIds = ((memberRows ?? []) as { user_id: string }[])
       .map((r) => r.user_id)
       .filter((id) => id !== userId);
-    await notifyUsers(db, memberIds, 'circle_event', { matchId, title: input.title });
+    await notifyUsers(memberIds, 'circle_event', { matchId, title: input.title });
   }
   return { matchId, ...resultFor(match, userId, true, count, 'organiser') };
 }
@@ -221,7 +230,7 @@ export async function joinMatch(
     .upsert({ match_id: matchId, user_id: userId, status: 'joined' }, { onConflict: 'match_id,user_id' });
   if (error) throw dbError(error);
   if (match.organiser_id !== userId) {
-    await notifyUsers(db, [match.organiser_id], 'player_joined', { matchId, title: match.title });
+    await notifyUsers([match.organiser_id], 'player_joined', { matchId, title: match.title });
   }
   const after = await joinedCount(db, matchId);
   return resultFor(match, userId, true, after, 'joined');
@@ -458,6 +467,85 @@ export async function proposeTime(
   }));
 }
 
+// --- Team availability polls: captains ask "who's in?", members answer. ---
+async function loadPoll(db: SupabaseClient, pollId: string): Promise<Poll> {
+  const { data, error } = await db.from('polls').select('*').eq('id', pollId).maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(404, 'Poll not found.');
+  return pollSchema.parse(data);
+}
+
+async function requireTeamMember(db: SupabaseClient, teamId: string, userId: string): Promise<void> {
+  const { data, error } = await db
+    .from('team_members')
+    .select('role')
+    .eq('team_id', teamId)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (error) throw dbError(error);
+  if (!data) throw new ActionError(403, 'Only team members can do that.');
+}
+
+export async function createPoll(
+  db: SupabaseClient,
+  userId: string,
+  input: CreatePollInput,
+): Promise<unknown> {
+  await requireTeamMember(db, input.teamId, userId);
+  const { data, error } = await db
+    .from('polls')
+    .insert({
+      team_id: input.teamId,
+      created_by: userId,
+      question: input.question,
+      closes_at: input.closesAt ?? null,
+      status: 'open',
+    })
+    .select('id')
+    .single();
+  if (error) throw dbError(error);
+  const poll = await loadPoll(db, (data as { id: string }).id);
+  const { data: members } = await db.from('team_members').select('user_id').eq('team_id', input.teamId);
+  const others = ((members ?? []) as { user_id: string }[]).map((m) => m.user_id).filter((id) => id !== userId);
+  await notifyUsers(others, 'poll_created', { pollId: poll.id, teamId: input.teamId, question: input.question });
+  return { state: 'open', actions: ['answer_poll'], poll };
+}
+
+export async function answerPoll(
+  db: SupabaseClient,
+  userId: string,
+  input: AnswerPollInput,
+): Promise<unknown> {
+  const poll = await loadPoll(db, input.pollId);
+  if (poll.status !== 'open') {
+    throw new ActionError(409, 'This poll is closed.');
+  }
+  await requireTeamMember(db, poll.team_id, userId);
+  const { error } = await db
+    .from('poll_responses')
+    .upsert({ poll_id: poll.id, user_id: userId, response: input.response }, { onConflict: 'poll_id,user_id' });
+  if (error) throw dbError(error);
+  return { state: 'answered', actions: ['answer_poll'], pollId: poll.id, response: input.response };
+}
+
+// --- Post-game scores on casual matches (tournaments use post_result). ---
+export async function reportScore(
+  db: SupabaseClient,
+  userId: string,
+  input: ReportScoreInput,
+): Promise<unknown> {
+  const match = await loadMatch(db, input.matchId);
+  if (match.organiser_id !== userId) {
+    throw new ActionError(403, 'Only the organiser can report the score.');
+  }
+  const { error } = await db
+    .from('matches')
+    .update({ home_score: input.homeScore, away_score: input.awayScore })
+    .eq('id', match.id);
+  if (error) throw dbError(error);
+  return { state: 'reported', actions: [], match: { ...match, home_score: input.homeScore, away_score: input.awayScore } };
+}
+
 // --- Venue system (Amendment 3): profiles, dashboard, free bookings ---
 // All bookings and tickets are free; confirming a booking issues its ticket.
 
@@ -609,7 +697,7 @@ export async function respondBooking(
   if (decision === 'decline') {
     const { error } = await db.from('bookings').update({ status: 'declined' }).eq('id', booking.id);
     if (error) throw dbError(error);
-    await notifyUsers(db, [booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
+    await notifyUsers([booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
     return { state: 'declined', actions: [], booking: await loadBooking(db, booking.id) };
   }
   let capacity = 1;
@@ -623,7 +711,7 @@ export async function respondBooking(
   }
   const { error } = await db.from('bookings').update({ status: 'confirmed' }).eq('id', booking.id);
   if (error) throw dbError(error);
-  await notifyUsers(db, [booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
+  await notifyUsers([booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
   const code = `CHB-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
   const { data: ticketRow, error: ticketErr } = await db
     .from('tickets')
@@ -838,7 +926,6 @@ export async function postResult(
   const standings = computeStandings(entries, fixtures);
   const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
   await notifyUsers(
-    db,
     ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== userId),
     'result_posted',
     { competitionId: competition.id, fixtureId: fixture.id },
@@ -914,16 +1001,17 @@ async function loadCircle(db: SupabaseClient, circleId: string): Promise<Circle>
 }
 
 async function notifyUsers(
-  db: SupabaseClient,
   userIds: string[],
   type: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   // Best-effort: a failed notification must never fail the game action.
+  // Written with the service client because recipients are other users —
+  // the actor's own JWT cannot insert their rows under RLS.
   if (userIds.length === 0) return;
   const rows = userIds.map((user_id) => ({ user_id, type, payload }));
   try {
-    const { error } = await db.from('notifications').insert(rows);
+    const { error } = await createServiceClient().from('notifications').insert(rows);
     if (error) console.error('notification failed', type, error.message);
   } catch (err) {
     console.error('notification failed', type, err instanceof Error ? err.message : 'unknown');
@@ -1070,6 +1158,12 @@ export async function runAction(
       return closeRegistration(db, userId, competitionIdSchema.parse(body).competitionId);
     case 'post_result':
       return postResult(db, userId, postResultSchema.parse(body));
+    case 'report_score':
+      return reportScore(db, userId, reportScoreSchema.parse(body));
+    case 'create_poll':
+      return createPoll(db, userId, createPollSchema.parse(body));
+    case 'answer_poll':
+      return answerPoll(db, userId, answerPollSchema.parse(body));
     case 'post_announcement':
       return postAnnouncement(db, userId, postAnnouncementSchema.parse(body));
     case 'follow_competition':

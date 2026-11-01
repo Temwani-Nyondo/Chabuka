@@ -370,6 +370,41 @@ export const proposeTimeSchema = z.object({
 });
 export type ProposeTimeInput = z.infer<typeof proposeTimeSchema>;
 
+// --- Team availability polls: captains ask "who's in?", members answer. ---
+export const pollResponseSchema = z.enum(['in', 'out', 'maybe']);
+export type PollResponse = z.infer<typeof pollResponseSchema>;
+
+export const pollSchema = z.object({
+  id: z.string().uuid(),
+  team_id: z.string().uuid(),
+  created_by: z.string().uuid(),
+  question: z.string(),
+  closes_at: z.string().nullable().optional(),
+  status: z.enum(['open', 'closed']),
+});
+export type Poll = z.infer<typeof pollSchema>;
+
+export const createPollSchema = z.object({
+  teamId: z.string().uuid(),
+  question: z.string().trim().min(1, 'Question is required').max(200),
+  closesAt: z.iso.datetime({ offset: true }).optional(),
+});
+export type CreatePollInput = z.infer<typeof createPollSchema>;
+
+export const answerPollSchema = z.object({
+  pollId: z.string().uuid(),
+  response: pollResponseSchema,
+});
+export type AnswerPollInput = z.infer<typeof answerPollSchema>;
+
+// --- Post-game scores on casual matches (tournaments use post_result). ---
+export const reportScoreSchema = z.object({
+  matchId: z.string().uuid(),
+  homeScore: z.number().int().min(0).max(99),
+  awayScore: z.number().int().min(0).max(99),
+});
+export type ReportScoreInput = z.infer<typeof reportScoreSchema>;
+
 // Actions a viewer gets on a challenge. Captains/owners act for their team.
 export function availableChallengeActions(input: {
   status: ChallengeStatus;
@@ -710,6 +745,9 @@ export const ACTION_NAMES = [
   'register_entry',
   'close_registration',
   'post_result',
+  'report_score',
+  'create_poll',
+  'answer_poll',
   'post_announcement',
   'follow_competition',
   'create_circle',
