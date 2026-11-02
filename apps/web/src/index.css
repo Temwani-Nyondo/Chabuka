@@ -784,3 +784,50 @@ button.sheet-item {
 .landing-footer a {
   color: var(--muted);
 }
+
+.field-check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-check input[type='checkbox'] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--accent);
+}
+
+.card-link {
+  display: block;
+  text-decoration: none;
+  color: inherit;
+}
+
+.team-head {
+  display: flex;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.team-head > div:nth-child(2) {
+  flex: 1;
+}
+
+.team-logo {
+  width: 72px;
+  height: 72px;
+  border-radius: 12px;
+  object-fit: cover;
+  border: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.team-logo-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  font-size: 32px;
+  background: var(--surface-2);
+  color: var(--accent-strong, var(--accent));
+}

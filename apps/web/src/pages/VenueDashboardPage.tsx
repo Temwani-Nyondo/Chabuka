@@ -2,6 +2,9 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import GooglePlacePicker from '../components/GooglePlacePicker';
+import type { GooglePlacePick } from '../components/GooglePlacePicker';
+import { googleMapsKey } from '../lib/googleMaps';
 import {
   checkInTicketAction,
   createVenueAction,
@@ -35,9 +38,20 @@ export default function VenueDashboardPage() {
   // New venue form
   const [name, setName] = useState('');
   const [area, setArea] = useState('');
+  const [lat, setLat] = useState<number | null>(null);
+  const [lng, setLng] = useState<number | null>(null);
+  const [placeId, setPlaceId] = useState<string | null>(null);
   const [sports, setSports] = useState('Football');
   const [facilities, setFacilities] = useState('');
   const [contact, setContact] = useState('');
+
+  const onPlacePick = (pick: GooglePlacePick) => {
+    if (pick.areaText) setArea(pick.areaText);
+    setLat(typeof pick.lat === 'number' ? pick.lat : null);
+    setLng(typeof pick.lng === 'number' ? pick.lng : null);
+    setPlaceId(pick.placeId ?? null);
+    if (pick.venueName && !name.trim()) setName(pick.venueName.slice(0, 80));
+  };
   // New slot form (per venue id)
   const [slotStart, setSlotStart] = useState<Record<string, string>>({});
   const [slotEnd, setSlotEnd] = useState<Record<string, string>>({});
@@ -85,6 +99,9 @@ export default function VenueDashboardPage() {
           {
             name: name.trim(),
             area: area.trim(),
+            lat: lat ?? undefined,
+            lng: lng ?? undefined,
+            googlePlaceId: placeId ?? undefined,
             sports: sports.split(',').map((s) => s.trim()).filter(Boolean),
             facilityTypes: facilities.split(',').map((s) => s.trim()).filter(Boolean),
             contact: contact.trim() || undefined,
@@ -95,6 +112,10 @@ export default function VenueDashboardPage() {
       'Venue registered. Add schedule slots below.',
     );
     setName('');
+    setArea('');
+    setLat(null);
+    setLng(null);
+    setPlaceId(null);
     setFacilities('');
     setContact('');
   };
@@ -111,7 +132,17 @@ export default function VenueDashboardPage() {
       <form className="card" onSubmit={createVenue}>
         <strong>Register a venue (free)</strong>
         <label className="field">Name<input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} /></label>
-        <label className="field">Area<input className="input" value={area} onChange={(e) => setArea(e.target.value)} maxLength={80} /></label>
+        <label className="field">
+          Location — search or drop a pin
+          <GooglePlacePicker onPick={onPlacePick} />
+        </label>
+        {area ? <p className="muted">Picked: {area}</p> : null}
+        {!googleMapsKey() ? (
+          <label className="field">
+            Area (manual — Google search is off)
+            <input className="input" value={area} onChange={(e) => setArea(e.target.value)} maxLength={80} />
+          </label>
+        ) : null}
         <label className="field">Sports (comma separated)<input className="input" value={sports} onChange={(e) => setSports(e.target.value)} /></label>
         <label className="field">Facilities (comma separated)<input className="input" value={facilities} onChange={(e) => setFacilities(e.target.value)} placeholder="grass pitch, floodlights" /></label>
         <label className="field">Contact (optional)<input className="input" value={contact} onChange={(e) => setContact(e.target.value)} maxLength={120} /></label>
