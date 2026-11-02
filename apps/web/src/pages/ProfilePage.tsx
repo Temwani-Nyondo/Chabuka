@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { ageBand } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
+import { uploadImage } from '../lib/upload';
 import { fetchMyTeams, isCaptainRole } from '../lib/teams';
 import { useTheme } from '../lib/theme';
 import { fetchAgentTokens, mintAgentToken, revokeAgentToken } from '../lib/api';
@@ -30,7 +31,27 @@ function tierFor(gamesPlayed: number): { name: string; className: string } {
 }
 
 export default function ProfilePage() {
-  const { profile, sportsCount, signOut, session, user } = useAuth();
+  const { profile, sportsCount, signOut, session, user, refreshProfile } = useAuth();
+  const [uploadingImg, setUploadingImg] = useState(false);
+  const [imgError, setImgError] = useState<string | null>(null);
+
+  const uploadPicture = async (kind: 'photo' | 'cover', file: File) => {
+    if (!user || !supabase) return;
+    setUploadingImg(true);
+    setImgError(null);
+    try {
+      const url = await uploadImage(kind === 'photo' ? `profile-photos/${user.id}` : `profile-covers/${user.id}`, file);
+      const { error } = await supabase
+        .from('profiles')
+        .upsert({ id: user.id, ...(kind === 'photo' ? { photo_url: url } : { cover_url: url }) });
+      if (error) throw new Error(error.message);
+      await refreshProfile();
+    } catch (err) {
+      setImgError(err instanceof Error ? err.message : 'Image upload failed.');
+    } finally {
+      setUploadingImg(false);
+    }
+  };
   const [locker, setLocker] = useState<LockerRoom | null>(null);
   const { theme, toggle } = useTheme();
   const [tokens, setTokens] = useState<AgentTokenRow[]>([]);
@@ -155,13 +176,54 @@ export default function ProfilePage() {
     <div className="page">
       <h1>Profile</h1>
       <div className={`card player-card ${locker ? tierFor(locker.gamesPlayed).className : ''}`}>
+        {profile?.cover_url ? (
+          <img className="cover-banner" src={profile.cover_url} alt="" />
+        ) : null}
         <span className="muted">Player card · {locker ? tierFor(locker.gamesPlayed).name : '…'}</span>
-        <span className="player-name">{profile?.name ?? 'New player'}</span>
-        <span className="muted">
-          {[profile?.area, profile ? ageBand(profile.birth_year) : null, profile?.gender]
-            .filter(Boolean)
-            .join(' · ') || 'Area not set'}
-        </span>
+        <div className="row">
+          {profile?.photo_url ? (
+            <img className="avatar-preview" src={profile.photo_url} alt={`${profile.name ?? 'Player'} photo`} />
+          ) : null}
+          <div>
+            <span className="player-name">{profile?.name ?? 'New player'}</span>
+            <br />
+            <span className="muted">
+              {[profile?.area, profile ? ageBand(profile.birth_year) : null, profile?.gender]
+                .filter(Boolean)
+                .join(' · ') || 'Area not set'}
+            </span>
+          </div>
+        </div>
+        {imgError ? <p className="error">{imgError}</p> : null}
+        <div className="actions-row">
+          <label className="btn" htmlFor="profile-photo">Photo</label>
+          <input
+            id="profile-photo"
+            type="file"
+            accept="image/*"
+            hidden
+            disabled={uploadingImg}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void uploadPicture('photo', file);
+              e.target.value = '';
+            }}
+          />
+          <label className="btn" htmlFor="profile-cover">Cover</label>
+          <input
+            id="profile-cover"
+            type="file"
+            accept="image/*"
+            hidden
+            disabled={uploadingImg}
+            onChange={(e) => {
+              const file = e.target.files?.[0];
+              if (file) void uploadPicture('cover', file);
+              e.target.value = '';
+            }}
+          />
+          {uploadingImg ? <span className="muted">Uploading…</span> : null}
+        </div>
         <div className="player-stats">
           <div className="player-stat">
             <strong>{sportsCount}</strong>

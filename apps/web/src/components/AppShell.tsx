@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
 import FindOpponentForm from './FindOpponentForm';
@@ -10,6 +10,8 @@ export default function AppShell() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [mode, setMode] = useState<SheetMode>('menu');
   const navigate = useNavigate();
+  const location = useLocation();
+  const onGaffer = location.pathname.startsWith('/gaffer');
 
   const closeSheet = () => {
     setSheetOpen(false);
@@ -120,6 +122,16 @@ export default function AppShell() {
             )}
           </div>
         </div>
+      ) : null}
+      {!onGaffer ? (
+        <button
+          className="fab-gaffer"
+          type="button"
+          aria-label="Ask the Gaffer"
+          onClick={() => navigate('/gaffer')}
+        >
+          <span aria-hidden="true">G</span>
+        </button>
       ) : null}
       <nav className="tabbar">
         <NavLink to="/home" end className={tabClass}>

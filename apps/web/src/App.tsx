@@ -13,6 +13,7 @@ import CompetitionsPage from './pages/CompetitionsPage';
 import GafferPage from './pages/GafferPage';
 import HomePage from './pages/HomePage';
 import ExplorePage from './pages/ExplorePage';
+import TeamDetailPage from './pages/TeamDetailPage';
 import TeamsPage from './pages/TeamsPage';
 import ProfilePage from './pages/ProfilePage';
 import VenueProfilePage from './pages/VenueProfilePage';
@@ -44,6 +45,7 @@ export default function App() {
           <Route path="home" element={<HomePage />} />
           <Route path="explore" element={<ExplorePage />} />
           <Route path="teams" element={<TeamsPage />} />
+        <Route path="teams/:id" element={<TeamDetailPage />} />
           <Route path="gaffer" element={<GafferPage />} />
           <Route path="board" element={<CompetitionsPage />} />
           <Route path="circles" element={<CirclesPage />} />

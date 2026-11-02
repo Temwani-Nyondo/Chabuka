@@ -36,6 +36,7 @@ import {
   proposeTimeSchema,
   registerEntrySchema,
   reportScoreSchema,
+  removeMemberSchema,
   reportTeamSchema,
   reportUserSchema,
   requestBookingSchema,
@@ -44,10 +45,14 @@ import {
   setAvailabilitySchema,
   setGameTypesSchema,
   setPositionSchema,
+  setRoleSchema,
+  teamIdSchema,
   teamSchema,
   ticketIdSchema,
   ticketSchema,
+  updateCircleSchema,
   updateProfileSchema,
+  updateTeamSchema,
   venueSchema,
   venueSupportsSport,
   venueSlotSchema,
@@ -78,6 +83,7 @@ import type {
   PostChallengeInput,
   PostResultInput,
   RegisterEntryInput,
+  RemoveMemberInput,
   ReportScoreInput,
   ReportTeamInput,
   ReportUserInput,
@@ -85,9 +91,12 @@ import type {
   SetAvailabilityInput,
   SetGameTypesInput,
   SetPositionInput,
+  SetRoleInput,
   Team,
   Ticket,
+  UpdateCircleInput,
   UpdateProfileInput,
+  UpdateTeamInput,
   Venue,
   VenueSlot,
 } from '@chabuka/shared';
@@ -152,6 +161,7 @@ function resultFor(
     state,
     actions: availableActions({
       status: match.status,
+      kind: match.kind,
       isOrganiser: match.organiser_id === userId,
       isParticipant,
       joinedCount: count,
@@ -1055,6 +1065,8 @@ export async function createCircle(
       age_bands: input.ageBands,
       genders: input.genders,
       levels: input.levels,
+      photo_url: input.photoUrl ?? null,
+      cover_url: input.coverUrl ?? null,
       created_by: userId,
     })
     .select('id')
@@ -1126,6 +1138,34 @@ export async function leaveCircle(
   return { state: 'left', actions: ['join_circle'], circle };
 }
 
+export async function updateCircle(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateCircleInput,
+): Promise<unknown> {
+  const circle = await loadCircle(db, input.circleId);
+  const { data: membership, error: memberError } = await db
+    .from('circle_members')
+    .select('user_id')
+    .eq('circle_id', circle.id)
+    .eq('user_id', userId)
+    .maybeSingle();
+  if (memberError) throw dbError(memberError);
+  if (!membership) throw new ActionError(403, 'Only circle members can update it.');
+  const patch: Record<string, unknown> = {};
+  if (input.photoUrl !== undefined) patch.photo_url = input.photoUrl;
+  if (input.coverUrl !== undefined) patch.cover_url = input.coverUrl;
+  if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to update.');
+  const { data, error } = await db
+    .from('circles')
+    .update(patch)
+    .eq('id', circle.id)
+    .select('*')
+    .single();
+  if (error) throw dbError(error);
+  return { state: 'updated', actions: ['join_circle'], circle: data };
+}
+
 // --- Onboarding wizard (Amendment 3): one shared profile, every step
 // skippable. Writes go through here so the web app, Gaffer and MCP share
 // the same rules. Availability rows stay private to their owner. ---
@@ -1141,6 +1181,7 @@ export async function updateProfile(
   if (input.birthYear !== undefined) patch.birth_year = input.birthYear;
   if (input.gender !== undefined) patch.gender = input.gender;
   if (input.photoUrl !== undefined) patch.photo_url = input.photoUrl;
+  if (input.coverUrl !== undefined) patch.cover_url = input.coverUrl;
   if (input.travelKm !== undefined) patch.travel_km = input.travelKm;
   if (input.termsAcceptedAt !== undefined) patch.terms_accepted_at = input.termsAcceptedAt;
   if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to update.');
@@ -1222,17 +1263,153 @@ export async function setPosition(
   input: SetPositionInput,
 ): Promise<unknown> {
   await loadTeam(db, input.teamId);
+  const targetId = input.userId ?? userId;
+  if (targetId !== userId) {
+    await requireCaptain(db, input.teamId, userId);
+  }
   const { error: joinError } = await db
     .from('team_members')
-    .upsert({ team_id: input.teamId, user_id: userId, role: 'player' }, { onConflict: 'team_id,user_id' });
+    .upsert({ team_id: input.teamId, user_id: targetId, role: 'player' }, { onConflict: 'team_id,user_id' });
   if (joinError) throw dbError(joinError);
   const { error } = await db
     .from('team_members')
     .update({ position: input.position })
     .eq('team_id', input.teamId)
-    .eq('user_id', userId);
+    .eq('user_id', targetId);
   if (error) throw dbError(error);
-  return { state: 'saved', teamId: input.teamId, position: input.position };
+  return { state: 'saved', teamId: input.teamId, userId: targetId, position: input.position };
+}
+
+// Team management (Amendment 4, section 1): owners manage the team —
+// profile, members, roles, deletion. Captains and owners run matches.
+async function requireOwner(db: SupabaseClient, teamId: string, userId: string): Promise<void> {
+  const role = await myTeamRole(db, teamId, userId);
+  if (role !== 'owner') throw new ActionError(403, 'Only the team owner can do that.');
+}
+
+async function ownerCount(db: SupabaseClient, teamId: string): Promise<number> {
+  const { data, error } = await db
+    .from('team_members')
+    .select('user_id')
+    .eq('team_id', teamId)
+    .eq('role', 'owner');
+  if (error) throw dbError(error);
+  return (data ?? []).length;
+}
+
+export async function updateTeam(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateTeamInput,
+): Promise<unknown> {
+  await loadTeam(db, input.teamId);
+  await requireCaptain(db, input.teamId, userId);
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name;
+  if (input.area !== undefined) patch.area = input.area;
+  if (input.city !== undefined) patch.city = input.city;
+  if (input.description !== undefined) patch.description = input.description;
+  if (input.logoUrl !== undefined) patch.logo_url = input.logoUrl;
+  if (input.coverUrl !== undefined) patch.cover_url = input.coverUrl;
+  if (input.sportId !== undefined) patch.sport_id = input.sportId;
+  if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to update.');
+  const { data, error } = await db
+    .from('teams')
+    .update(patch)
+    .eq('id', input.teamId)
+    .select('*')
+    .single();
+  if (error) throw dbError(error);
+  return { team: data };
+}
+
+export async function deleteTeam(
+  db: SupabaseClient,
+  userId: string,
+  teamId: string,
+): Promise<unknown> {
+  await loadTeam(db, teamId);
+  await requireOwner(db, teamId, userId);
+  const { data: open, error: openError } = await db
+    .from('challenges')
+    .select('id')
+    .eq('team_id', teamId)
+    .in('status', ['open', 'reschedule_proposed'])
+    .limit(1);
+  if (openError) throw dbError(openError);
+  if ((open ?? []).length > 0) {
+    throw new ActionError(409, 'This team has open challenges. Close or finish them first.');
+  }
+  const { data: entries, error: entriesError } = await db
+    .from('competition_entries')
+    .select('id')
+    .eq('team_id', teamId)
+    .limit(1);
+  if (entriesError) throw dbError(entriesError);
+  if ((entries ?? []).length > 0) {
+    throw new ActionError(409, 'This team has tournament history and cannot be deleted.');
+  }
+  const { error } = await db.from('teams').delete().eq('id', teamId);
+  if (error) throw dbError(error);
+  return { state: 'deleted', teamId };
+}
+
+export async function removeMember(
+  db: SupabaseClient,
+  userId: string,
+  input: RemoveMemberInput,
+): Promise<unknown> {
+  await loadTeam(db, input.teamId);
+  await requireCaptain(db, input.teamId, userId);
+  const { data: target, error: targetError } = await db
+    .from('team_members')
+    .select('role')
+    .eq('team_id', input.teamId)
+    .eq('user_id', input.userId)
+    .maybeSingle();
+  if (targetError) throw dbError(targetError);
+  if (!target) throw new ActionError(404, 'That player is not on this team.');
+  if ((target as { role: string }).role === 'owner' && (await ownerCount(db, input.teamId)) <= 1) {
+    throw new ActionError(409, 'You cannot remove the last owner. Hand over ownership first.');
+  }
+  const { error } = await db
+    .from('team_members')
+    .delete()
+    .eq('team_id', input.teamId)
+    .eq('user_id', input.userId);
+  if (error) throw dbError(error);
+  return { state: 'removed', teamId: input.teamId, userId: input.userId };
+}
+
+export async function setRole(
+  db: SupabaseClient,
+  userId: string,
+  input: SetRoleInput,
+): Promise<unknown> {
+  await loadTeam(db, input.teamId);
+  await requireOwner(db, input.teamId, userId);
+  const { data: target, error: targetError } = await db
+    .from('team_members')
+    .select('role')
+    .eq('team_id', input.teamId)
+    .eq('user_id', input.userId)
+    .maybeSingle();
+  if (targetError) throw dbError(targetError);
+  if (!target) throw new ActionError(404, 'That player is not on this team.');
+  if (
+    (target as { role: string }).role === 'owner' &&
+    input.role !== 'owner' &&
+    (await ownerCount(db, input.teamId)) <= 1
+  ) {
+    throw new ActionError(409, 'You cannot demote the last owner. Hand over ownership first.');
+  }
+  const { error } = await db
+    .from('team_members')
+    .update({ role: input.role })
+    .eq('team_id', input.teamId)
+    .eq('user_id', input.userId);
+  if (error) throw dbError(error);
+  return { state: 'saved', teamId: input.teamId, userId: input.userId, role: input.role };
 }
 
 // Open-ended disciplines (Amendment 4, section 3): normalised, so "Hiking"
@@ -1468,6 +1645,8 @@ export async function runAction(
       return joinCircle(db, userId, circleIdSchema.parse(body).circleId);
     case 'leave_circle':
       return leaveCircle(db, userId, circleIdSchema.parse(body).circleId);
+    case 'update_circle':
+      return updateCircle(db, userId, updateCircleSchema.parse(body));
     case 'update_profile':
       return updateProfile(db, userId, updateProfileSchema.parse(body));
     case 'set_availability':
@@ -1496,6 +1675,14 @@ export async function runAction(
       return blockUser(db, userId, blockUserSchema.parse(body));
     case 'unblock_user':
       return unblockUser(db, userId, blockUserSchema.parse(body));
+    case 'update_team':
+      return updateTeam(db, userId, updateTeamSchema.parse(body));
+    case 'delete_team':
+      return deleteTeam(db, userId, teamIdSchema.parse(body).teamId);
+    case 'remove_member':
+      return removeMember(db, userId, removeMemberSchema.parse(body));
+    case 'set_role':
+      return setRole(db, userId, setRoleSchema.parse(body));
     default:
       throw new ActionError(404, 'Unknown action.');
   }

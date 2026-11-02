@@ -7,7 +7,7 @@ import { transcribeVoice } from './model.js';
 import { handleMcpRequest } from './mcp.js';
 import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
 import { createUserClient } from './supabase.js';
-import { buildIcs, googleCalendarUrl, matchSchema } from '@chabuka/shared';
+import { buildIcs, formatEventLocation, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 import { loadServerEnv } from './env.js';
 
 // Load the repo-root .env when present (local dev); deployed hosts set real
@@ -228,12 +228,18 @@ app.get('/api/calendar/:matchId.ics', async (req, res) => {
       return;
     }
     const match = matchSchema.parse(data);
+    const location = formatEventLocation({
+      name: match.venue_name,
+      area: match.area,
+      lat: match.lat ?? null,
+      lng: match.lng ?? null,
+    });
     const ics = buildIcs({
       id: match.id,
       title: match.title,
       startsAt: match.starts_at,
-      location: match.venue_name ?? match.area ?? null,
-      description: `Chabuka match. Add to Google Calendar: ${googleCalendarUrl({ title: match.title, startsAt: match.starts_at, location: match.venue_name ?? match.area ?? null })}`,
+      location,
+      description: `Chabuka match. Add to Google Calendar: ${googleCalendarUrl({ title: match.title, startsAt: match.starts_at, location })}`,
     });
     res.setHeader('content-type', 'text/calendar; charset=utf-8');
     res.setHeader('content-disposition', `attachment; filename="chabuka-${match.id}.ics"`);

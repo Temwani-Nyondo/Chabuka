@@ -25,6 +25,7 @@ export const profileSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1).max(80).nullable(),
   photo_url: z.string().url().nullable().optional(),
+  cover_url: z.string().url().nullable().optional(),
   country: z.string().max(80).nullable().optional(),
   city: z.string().max(80).nullable().optional(),
   area: z.string().min(1).max(80).nullable(),
@@ -289,6 +290,7 @@ export const teamSchema = z.object({
   id: z.string().uuid(),
   name: z.string().min(1).max(80),
   logo_url: z.string().url().nullable().optional(),
+  cover_url: z.string().url().nullable().optional(),
   sport_id: z.string().uuid(),
   category: teamCategorySchema,
   city: z.string().nullable().optional(),
@@ -619,6 +621,8 @@ export const circleSchema = z.object({
   age_bands: z.array(z.string()).default([]),
   genders: z.array(z.string()).default([]),
   levels: z.array(levelSchema).default([]),
+  photo_url: z.string().url().nullable().optional(),
+  cover_url: z.string().url().nullable().optional(),
   created_by: z.string().uuid(),
 });
 export type Circle = z.infer<typeof circleSchema>;
@@ -631,8 +635,17 @@ export const createCircleSchema = z.object({
   ageBands: z.array(z.string().trim().min(1).max(20)).max(5).default([]),
   genders: z.array(z.string().trim().min(1).max(40)).max(6).default([]),
   levels: z.array(levelSchema).max(3).default([]),
+  photoUrl: z.string().url().max(2000).nullable().optional(),
+  coverUrl: z.string().url().max(2000).nullable().optional(),
 });
 export type CreateCircleInput = z.infer<typeof createCircleSchema>;
+
+export const updateCircleSchema = z.object({
+  circleId: z.string().uuid(),
+  photoUrl: z.string().url().max(2000).nullable().optional(),
+  coverUrl: z.string().url().max(2000).nullable().optional(),
+});
+export type UpdateCircleInput = z.infer<typeof updateCircleSchema>;
 
 export const circleIdSchema = z.object({ circleId: z.string().uuid() });
 export type CircleIdInput = z.infer<typeof circleIdSchema>;
@@ -705,6 +718,23 @@ export function buildIcs(input: {
     .join('\r\n');
 }
 
+// One shared event-location format so every calendar surface (ICS,
+// Google link, MCP) carries a map-usable place: name, area, coordinates.
+export function formatEventLocation(input: {
+  name?: string | null;
+  area?: string | null;
+  lat?: number | null;
+  lng?: number | null;
+}): string | null {
+  const parts: string[] = [];
+  if (input.name?.trim()) parts.push(input.name.trim());
+  if (input.area?.trim() && input.area.trim() !== input.name?.trim()) parts.push(input.area.trim());
+  if (typeof input.lat === 'number' && typeof input.lng === 'number') {
+    parts.push(`${input.lat.toFixed(5)}, ${input.lng.toFixed(5)}`);
+  }
+  return parts.length > 0 ? parts.join(', ') : null;
+}
+
 export function googleCalendarUrl(input: {
   title: string;
   startsAt: string;
@@ -753,7 +783,12 @@ export const ACTION_NAMES = [
   'create_circle',
   'join_circle',
   'leave_circle',
+  'update_circle',
   'update_profile',
+  'update_team',
+  'delete_team',
+  'remove_member',
+  'set_role',
   'set_availability',
   'add_place',
   'remove_place',
@@ -796,6 +831,7 @@ export const updateProfileSchema = z.object({
   birthYear: z.number().int().min(1900).max(2100).nullable().optional(),
   gender: z.string().trim().max(40).nullable().optional(),
   photoUrl: z.string().url().max(2000).nullable().optional(),
+  coverUrl: z.string().url().max(2000).nullable().optional(),
   travelKm: z.number().int().min(1).max(200).nullable().optional(),
   termsAcceptedAt: z.iso.datetime({ offset: true }).optional(),
 });
@@ -825,8 +861,42 @@ export type SetGameTypesInput = z.infer<typeof setGameTypesSchema>;
 export const setPositionSchema = z.object({
   teamId: z.string().uuid(),
   position: z.string().trim().min(1).max(40),
+  userId: z.string().uuid().optional(),
 });
 export type SetPositionInput = z.infer<typeof setPositionSchema>;
+
+// Team management (Amendment 4, section 1): owners manage the team, captains
+// and owners run matches and invites. Description lives behind migration
+// 20261102000003 (nullable column, safe default).
+export const updateTeamSchema = z.object({
+  teamId: z.string().uuid(),
+  name: z.string().trim().min(1).max(80).optional(),
+  area: z.string().trim().max(80).nullable().optional(),
+  city: z.string().trim().max(80).nullable().optional(),
+  description: z.string().trim().max(2000).nullable().optional(),
+  logoUrl: z.string().url().max(2000).nullable().optional(),
+  coverUrl: z.string().url().max(2000).nullable().optional(),
+  sportId: z.string().uuid().optional(),
+});
+export type UpdateTeamInput = z.infer<typeof updateTeamSchema>;
+
+export const teamIdSchema = z.object({
+  teamId: z.string().uuid(),
+});
+export type TeamIdInput = z.infer<typeof teamIdSchema>;
+
+export const removeMemberSchema = z.object({
+  teamId: z.string().uuid(),
+  userId: z.string().uuid(),
+});
+export type RemoveMemberInput = z.infer<typeof removeMemberSchema>;
+
+export const setRoleSchema = z.object({
+  teamId: z.string().uuid(),
+  userId: z.string().uuid(),
+  role: teamRoleSchema,
+});
+export type SetRoleInput = z.infer<typeof setRoleSchema>;
 
 // Open-ended disciplines (Amendment 4, section 3): anyone can add one;
 // names are normalised so "Hiking" and "hikes" share one row.
@@ -910,8 +980,11 @@ export type ActionResult = z.infer<typeof actionResultSchema>;
 
 // Available actions for a match, given the viewer's relationship to it.
 // The API returns this on every action; Day 2 covers join/withdraw only.
+// Team-vs-team games never offer join: the server only seats sides through
+// challenges, so the card must not offer a button the API rejects (409).
 export function availableActions(input: {
   status: MatchStatus;
+  kind: MatchKind;
   isOrganiser: boolean;
   isParticipant: boolean;
   joinedCount: number;
@@ -921,6 +994,7 @@ export function availableActions(input: {
   const isFull = input.joinedCount >= input.capacity;
   if (input.isParticipant) return ['withdraw', 'directions'];
   if (input.isOrganiser) return ['directions'];
+  if (input.kind !== 'players') return [];
   if (!isFull) return ['join'];
   return [];
 }

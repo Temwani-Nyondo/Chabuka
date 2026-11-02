@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import CreateTeamForm from '../components/CreateTeamForm';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
@@ -38,7 +39,7 @@ export default function TeamsPage() {
         />
       ) : null}
       {teams.map(({ team, role }) => (
-        <div className="card" key={team.id}>
+        <Link className="card card-link" key={team.id} to={`/teams/${team.id}`}>
           <div className="row">
             <strong>{team.name}</strong>
             <span className="tag">{role}</span>
@@ -47,7 +48,7 @@ export default function TeamsPage() {
             {TEAM_CATEGORY_LABELS[team.category]}
             {team.area ? ` · ${team.area}` : ''}
           </p>
-        </div>
+        </Link>
       ))}
       {showForm ? (
         <div className="card">

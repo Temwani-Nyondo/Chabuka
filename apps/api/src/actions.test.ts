@@ -9,15 +9,18 @@ import {
   cancelBooking,
   checkInTicket,
   claimInviteLink,
+  createCircle,
   createInviteLink,
   createMatch,
   createPoll,
   createTeam,
   createVenue,
   createVenueSlot,
+  deleteTeam,
   joinMatch,
   postChallenge,
   proposeTime,
+  removeMember,
   removePlace,
   reportScore,
   reportTeam,
@@ -28,8 +31,11 @@ import {
   setAvailability,
   setGameTypes,
   setPosition,
+  setRole,
   unblockUser,
+  updateCircle,
   updateProfile,
+  updateTeam,
   withdrawMatch,
 } from './actions.js';
 
@@ -37,7 +43,9 @@ type Row = Record<string, unknown>;
 
 class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; error: null }> {
   private filters: { col: string; val: unknown }[] = [];
+  private inFilters: { col: string; vals: unknown[] }[] = [];
   private nullFilters: string[] = [];
+  private take: number | null = null;
   private op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
   private payload: Row | Row[] | null = null;
   private wantCount = false;
@@ -64,8 +72,18 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
     return this;
   }
 
+  in(col: string, vals: unknown[]): this {
+    this.inFilters.push({ col, vals });
+    return this;
+  }
+
   delete(): this {
     this.op = 'delete';
+    return this;
+  }
+
+  limit(n: number): this {
+    this.take = n;
     return this;
   }
 
@@ -93,7 +111,7 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
   }
 
   single(): PromiseLike<{ data: unknown; count: number | null; error: null }> {
-    return Promise.resolve(this.run(false));
+    return Promise.resolve(this.run(true));
   }
 
   then<TResult1 = { data: unknown; count: number | null; error: null }, TResult2 = never>(
@@ -106,6 +124,7 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
   private matches(row: Row): boolean {
     return (
       this.filters.every((f) => row[f.col] === f.val) &&
+      this.inFilters.every((f) => f.vals.includes(row[f.col])) &&
       this.nullFilters.every((c) => row[c] == null)
     );
   }
@@ -143,7 +162,8 @@ class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; er
       }
       return { data: null, count: null, error: null };
     }
-    const rows = [...this.table.values()].filter((r) => this.matches(r));
+    let rows = [...this.table.values()].filter((r) => this.matches(r));
+    if (this.take != null) rows = rows.slice(0, this.take);
     if (this.wantCount) return { data: null, count: rows.length, error: null };
     if (single) return { data: rows[0] ?? null, count: null, error: null };
     return { data: rows, count: null, error: null };
@@ -162,10 +182,13 @@ function fakeDb() {
   const tickets = new Map<string, Row>();
   const polls = new Map<string, Row>();
   const pollResponses = new Map<string, Row>();
+  const entries = new Map<string, Row>();
   const profiles = new Map<string, Row>();
   const availability = new Map<string, Row>();
   const places = new Map<string, Row>();
   const gameTypes = new Map<string, Row>();
+  const circles = new Map<string, Row>();
+  const circleMembers = new Map<string, Row>();
   const sports = new Map<string, Row>();
   const invites = new Map<string, Row>();
   const reports = new Map<string, Row>();
@@ -189,6 +212,7 @@ function fakeDb() {
       if (table === 'poll_responses') {
         return new FakeQuery(pollResponses, (r) => `${String(r['poll_id'])}:${String(r['user_id'])}`);
       }
+      if (table === 'competition_entries') return new FakeQuery(entries, (r) => String(r['id']));
       if (table === 'profiles') return new FakeQuery(profiles, (r) => String(r['id']));
       if (table === 'user_availability') {
         return new FakeQuery(availability, (r) => `${String(r['user_id'])}:${String(r['day'])}:${String(r['time_band'])}`);
@@ -198,6 +222,10 @@ function fakeDb() {
         return new FakeQuery(gameTypes, (r) => `${String(r['user_id'])}:${String(r['game_type'])}`);
       }
       if (table === 'sports') return new FakeQuery(sports, (r) => String(r['id']));
+      if (table === 'circles') return new FakeQuery(circles, (r) => String(r['id']));
+      if (table === 'circle_members') {
+        return new FakeQuery(circleMembers, (r) => `${String(r['circle_id'])}:${String(r['user_id'])}`);
+      }
       if (table === 'invite_links') return new FakeQuery(invites, (r) => String(r['code']));
       if (table === 'reports') return new FakeQuery(reports, (r) => String(r['id']));
       if (table === 'blocks') {
@@ -206,7 +234,7 @@ function fakeDb() {
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, invites, reports, blocks };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, invites, reports, blocks, entries, circles, circleMembers };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -641,5 +669,113 @@ describe('invites, reports and blocks (Amendment 4)', () => {
     });
     await unblockUser(client, PLAYER_A, { userId: PLAYER_B });
     expect(blocks.size).toBe(0);
+  });
+});
+
+describe('team management (Amendment 4, section 1)', () => {
+  it('lets captains edit the team profile', async () => {
+    const { client, teams } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    await setRole(client, ORGANISER, { teamId: TEAM, userId: ORGANISER, role: 'owner' });
+    const out = (await updateTeam(client, ORGANISER, {
+      teamId: TEAM,
+      name: 'Avondale Hoops Elite',
+      area: 'Avondale',
+    })) as { team: { name: string } };
+    expect(out.team.name).toBe('Avondale Hoops Elite');
+    expect(teams.get(TEAM)?.['area']).toBe('Avondale');
+    await expect(updateTeam(client, PLAYER_B, { teamId: TEAM, name: 'Hijack' })).rejects.toMatchObject({
+      status: 403,
+    });
+    await expect(updateTeam(client, ORGANISER, { teamId: TEAM })).rejects.toMatchObject({
+      status: 400,
+    });
+  });
+
+  it('lets owners delete an unused team but guards history', async () => {
+    const { client, teams, challenges, entries } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    const gone = (await deleteTeam(client, ORGANISER, TEAM)) as { state: string };
+    expect(gone.state).toBe('deleted');
+    expect(teams.has(TEAM)).toBe(false);
+
+    const TEAM2 = await oneTeam(client, ORGANISER);
+    challenges.set('c1', { id: 'c1', team_id: TEAM2, status: 'open' });
+    await expect(deleteTeam(client, ORGANISER, TEAM2)).rejects.toMatchObject({ status: 409 });
+    challenges.delete('c1');
+    entries.set('e1', { id: 'e1', team_id: TEAM2 });
+    await expect(deleteTeam(client, ORGANISER, TEAM2)).rejects.toMatchObject({ status: 409 });
+    entries.delete('e1');
+    await expect(deleteTeam(client, PLAYER_B, TEAM2)).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('manages members and protects the last owner', async () => {
+    const { client, members } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    members.set(`${TEAM}:${PLAYER_A}`, { team_id: TEAM, user_id: PLAYER_A, role: 'player' });
+    await setRole(client, ORGANISER, { teamId: TEAM, userId: PLAYER_A, role: 'captain' });
+    expect(members.get(`${TEAM}:${PLAYER_A}`)?.['role']).toBe('captain');
+    await removeMember(client, ORGANISER, { teamId: TEAM, userId: PLAYER_A });
+    expect(members.has(`${TEAM}:${PLAYER_A}`)).toBe(false);
+    await expect(removeMember(client, ORGANISER, { teamId: TEAM, userId: ORGANISER })).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(setRole(client, ORGANISER, { teamId: TEAM, userId: ORGANISER, role: 'player' })).rejects.toMatchObject({
+      status: 409,
+    });
+    await expect(setRole(client, PLAYER_B, { teamId: TEAM, userId: ORGANISER, role: 'player' })).rejects.toMatchObject({
+      status: 403,
+    });
+  });
+
+  it('lets captains set positions for teammates', async () => {
+    const { client, members } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    members.set(`${TEAM}:${PLAYER_A}`, { team_id: TEAM, user_id: PLAYER_A, role: 'player' });
+    const out = (await setPosition(client, ORGANISER, {
+      teamId: TEAM,
+      userId: PLAYER_A,
+      position: 'Keeper',
+    })) as { userId: string };
+    expect(out.userId).toBe(PLAYER_A);
+    expect(members.get(`${TEAM}:${PLAYER_A}`)?.['position']).toBe('Keeper');
+    await expect(
+      setPosition(client, PLAYER_A, { teamId: TEAM, userId: ORGANISER, position: 'Striker' }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('stores profile and team covers', async () => {
+    const { client, profiles, teams } = fakeDb();
+    profiles.set(ORGANISER, { id: ORGANISER });
+    await updateProfile(client, ORGANISER, { coverUrl: 'https://example.com/me-cover.jpg' });
+    expect(profiles.get(ORGANISER)?.['cover_url']).toBe('https://example.com/me-cover.jpg');
+    const TEAM = await oneTeam(client, ORGANISER);
+    await updateTeam(client, ORGANISER, { teamId: TEAM, coverUrl: 'https://example.com/team-cover.jpg' });
+    expect(teams.get(TEAM)?.['cover_url']).toBe('https://example.com/team-cover.jpg');
+  });
+
+  it('stores circle photo and cover, members only for updates', async () => {
+    const { client, circles } = fakeDb();
+    const created = (await createCircle(client, ORGANISER, {
+      name: 'Lusaka Hiking',
+      area: 'Lusaka',
+      ageBands: [],
+      genders: [],
+      levels: [],
+      photoUrl: 'https://example.com/circle.jpg',
+      coverUrl: 'https://example.com/circle-cover.jpg',
+    })) as { circle: { id: string } };
+    expect(circles.get(created.circle.id)?.['photo_url']).toBe('https://example.com/circle.jpg');
+    await expect(
+      updateCircle(client, PLAYER_A, { circleId: created.circle.id, photoUrl: 'https://example.com/x.jpg' }),
+    ).rejects.toMatchObject({ status: 403 });
+    const out = (await updateCircle(client, ORGANISER, {
+      circleId: created.circle.id,
+      coverUrl: 'https://example.com/circle-cover-2.jpg',
+    })) as { circle: { cover_url: string } };
+    expect(out.circle.cover_url).toBe('https://example.com/circle-cover-2.jpg');
+    await expect(updateCircle(client, ORGANISER, { circleId: created.circle.id })).rejects.toMatchObject({
+      status: 400,
+    });
   });
 });

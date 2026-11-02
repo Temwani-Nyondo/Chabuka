@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   availableActions,
   createMatchSchema,
+  formatEventLocation,
   levelSchema,
   onboardingSchema,
   requestBookingSchema,
@@ -160,25 +161,50 @@ describe('requestBookingSchema', () => {
 describe('availableActions', () => {
   it('offers join to a stranger when there is room', () => {
     expect(
-      availableActions({ status: 'open', isOrganiser: false, isParticipant: false, joinedCount: 3, capacity: 10 }),
+      availableActions({ status: 'open', kind: 'players', isOrganiser: false, isParticipant: false, joinedCount: 3, capacity: 10 }),
     ).toEqual(['join']);
   });
 
   it('offers nothing when the match is full', () => {
     expect(
-      availableActions({ status: 'full', isOrganiser: false, isParticipant: false, joinedCount: 10, capacity: 10 }),
+      availableActions({ status: 'full', kind: 'players', isOrganiser: false, isParticipant: false, joinedCount: 10, capacity: 10 }),
     ).toEqual([]);
   });
 
   it('offers withdraw and directions to a joined player', () => {
     expect(
-      availableActions({ status: 'open', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
+      availableActions({ status: 'open', kind: 'players', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
+    ).toEqual(['withdraw', 'directions']);
+  });
+
+  it('never offers join on a team-vs-team game', () => {
+    expect(
+      availableActions({ status: 'open', kind: 'team-vs-team', isOrganiser: false, isParticipant: false, joinedCount: 3, capacity: 10 }),
+    ).toEqual([]);
+  });
+
+  it('still offers withdraw to a team-vs-team participant', () => {
+    expect(
+      availableActions({ status: 'open', kind: 'team-vs-team', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
     ).toEqual(['withdraw', 'directions']);
   });
 
   it('offers nothing once the match has started', () => {
     expect(
-      availableActions({ status: 'game_on', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
+      availableActions({ status: 'game_on', kind: 'players', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
     ).toEqual([]);
+  });
+});
+
+describe('formatEventLocation', () => {
+  it('combines name, area and coordinates', () => {
+    expect(
+      formatEventLocation({ name: 'Showgrounds', area: 'Lusaka', lat: -15.4167, lng: 28.2833 }),
+    ).toBe('Showgrounds, Lusaka, -15.41670, 28.28330');
+  });
+
+  it('skips a duplicate area and missing parts', () => {
+    expect(formatEventLocation({ name: 'Avondale', area: 'Avondale' })).toBe('Avondale');
+    expect(formatEventLocation({})).toBeNull();
   });
 });

@@ -2,16 +2,38 @@ import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
-import { createCircleAction, joinCircleAction, leaveCircleAction } from '../lib/api';
+import { createCircleAction, joinCircleAction, leaveCircleAction, updateCircleAction } from '../lib/api';
+import { uploadImage } from '../lib/upload';
 import { fetchCircleEvents, fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
 import { fetchSports } from '../lib/matches';
-import { AGE_BANDS } from '@chabuka/shared';
-import type { Match, Sport } from '@chabuka/shared';
+import { supabase } from '../lib/supabase';
+import { AGE_BANDS, circleEligibility } from '@chabuka/shared';
+import type { Circle, Match, Profile, Sport } from '@chabuka/shared';
+
+// Same rules the API enforces on join_circle (403): surface the reason on
+// the card instead of offering a Join button the server will refuse.
+function circleBlockReason(circle: Circle, profile: Profile | null, levels: Record<string, string>): string | null {
+  const reason = circleEligibility({
+    birthYear: profile?.birth_year ?? null,
+    gender: profile?.gender ?? null,
+    ageBands: circle.age_bands,
+    genders: circle.genders,
+  });
+  if (reason) return reason;
+  if (circle.sport_id && circle.levels.length > 0) {
+    const level = levels[circle.sport_id];
+    if (!level || !(circle.levels as string[]).includes(level)) {
+      return `This circle is for ${circle.levels.join(', ')} players.`;
+    }
+  }
+  return null;
+}
 
 export default function CirclesPage() {
-  const { session, user } = useAuth();
+  const { session, user, profile } = useAuth();
   const [list, setList] = useState<CircleListing[]>([]);
+  const [levels, setLevels] = useState<Record<string, string>>({});
   const [sports, setSports] = useState<Sport[]>([]);
   const [events, setEvents] = useState<Record<string, Match[]>>({});
   const [loading, setLoading] = useState(true);
@@ -26,6 +48,11 @@ export default function CirclesPage() {
   const [description, setDescription] = useState('');
   const [ageBand, setAgeBand] = useState('');
   const [level, setLevel] = useState('');
+  const [photoFile, setPhotoFile] = useState<File | null>(null);
+  const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [editingImages, setEditingImages] = useState<string | null>(null);
+  const [editPhoto, setEditPhoto] = useState<File | null>(null);
+  const [editCover, setEditCover] = useState<File | null>(null);
 
   const token = session?.access_token;
 
@@ -41,6 +68,18 @@ export default function CirclesPage() {
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load circles.'))
       .finally(() => setLoading(false));
   }, [reload, user]);
+
+  useEffect(() => {
+    if (!user || !supabase) return;
+    void (async () => {
+      const { data } = await supabase.from('user_sports').select('sport_id,level').eq('user_id', user.id);
+      const map: Record<string, string> = {};
+      for (const row of (data ?? []) as { sport_id: string; level: string }[]) {
+        map[row.sport_id] = row.level;
+      }
+      setLevels(map);
+    })();
+  }, [user]);
 
   const run = async (fn: (t: string) => Promise<unknown>) => {
     if (!token) {
@@ -78,20 +117,70 @@ export default function CirclesPage() {
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
-    void run(async (t) => {
-      await createCircleAction(
-        {
-          name: name.trim(),
-          area: area.trim(),
-          sportId: sportId || undefined,
-          description: description.trim() || undefined,
-          ageBands: ageBand ? [ageBand] : [],
-          levels: level ? [level] : [],
-        },
-        t,
-      );
-      setShowForm(false);
-    });
+    if (!token) {
+      setActionError('Not signed in.');
+      return;
+    }
+    const accessToken = token;
+    void (async () => {
+      setBusy(true);
+      setActionError(null);
+      try {
+        let photoUrl: string | undefined;
+        let coverUrl: string | undefined;
+        if (photoFile) photoUrl = await uploadImage(`circle-photos/${user?.id ?? 'shared'}`, photoFile);
+        if (coverFile) coverUrl = await uploadImage(`circle-covers/${user?.id ?? 'shared'}`, coverFile);
+        await createCircleAction(
+          {
+            name: name.trim(),
+            area: area.trim(),
+            sportId: sportId || undefined,
+            description: description.trim() || undefined,
+            ageBands: ageBand ? [ageBand] : [],
+            levels: level ? [level] : [],
+            photoUrl,
+            coverUrl,
+          },
+          accessToken,
+        );
+        setShowForm(false);
+        setPhotoFile(null);
+        setCoverFile(null);
+        await reload();
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
+      } finally {
+        setBusy(false);
+      }
+    })();
+  };
+
+  const saveImages = (circleId: string) => {
+    if (!token) {
+      setActionError('Not signed in.');
+      return;
+    }
+    const accessToken = token;
+    void (async () => {
+      setBusy(true);
+      setActionError(null);
+      try {
+        const patch: { circleId: string; photoUrl?: string; coverUrl?: string } = { circleId };
+        if (editPhoto) patch.photoUrl = await uploadImage(`circle-photos/${user?.id ?? 'shared'}`, editPhoto);
+        if (editCover) patch.coverUrl = await uploadImage(`circle-covers/${user?.id ?? 'shared'}`, editCover);
+        if (patch.photoUrl !== undefined || patch.coverUrl !== undefined) {
+          await updateCircleAction(patch, accessToken);
+          await reload();
+        }
+        setEditingImages(null);
+        setEditPhoto(null);
+        setEditCover(null);
+      } catch (err) {
+        setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
+      } finally {
+        setBusy(false);
+      }
+    })();
   };
 
   return (
@@ -151,6 +240,28 @@ export default function CirclesPage() {
               <label htmlFor="circle-desc">Description (optional)</label>
               <input id="circle-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Weekend hikes around Lusaka" maxLength={500} />
             </div>
+            <div className="field">
+              <label htmlFor="circle-photo">Photo (optional)</label>
+              <input
+                id="circle-photo"
+                className="input"
+                type="file"
+                accept="image/*"
+                disabled={busy}
+                onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
+            <div className="field">
+              <label htmlFor="circle-cover">Cover (optional)</label>
+              <input
+                id="circle-cover"
+                className="input"
+                type="file"
+                accept="image/*"
+                disabled={busy}
+                onChange={(e) => setCoverFile(e.target.files?.[0] ?? null)}
+              />
+            </div>
             {actionError ? <p className="error">{actionError}</p> : null}
             <button className="btn btn-primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create circle'}</button>
             <button className="btn btn-ghost" type="button" onClick={() => setShowForm(false)}>Cancel</button>
@@ -160,9 +271,17 @@ export default function CirclesPage() {
         <button className="btn btn-primary" type="button" onClick={() => setShowForm(true)}>Create circle</button>
       )}
       {actionError && !showForm ? <p className="error">{actionError}</p> : null}
-      {list.map(({ circle, memberCount, isMember }) => (
+      {list.map(({ circle, memberCount, isMember }) => {
+        const blockReason = isMember ? null : circleBlockReason(circle, profile, levels);
+        return (
         <div className="card" key={circle.id}>
+          {circle.cover_url ? (
+            <img className="cover-banner" src={circle.cover_url} alt="" />
+          ) : null}
           <div className="row">
+            {circle.photo_url ? (
+              <img className="circle-photo" src={circle.photo_url} alt={`${circle.name} photo`} />
+            ) : null}
             <strong>{circle.name}</strong>
             <span className="tag">{memberCount} in</span>
           </div>
@@ -176,6 +295,8 @@ export default function CirclesPage() {
           <div className="actions-row">
             {isMember ? (
               <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => { void run((t) => leaveCircleAction(circle.id, t)); }}>Leave</button>
+            ) : blockReason ? (
+              <span className="hint">{blockReason}</span>
             ) : (
               <button className="btn btn-primary" type="button" disabled={busy} onClick={() => { void run((t) => joinCircleAction(circle.id, t)); }}>Join circle</button>
             )}
@@ -183,6 +304,42 @@ export default function CirclesPage() {
               {events[circle.id] ? 'Hide events' : 'Events'}
             </button>
           </div>
+          {isMember ? (
+            editingImages === circle.id ? (
+              <div>
+                <div className="field">
+                  <label htmlFor={`edit-photo-${circle.id}`}>Photo</label>
+                  <input
+                    id={`edit-photo-${circle.id}`}
+                    className="input"
+                    type="file"
+                    accept="image/*"
+                    disabled={busy}
+                    onChange={(e) => setEditPhoto(e.target.files?.[0] ?? null)}
+                  />
+                </div>
+                <div className="field">
+                  <label htmlFor={`edit-cover-${circle.id}`}>Cover</label>
+                  <input
+                    id={`edit-cover-${circle.id}`}
+                    className="input"
+                    type="file"
+                    accept="image/*"
+                    disabled={busy}
+                    onChange={(e) => setEditCover(e.target.files?.[0] ?? null)}
+                  />
+                </div>
+                <div className="actions-row">
+                  <button className="btn btn-primary" type="button" disabled={busy} onClick={() => saveImages(circle.id)}>
+                    {busy ? 'Saving…' : 'Save images'}
+                  </button>
+                  <button className="btn btn-ghost" type="button" onClick={() => setEditingImages(null)}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <button className="btn" type="button" onClick={() => setEditingImages(circle.id)}>Edit images</button>
+            )
+          ) : null}
           {events[circle.id] ? (
             events[circle.id]!.length === 0 ? (
               <p className="muted">No upcoming events in this circle yet.</p>
@@ -193,7 +350,8 @@ export default function CirclesPage() {
             )
           ) : null}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

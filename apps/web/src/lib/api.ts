@@ -1,9 +1,14 @@
 import type {
   ActionName,
   ActionResult,
+  CreateInviteLinkInput,
   CreateMatchInput,
   CreateTeamInput,
   PostChallengeInput,
+  RemoveMemberInput,
+  SetPositionInput,
+  SetRoleInput,
+  UpdateTeamInput,
 } from '@chabuka/shared';
 
 // One action layer: every write goes through POST /api/actions/:name with
@@ -171,6 +176,36 @@ export function createTeamAction(input: CreateTeamInput, accessToken: string): P
   return runAction('create_team', input, accessToken);
 }
 
+export function updateTeamAction(input: UpdateTeamInput, accessToken: string): Promise<unknown> {
+  return runAction('update_team', input, accessToken);
+}
+
+export function deleteTeamAction(teamId: string, accessToken: string): Promise<unknown> {
+  return runAction('delete_team', { teamId }, accessToken);
+}
+
+export function removeMemberAction(
+  input: RemoveMemberInput,
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('remove_member', input, accessToken);
+}
+
+export function setRoleAction(input: SetRoleInput, accessToken: string): Promise<unknown> {
+  return runAction('set_role', input, accessToken);
+}
+
+export function setPositionAction(input: SetPositionInput, accessToken: string): Promise<unknown> {
+  return runAction('set_position', input, accessToken);
+}
+
+export function createInviteLinkAction(
+  input: CreateInviteLinkInput,
+  accessToken: string,
+): Promise<{ invite: { code: string; team_id: string | null; expires_at: string | null } }> {
+  return runAction('create_invite_link', input, accessToken);
+}
+
 export function postChallengeAction(input: PostChallengeInput, accessToken: string): Promise<unknown> {
   return runAction('post_challenge', input, accessToken);
 }
@@ -256,6 +291,10 @@ export function joinCircleAction(circleId: string, accessToken: string): Promise
 
 export function leaveCircleAction(circleId: string, accessToken: string): Promise<unknown> {
   return runAction('leave_circle', { circleId }, accessToken);
+}
+
+export function updateCircleAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('update_circle', input, accessToken);
 }
 
 export function proposeTimeAction(

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CTA_LABELS, LEVEL_LABELS, availableActions, googleCalendarUrl } from '@chabuka/shared';
+import { CTA_LABELS, LEVEL_LABELS, availableActions, formatEventLocation, googleCalendarUrl } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { downloadMatchIcs } from '../lib/api';
 import type { MatchListing } from '../lib/matches';
@@ -25,6 +25,7 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
   const [error, setError] = useState<string | null>(null);
   const actions = availableActions({
     status: match.status,
+    kind: match.kind,
     isOrganiser,
     isParticipant,
     joinedCount,
@@ -47,7 +48,14 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
       <div className="row">
         <strong>{match.title}</strong>
         {isOrganiser ? <span className="tag">You host</span> : null}
+        <span className="tag">{match.kind === 'team-vs-team' ? 'Team game' : 'Join to play'}</span>
+        <span className="tag">Free</span>
       </div>
+      <p className="muted">
+        {match.kind === 'team-vs-team'
+          ? 'For teams — register your side.'
+          : 'Open to anyone — tap Join to play.'}
+      </p>
       <p className="muted">
         {sport ? `${sport.name}${match.format ? ` · ${match.format}` : ''} · ` : ''}
         {dateFmt.format(new Date(match.starts_at))}
@@ -79,7 +87,7 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
           ) : null}
         </div>
       ) : (
-        <p className="hint">{match.status === 'full' || joinedCount >= match.capacity ? 'Full' : match.status}</p>
+        <p className="hint">{match.kind === 'team-vs-team' ? 'Team game — sides are set through challenges. See the Teams tab.' : match.status === 'full' || joinedCount >= match.capacity ? 'Full' : match.status}</p>
       )}
       <div className="actions-row">
           <button
@@ -104,7 +112,12 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
             href={googleCalendarUrl({
               title: match.title,
               startsAt: match.starts_at,
-              location: venue?.name ?? match.venue_name ?? match.area ?? null,
+              location: formatEventLocation({
+                name: venue?.name ?? match.venue_name,
+                area: match.area ?? venue?.area,
+                lat: match.lat ?? venue?.lat ?? null,
+                lng: match.lng ?? venue?.lng ?? null,
+              }),
             })}
             target="_blank"
             rel="noreferrer"

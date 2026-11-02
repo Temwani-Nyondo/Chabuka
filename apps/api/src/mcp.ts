@@ -6,6 +6,7 @@ import {
   competitionSchema,
   computeStandings,
   createMatchSchema,
+  formatEventLocation,
   googleCalendarUrl,
   matchSchema,
   teamSchema,
@@ -328,7 +329,16 @@ export function buildMcpServer(ctx: AgentContext): McpServer {
       if (!data) throw new Error('Match not found.');
       const match = matchSchema.parse(data);
       return textResult({
-        googleCalendarUrl: googleCalendarUrl({ title: match.title, startsAt: match.starts_at, location: match.venue_name ?? match.area ?? null }),
+        googleCalendarUrl: googleCalendarUrl({
+          title: match.title,
+          startsAt: match.starts_at,
+          location: formatEventLocation({
+            name: match.venue_name,
+            area: match.area,
+            lat: match.lat ?? null,
+            lng: match.lng ?? null,
+          }),
+        }),
         icsPath: `/api/calendar/${match.id}.ics`,
       });
     },
