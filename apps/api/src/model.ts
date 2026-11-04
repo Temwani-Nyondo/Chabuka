@@ -184,6 +184,17 @@ export async function chatOnce(
     const res = await baseten.chat.completions.create(body);
     return extractResult(res.choices[0]?.message, 'baseten');
   } catch (basetenError) {
+    // Log the shape that failed (roles + tool count only, never content or
+    // keys) so a provider-side rejection is diagnosable from the terminal.
+    try {
+      const roles = params.messages.map((m) => m.role).join(',');
+      const toolCount = params.tools?.length ?? 0;
+      console.error(
+        `Baseten chat failed: ${basetenError instanceof Error ? basetenError.message : 'unknown'} (roles=${roles} tools=${toolCount})`,
+      );
+    } catch {
+      // Logging must never break the fallback path.
+    }
     // Fallback: Muse Spark on the Meta Model API, used only if Baseten
     // fails or is down. The Meta credit is mainly a backup now.
     const metaKey = readEnv('META_API_KEY');

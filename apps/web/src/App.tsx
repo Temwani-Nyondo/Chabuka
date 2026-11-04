@@ -3,6 +3,7 @@ import ProtectedRoute from './auth/ProtectedRoute';
 import { useAuth } from './auth/AuthContext';
 import AppShell from './components/AppShell';
 import LandingPage from './pages/LandingPage';
+import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
 import RoadmapPage from './pages/RoadmapPage';
 import NotificationsPage from './pages/NotificationsPage';
@@ -36,6 +37,8 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingGate />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/invite/:code" element={<InvitePage />} />
+      <Route path="/invite" element={<InvitePage />} />
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/community" element={<CommunityPage />} />

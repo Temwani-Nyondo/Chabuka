@@ -13,7 +13,7 @@ import type {
 
 // One action layer: every write goes through POST /api/actions/:name with
 // the signed-in user's token, so the API runs it as that user under RLS.
-const API_BASE =
+export const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ??
   'http://localhost:3001';
 
@@ -47,7 +47,7 @@ export async function runAction<T = ActionResult>(
 
 export interface GafferTurn {
   reply: string;
-  actionsTaken: { name: string; ok: boolean }[];
+  actionsTaken: { name: string; ok: boolean; detail?: string }[];
   provider: string;
 }
 
@@ -204,6 +204,17 @@ export function createInviteLinkAction(
   accessToken: string,
 ): Promise<{ invite: { code: string; team_id: string | null; expires_at: string | null } }> {
   return runAction('create_invite_link', input, accessToken);
+}
+
+export function claimInviteLinkAction(
+  code: string,
+  accessToken: string,
+): Promise<{ state: string; teamId: string | null }> {
+  return runAction('claim_invite_link', { code }, accessToken);
+}
+
+export function revokeInviteLinkAction(code: string, accessToken: string): Promise<unknown> {
+  return runAction('revoke_invite_link', { code }, accessToken);
 }
 
 export function postChallengeAction(input: PostChallengeInput, accessToken: string): Promise<unknown> {

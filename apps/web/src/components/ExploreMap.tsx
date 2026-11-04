@@ -63,7 +63,7 @@ export default function ExploreMap({ listings, onSelect }: Props) {
             key={`match-${listing.match.id}`}
             center={[lat, lng]}
             radius={10}
-            pathOptions={{ color: '#16a34a', fillColor: '#2fd672', fillOpacity: 0.9 }}
+            pathOptions={{ color: '#181206', fillColor: '#ffb300', fillOpacity: 0.95 }}
             eventHandlers={{ click: () => onSelect(listing) }}
           >
             <Popup>

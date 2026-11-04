@@ -27,7 +27,7 @@ export default function ProtectedRoute() {
         <p className="loading">Loading…</p>
       </div>
     );
-  if (!user) return <Navigate to="/login" replace />;
+  if (!user) return <Navigate to="/" replace />;
   if (needsOnboarding && location.pathname !== '/onboarding')
     return <Navigate to="/onboarding" replace />;
   if (!needsOnboarding && location.pathname === '/onboarding')

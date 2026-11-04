@@ -14,8 +14,11 @@ const SHELLS: { title: string; hint: string }[] = [
 export default function RoadmapPage() {
   return (
     <div className="page">
-      <h1>Coming next</h1>
-      <p className="muted">Preview shells: the roadmap, clearly labelled as not working yet.</p>
+      <div className="page-head">
+        <span className="eyebrow">On the bench</span>
+        <h1>Coming next</h1>
+        <p>Preview shells: the roadmap, clearly labelled as not working yet.</p>
+      </div>
       {SHELLS.map((s) => (
         <ComingSoon key={s.title} title={s.title} hint={s.hint} />
       ))}

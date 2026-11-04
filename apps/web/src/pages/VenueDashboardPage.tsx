@@ -6,12 +6,13 @@ import GooglePlacePicker from '../components/GooglePlacePicker';
 import type { GooglePlacePick } from '../components/GooglePlacePicker';
 import { googleMapsKey } from '../lib/googleMaps';
 import {
+  cancelBookingAction,
   checkInTicketAction,
   createVenueAction,
   createVenueSlotAction,
   respondBookingAction,
 } from '../lib/api';
-import { fetchMyVenues, fetchVenueBookings, fetchVenueSlots, fetchVenueTickets } from '../lib/venues';
+import { fetchMyBookings, fetchMyTickets, fetchMyVenues, fetchVenueBookings, fetchVenueSlots, fetchVenueTickets, fetchVenues } from '../lib/venues';
 import type { Booking, Ticket, VenueSlot } from '../lib/venues';
 import type { Venue } from '@chabuka/shared';
 
@@ -31,6 +32,9 @@ export default function VenueDashboardPage() {
   const [slotsByVenue, setSlotsByVenue] = useState<Record<string, VenueSlot[]>>({});
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [myBookings, setMyBookings] = useState<Booking[]>([]);
+  const [myTickets, setMyTickets] = useState<Ticket[]>([]);
+  const [allVenues, setAllVenues] = useState<Venue[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -66,6 +70,9 @@ export default function VenueDashboardPage() {
     const all = await fetchVenueBookings(mine.map((v) => v.id));
     setBookings(all);
     setTickets(await fetchVenueTickets(all.map((b) => b.id)));
+    setMyBookings(await fetchMyBookings(user.id).catch(() => []));
+    setMyTickets(await fetchMyTickets(user.id).catch(() => []));
+    setAllVenues(await fetchVenues().catch(() => []));
   }, [user]);
 
   useEffect(() => {
@@ -122,12 +129,51 @@ export default function VenueDashboardPage() {
 
   const venueName = (id: string) => venues.find((v) => v.id === id)?.name ?? 'Venue';
   const ticketFor = (bookingId: string) => tickets.find((t) => t.booking_id === bookingId);
+  const anyVenueName = (id: string) =>
+    venues.find((v) => v.id === id)?.name ?? allVenues.find((v) => v.id === id)?.name ?? 'Venue';
+  const myTicketFor = (bookingId: string) => myTickets.find((t) => t.booking_id === bookingId);
 
   return (
     <div className="page">
       <p><Link to="/explore">← Explore</Link></p>
-      <h1>Venue dashboard</h1>
-      <p className="muted">Bookings and tickets are free in this MVP — no payment step.</p>
+      <div className="page-head">
+        <span className="eyebrow">Run the venue</span>
+        <h1>Venue dashboard</h1>
+        <p>Bookings and tickets are free in this MVP — no payment step.</p>
+      </div>
+
+      {myBookings.length > 0 ? (
+        <section aria-label="Your booking requests">
+          <h2>Your booking requests</h2>
+          {myBookings.map((b) => {
+            const ticket = myTicketFor(b.id);
+            return (
+              <article className="card" key={b.id}>
+                <div className="row">
+                  <strong>{anyVenueName(b.venue_id)}</strong>
+                  <span className="tag">{b.status}</span>
+                </div>
+                <p className="muted">
+                  {b.requested_starts_at ? fmt.format(new Date(b.requested_starts_at)) : 'Time to confirm'}
+                  {ticket ? ` · Free ticket ${ticket.code}` : ''}
+                </p>
+                {b.status === 'requested' ? (
+                  <div className="actions-row">
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      disabled={busy || !token}
+                      onClick={() => token && void act(() => cancelBookingAction(b.id, token), 'Booking cancelled.')}
+                    >
+                      Cancel request
+                    </button>
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+        </section>
+      ) : null}
 
       <form className="card" onSubmit={createVenue}>
         <strong>Register a venue (free)</strong>

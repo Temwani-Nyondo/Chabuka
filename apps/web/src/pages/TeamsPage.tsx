@@ -29,7 +29,11 @@ export default function TeamsPage() {
 
   return (
     <div className="page">
-      <h1>Teams</h1>
+      <div className="page-head">
+        <span className="eyebrow">Your sides</span>
+        <h1>Teams</h1>
+        <p>Squads you play for, challenges to answer.</p>
+      </div>
       {loading ? <p className="loading">Loading your teams…</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {!loading && teams.length === 0 && !showForm ? (

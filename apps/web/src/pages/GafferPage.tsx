@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
+import { Link } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
 import { askGaffer, transcribeVoiceNote } from '../lib/api';
@@ -7,7 +8,32 @@ import { askGaffer, transcribeVoiceNote } from '../lib/api';
 interface ChatMessage {
   from: 'user' | 'gaffer';
   text: string;
-  actionsTaken?: { name: string; ok: boolean }[];
+  actionsTaken?: { name: string; ok: boolean; detail?: string }[];
+}
+
+// Spoken step labels: what the Gaffer did, in the user's words, so the
+// card reads as progress ("Booking venue… booked") not tool names.
+const STEP_LABELS: Record<string, string> = {
+  create_match: 'Creating game',
+  request_booking: 'Booking venue',
+  post_challenge: 'Posting challenge',
+  create_poll: 'Starting poll',
+  post_result: 'Posting result',
+  report_score: 'Reporting score',
+  search_venues: 'Checking venues',
+  venue_slots: 'Checking slots',
+  search_matches: 'Checking open games',
+};
+
+function stepLink(detail: string | undefined): { href: string; label: string } | null {
+  if (!detail) return null;
+  if (detail.startsWith('match:')) {
+    return { href: `/explore?highlight=${encodeURIComponent(detail.slice('match:'.length))}`, label: 'View your game' };
+  }
+  if (detail.startsWith('booking:')) {
+    return { href: '/venues/dashboard', label: 'Track your booking' };
+  }
+  return null;
 }
 
 const HISTORY_LIMIT = 10;
@@ -26,6 +52,52 @@ const STARTERS = [
 // WAV — no server ffmpeg needed.
 const WAV_SAMPLE_RATE = 16000;
 const MAX_VOICE_SECONDS = 180;
+
+// Browser speech recognition runs alongside the mic capture purely as a
+// live display: words appear as you speak so you can see he is listening.
+// The server transcription stays the authority for what he answers.
+interface InterimRecognizer {
+  interimResults: boolean;
+  continuous: boolean;
+  lang: string;
+  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
+function startInterimListen(onText: (text: string) => void): (() => void) | null {
+  const w = window as unknown as {
+    SpeechRecognition?: new () => InterimRecognizer;
+    webkitSpeechRecognition?: new () => InterimRecognizer;
+  };
+  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+  if (!Ctor) return null;
+  try {
+    const recog = new Ctor();
+    recog.interimResults = true;
+    recog.continuous = true;
+    recog.lang = navigator.language || 'en-US';
+    recog.onresult = (e) => {
+      let text = '';
+      for (let i = 0; i < e.results.length; i += 1) {
+        text += (e.results[i]?.[0]?.transcript ?? '') + ' ';
+      }
+      onText(text.trim());
+    };
+    recog.onerror = () => undefined;
+    recog.start();
+    return () => {
+      try {
+        recog.stop();
+      } catch {
+        // Already stopped; the capture governs the turn, not this display.
+      }
+    };
+  } catch {
+    return null;
+  }
+}
 
 function encodeWav(samples: Float32Array, sampleRate: number): Blob {
   const buffer = new ArrayBuffer(44 + samples.length * 2);
@@ -250,10 +322,36 @@ function captureUtterance(
   });
 }
 
+// Long replies are spoken in sentence-sized chunks so the voice never
+// stops halfway: previously only the first 600 characters played, which
+// read as the Gaffer "going quiet" after doing the work.
+function speechChunks(text: string): string[] {
+  const sentences = text.match(/[^.!?]+[.!?]+["']?\s*|[^.!?]+$/g) ?? [text];
+  const chunks: string[] = [];
+  let current = '';
+  for (const sentence of sentences) {
+    const part = sentence.trim();
+    if (!part) continue;
+    if (current && `${current} ${part}`.length > 400) {
+      chunks.push(current);
+      current = part;
+    } else {
+      current = current ? `${current} ${part}` : part;
+    }
+  }
+  if (current) chunks.push(current);
+  return chunks.length > 0 ? chunks : [text];
+}
+
 function speakText(text: string, stream: MediaStream | null): Promise<'done' | 'barged'> {
   return new Promise((resolve) => {
     const synth = window.speechSynthesis;
     if (!synth) {
+      resolve('done');
+      return;
+    }
+    const queue = speechChunks(text);
+    if (queue.length === 0 || !queue[0]?.trim()) {
       resolve('done');
       return;
     }
@@ -302,7 +400,6 @@ function speakText(text: string, stream: MediaStream | null): Promise<'done' | '
       }
     }
     synth.cancel();
-    const utter = new SpeechSynthesisUtterance(text.slice(0, 600));
     // Prefer a natural/online voice over the flat default; fall back to any
     // English voice. Slightly slower and warmer than the defaults.
     const voices = synth.getVoices();
@@ -310,23 +407,34 @@ function speakText(text: string, stream: MediaStream | null): Promise<'done' | '
       voices.find((v) => v.lang.toLowerCase().startsWith('en') && /natural|online|google/i.test(v.name)) ??
       voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
       null;
-    if (preferred) utter.voice = preferred;
-    utter.rate = 0.95;
-    utter.pitch = 1.1;
-    utter.onend = () => finish('done');
-    utter.onerror = () => finish('done');
-    synth.speak(utter);
+    const speakNext = () => {
+      if (settled) return;
+      const chunk = queue.shift();
+      if (!chunk) {
+        finish('done');
+        return;
+      }
+      const utter = new SpeechSynthesisUtterance(chunk);
+      if (preferred) utter.voice = preferred;
+      utter.rate = 0.95;
+      utter.pitch = 1.1;
+      utter.onend = () => speakNext();
+      utter.onerror = () => speakNext();
+      synth.speak(utter);
+    };
+    speakNext();
   });
 }
 
-export default function GafferPage() {
-  const { session } = useAuth();
+export default function GafferPage({ onClose }: { onClose?: () => void }) {
+  const { session, user } = useAuth();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [recording, setRecording] = useState(false);
   const [convo, setConvo] = useState<'off' | 'listening' | 'thinking' | 'speaking'>('off');
+  const [hearing, setHearing] = useState('');
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
   const convoActiveRef = useRef(false);
@@ -340,6 +448,48 @@ export default function GafferPage() {
     },
     [],
   );
+
+  // Keep the conversation across navigation: one stored thread per user.
+  useEffect(() => {
+    if (!user) {
+      setMessages([]);
+      return;
+    }
+    try {
+      const raw = localStorage.getItem(`gaffer:chat:${user.id}`);
+      if (!raw) return;
+      const parsed: unknown = JSON.parse(raw);
+      if (!Array.isArray(parsed)) return;
+      const kept: ChatMessage[] = [];
+      for (const item of parsed) {
+        if (typeof item !== 'object' || item === null) continue;
+        const row = item as { from?: unknown; text?: unknown; actionsTaken?: unknown };
+        if ((row.from !== 'user' && row.from !== 'gaffer') || typeof row.text !== 'string') continue;
+        const actions = Array.isArray(row.actionsTaken)
+          ? row.actionsTaken.filter(
+              (a): a is { name: string; ok: boolean; detail?: string } =>
+                typeof a === 'object' &&
+                a !== null &&
+                typeof (a as { name?: unknown }).name === 'string' &&
+                typeof (a as { ok?: unknown }).ok === 'boolean',
+            )
+          : undefined;
+        kept.push({ from: row.from, text: row.text.slice(0, 4000), actionsTaken: actions });
+      }
+      setMessages(kept.slice(-50));
+    } catch {
+      // Corrupt cache: start fresh rather than crash the page.
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    if (!user) return;
+    try {
+      localStorage.setItem(`gaffer:chat:${user.id}`, JSON.stringify(messages.slice(-50)));
+    } catch {
+      // Quota or private mode: the live thread still works, it just will not resume.
+    }
+  }, [messages, user?.id]);
 
   const send = async (raw: string, attached: string[] = photos) => {
     const message = raw.trim();
@@ -457,6 +607,7 @@ export default function GafferPage() {
     convoActiveRef.current = false;
     window.speechSynthesis?.cancel();
     convoStopCaptureRef.current?.();
+    setHearing('');
     setConvo('off');
   };
 
@@ -498,6 +649,9 @@ export default function GafferPage() {
         while (convoActiveRef.current && turns < 30) {
           turns += 1;
           setConvo('listening');
+          // Live word-by-word display while he listens; collapses below
+          // when he starts thinking — the server transcript decides.
+          const stopInterim = startInterimListen((text) => setHearing(text));
           const blob = await captureUtterance(
             stream,
             (stop) => {
@@ -505,6 +659,8 @@ export default function GafferPage() {
             },
             interrupted ? { minSpeechMs: 200, silenceMs: 800 } : undefined,
           ).catch(() => null);
+          stopInterim?.();
+          setHearing('');
           interrupted = false;
           convoStopCaptureRef.current = null;
           if (!convoActiveRef.current || !blob) break;
@@ -540,6 +696,7 @@ export default function GafferPage() {
           } catch (err) {
             reply = err instanceof Error ? err.message : reply;
           }
+          if (!reply.trim()) reply = "I couldn't get that done. Say that again?";
           if (!convoActiveRef.current) break;
           setMessages((prev) => [...prev, { from: 'gaffer', text: reply, actionsTaken }]);
           transcript.push({ role: 'assistant', content: reply });
@@ -558,7 +715,14 @@ export default function GafferPage() {
 
   return (
     <div className="page floodlight">
-      <h1>Ask the Gaffer</h1>
+      <div className="row">
+        <h1>Ask the Gaffer</h1>
+        {onClose ? (
+          <button className="btn btn-ghost" type="button" onClick={onClose} aria-label="Close Gaffer">
+            ✕
+          </button>
+        ) : null}
+      </div>
       <p className="muted">Game plans, rules, briefs, bookings — the Gaffer sorts it.</p>
       {messages.length === 0 ? (
         <EmptyState title="No messages yet" hint="Pick one to get going." />
@@ -589,21 +753,23 @@ export default function GafferPage() {
           <div className="card" key={i}>
             <div className="row">
               <strong>Gaffer</strong>
-              {m.actionsTaken && m.actionsTaken.some((a) => !a.ok) ? (
-                <span className="tag">
-                  {m.actionsTaken.filter((a) => a.ok).length}/{m.actionsTaken.length} worked — see
-                  details
-                </span>
-              ) : null}
             </div>
             <p>{m.text}</p>
             {m.actionsTaken && m.actionsTaken.length > 0 ? (
-              <details className="trace">
-                <summary>What the Gaffer did</summary>
-                <p className="muted">
-                  {m.actionsTaken.map((a) => `${a.name} ${a.ok ? '✓' : '✗'}`).join(' · ')}
-                </p>
-              </details>
+              <ul className="steps">
+                {m.actionsTaken.map((a, j) => {
+                  const link = stepLink(a.detail);
+                  const label = STEP_LABELS[a.name] ?? a.name.replace(/_/g, ' ');
+                  return (
+                    <li key={j} className={a.ok ? 'step-ok' : 'step-bad'}>
+                      <span>
+                        {label} {a.ok ? '✓' : '✗'}
+                      </span>
+                      {link ? <Link to={link.href}>{link.label}</Link> : null}
+                    </li>
+                  );
+                })}
+              </ul>
             ) : null}
           </div>
         ),
@@ -612,7 +778,9 @@ export default function GafferPage() {
       {convo !== 'off' ? (
         <p className="muted" role="status">
           {convo === 'listening'
-            ? 'Listening… speak, then pause and the Gaffer answers.'
+            ? hearing
+              ? `You: ${hearing}`
+              : 'Listening… speak, then pause and the Gaffer answers.'
             : convo === 'thinking'
               ? 'Gaffer is thinking…'
               : 'Gaffer speaking… talk to interrupt.'}

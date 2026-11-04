@@ -9,24 +9,26 @@
   --text: #101713;
   --muted: #5b6d63;
   --border: #d3dcd3;
-  --accent: #c6ff00;
-  --accent-ink: #0b0f14;
+  --accent: #e89b00;
+  --accent-ink: #181206;
   --danger: #ff4d4f;
-  --radius: 12px;
+  --radius: 14px;
+  --radius-sm: 10px;
+  --shadow: 0 1px 2px rgba(16, 23, 19, 0.06), 0 4px 16px rgba(16, 23, 19, 0.06);
   --tier-bronze: #c68a4e;
   --tier-silver: #c9d1d9;
   --tier-gold: #f5c542;
 }
 
 [data-theme='dark'] {
-  --bg: #0b0f14;
-  --surface: #151b23;
-  --surface-2: #1c2530;
+  --bg: #100e0a;
+  --surface: #1a1712;
+  --surface-2: #26211a;
   --text: #f2f5f8;
   --muted: #8b98a5;
-  --border: #26313d;
-  --accent: #c6ff00;
-  --accent-ink: #0b0f14;
+  --border: #2b2a26;
+  --accent: #ffb300;
+  --accent-ink: #181206;
 }
 
 * {
@@ -58,9 +60,179 @@ h2 {
   margin: 4px 0 8px;
 }
 
-/* Soft floodlight glow (lime, low opacity) behind the main card. */
+/* Soft floodlight glow (amber, low opacity) behind the main card. */
 .floodlight {
   position: relative;
+}
+
+/* Background skins: chosen in the locker room, applied on <html>. */
+[data-skin='clean'] .floodlight::before {
+  display: none;
+}
+
+/* Ambient backdrop inside the app: a faint fixed pitch photo behind every
+   authed screen so pages are never flat. Theme-aware strength keeps cards
+   and text crisp in both themes. */
+.app {
+  position: relative;
+}
+
+.app::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: #100e0a url('/brand/hero-pitch.jpg') center 30% / cover no-repeat;
+  opacity: 0.16;
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-theme='light'] .app::before {
+  opacity: 0.08;
+}
+
+.app > main {
+  position: relative;
+  z-index: 1;
+}
+
+[data-skin='clean'] .app::before,
+[data-skin='matchday'] .app::before {
+  display: none;
+}
+
+[data-skin='stripes'] body {
+  background-image: repeating-linear-gradient(
+    -45deg,
+    transparent 0 14px,
+    rgba(255, 179, 0, 0.05) 14px 15px
+  );
+}
+
+/* Matchday: the celebration photo sits fixed behind everything, veiled so
+   cards and text stay legible in both themes. */
+[data-skin='matchday'] body {
+  background: #100e0a url('/brand/celebration.jpg') center top / cover no-repeat fixed;
+}
+
+[data-skin='matchday'] body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background: rgba(10, 8, 5, 0.66);
+  pointer-events: none;
+  z-index: 0;
+}
+
+[data-skin='matchday'] .app,
+[data-skin='matchday'] .page,
+[data-skin='matchday'] .topbar {
+  position: relative;
+  z-index: 1;
+}
+
+[data-skin='matchday'] .topbar {
+  background: rgba(16, 14, 10, 0.88);
+}
+
+/* Matchday in Light mode: lift the veil so the theme switch stays visible. */
+[data-theme='light'][data-skin='matchday'] body::before {
+  background: rgba(238, 242, 238, 0.84);
+}
+
+[data-theme='light'][data-skin='matchday'] .topbar {
+  background: rgba(238, 242, 238, 0.9);
+}
+
+/* Login: full sports backdrop, card floats above it. */
+.auth-page {
+  min-height: 100dvh;
+  background: #100e0a url('/brand/hero-pitch.jpg') center 30% / cover no-repeat;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 48px 16px;
+  position: relative;
+}
+
+.auth-page::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(10, 8, 5, 0.55), rgba(10, 8, 5, 0.35) 45%, rgba(10, 8, 5, 0.6));
+  pointer-events: none;
+}
+
+.auth-page > * {
+  position: relative;
+  z-index: 1;
+}
+
+.auth-card {
+  width: min(420px, 100%);
+  background: rgba(21, 24, 27, 0.92);
+  backdrop-filter: blur(6px);
+}
+
+.auth-page h1 {
+  color: #fff;
+  margin: 12px 0 4px;
+}
+
+.auth-page > .muted {
+  color: rgba(245, 241, 232, 0.82);
+}
+
+.auth-page .card {
+  width: min(420px, 100%);
+  border-radius: 20px;
+  padding: 22px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+}
+
+/* Auth modal over a faint stadium backdrop. */
+.modal-overlay-sports {
+  background:
+    linear-gradient(rgba(10, 8, 5, 0.82), rgba(10, 8, 5, 0.82)),
+    url('/brand/hero-pitch.jpg') center / cover no-repeat,
+    rgba(10, 8, 5, 0.9);
+}
+
+/* Landing CTA band reuses the celebration art. */
+.landing-cta-photo {
+  position: relative;
+  overflow: hidden;
+  border: 0;
+  border-radius: 22px;
+  padding: clamp(28px, 5vw, 48px);
+  min-height: 300px;
+  justify-content: center;
+  background: #100e0a url('/brand/celebration.jpg') center 30% / cover no-repeat;
+  color: #f5f1e8;
+}
+
+.landing-cta-photo::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, rgba(10, 8, 5, 0.92) 30%, rgba(10, 8, 5, 0.55) 65%, rgba(10, 8, 5, 0.25) 100%);
+  pointer-events: none;
+}
+
+.landing-cta-photo > * {
+  position: relative;
+  z-index: 1;
+}
+
+.landing-cta-photo .muted {
+  color: rgba(245, 241, 232, 0.82);
+}
+
+.landing-cta-photo .btn {
+  text-decoration: none;
 }
 
 .floodlight::before {
@@ -68,7 +240,7 @@ h2 {
   position: absolute;
   inset: -40px -16px auto;
   height: 180px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(198, 255, 0, 0.12), transparent 70%);
+  background: radial-gradient(ellipse at 50% 0%, rgba(255, 179, 0, 0.14), transparent 70%);
   pointer-events: none;
 }
 
@@ -190,13 +362,155 @@ code {
 
 .app {
   min-height: 100dvh;
-  padding-bottom: calc(88px + env(safe-area-inset-bottom));
+  padding-bottom: calc(24px + env(safe-area-inset-bottom));
 }
 
 .page {
-  max-width: 480px;
+  max-width: 680px;
   margin: 0 auto;
-  padding: 20px 16px 24px;
+  padding: 28px 20px 32px;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1500;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  max-width: 1080px;
+  margin: 0 auto;
+  padding: 12px 20px;
+  background: color-mix(in srgb, var(--bg) 90%, transparent);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  font-size: 20px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+
+.topbar-theme {
+  min-height: 0;
+  padding: 6px 12px;
+}
+
+.topbar-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-right: auto;
+}
+
+.topbar-link {
+  color: var(--muted);
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 14px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.topbar-link:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.topbar-link-active {
+  color: var(--text);
+  background: var(--surface-2);
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+
+.topbar-create {
+  min-height: 0;
+  padding: 8px 16px;
+  font-size: 14px;
+}
+
+@media (max-width: 640px) {
+  .topbar {
+    gap: 12px;
+    padding: 10px 12px;
+    flex-wrap: wrap;
+  }
+
+  .topbar-nav {
+    order: 3;
+    width: 100%;
+    margin-right: 0;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+}
+
+/* Page header pattern: eyebrow, title, one-line sub. Every screen uses it. */
+.page-head {
+  margin: 8px 0 22px;
+}
+
+.page-head .eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 6px;
+}
+
+.page-head .eyebrow-accent {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 3px 10px;
+}
+
+.page-head h1 {
+  margin: 0 0 4px;
+}
+
+.page-head p {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+/* Section titles inside pages. */
+.section-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 20px 0 4px;
+}
+
+.section-head h2 {
+  margin: 0;
+}
+
+.section-head a {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
 }
 
 .page-narrow {
@@ -210,9 +524,34 @@ code {
 .card {
   background: var(--surface);
   border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 18px;
+  margin: 14px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  box-shadow: var(--shadow);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 48px 16px 16px;
+  /* Above Leaflet's internal layers (controls sit at z-index 1000). */
+  z-index: 2000;
+  overflow-y: auto;
+}
+
+.modal-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
   border-radius: var(--radius);
   padding: 16px;
-  margin: 12px 0;
+  width: min(420px, 100%);
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -220,6 +559,16 @@ code {
 
 .empty {
   align-items: flex-start;
+}
+
+.empty-brand {
+  text-align: left;
+  border-top: 4px solid var(--accent);
+  padding-top: 20px;
+}
+
+.empty-brand .brand-mark {
+  opacity: 0.9;
 }
 
 .field {
@@ -231,9 +580,9 @@ code {
 }
 
 .input {
-  padding: 12px;
+  padding: 12px 14px;
   border: 1px solid var(--border);
-  border-radius: 10px;
+  border-radius: 12px;
   background: var(--surface);
   color: var(--text);
   font-size: 16px;
@@ -249,8 +598,8 @@ code {
 
 .btn {
   min-height: 48px;
-  padding: 12px 16px;
-  border-radius: 10px;
+  padding: 12px 18px;
+  border-radius: 12px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
@@ -261,6 +610,15 @@ code {
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  transition: background 150ms ease, border-color 150ms ease, filter 150ms ease;
+}
+
+.btn-primary:hover {
+  filter: brightness(1.06);
+}
+
+.btn-ghost:hover {
+  background: var(--surface-2);
 }
 
 .btn-primary {
@@ -287,6 +645,26 @@ code {
 .btn .btn-icon {
   margin-right: 8px;
   display: inline-flex;
+}
+
+.btn-brand {
+  gap: 10px;
+}
+
+.brand-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.brand-icon-meta {
+  background: #1877f2;
+  color: #fff;
 }
 
 .rec-dot {
@@ -441,17 +819,23 @@ code {
 }
 
 .avatar-preview {
-  width: 72px;
-  height: 72px;
+  width: 104px;
+  height: 104px;
   border-radius: 50%;
   object-fit: cover;
-  border: 1px solid var(--border);
+  border: 2px solid var(--border);
   flex-shrink: 0;
+}
+
+.player-identity {
+  display: flex;
+  align-items: center;
+  gap: 16px;
 }
 
 .cover-banner {
   width: 100%;
-  height: 140px;
+  height: 180px;
   object-fit: cover;
   border-radius: 8px;
   border: 1px solid var(--border);
@@ -468,6 +852,32 @@ code {
   flex-shrink: 0;
 }
 
+.card-highlight {
+  border-color: var(--accent);
+  border-width: 2px;
+}
+
+.steps {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.steps li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 6px;
+}
+
+.step-bad {
+  color: var(--danger, #b3261e);
+}
+
 .loading {
   color: var(--muted);
 }
@@ -479,51 +889,7 @@ code {
   gap: 12px;
 }
 
-.tabbar {
-  position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  min-height: 64px;
-  padding-bottom: env(safe-area-inset-bottom);
-  background: var(--surface);
-  border-top: 1px solid var(--border);
-  display: flex;
-  justify-content: space-around;
-  align-items: center;
-  max-width: 480px;
-  margin: 0 auto;
-  z-index: 10;
-}
-
-.tab {
-  color: var(--muted);
-  text-decoration: none;
-  font-weight: 600;
-  font-size: 14px;
-  padding: 8px 10px;
-  min-height: 48px;
-  display: inline-flex;
-  align-items: center;
-}
-
-.tab-active {
-  color: var(--accent);
-}
-
-.fab {
-  width: 56px;
-  height: 56px;
-  border-radius: 50%;
-  border: none;
-  background: var(--accent);
-  color: var(--accent-ink);
-  font-size: 28px;
-  line-height: 1;
-  cursor: pointer;
-  margin-top: -18px;
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
-}
+/* Bottom tab bar removed: navigation lives in the top bar. */
 
 .sheet-backdrop {
   position: fixed;
@@ -532,7 +898,8 @@ code {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  z-index: 20;
+  /* Above Leaflet's internal layers (controls sit at z-index 1000). */
+  z-index: 2000;
 }
 
 .sheet {
@@ -630,6 +997,22 @@ button.sheet-item {
   height: 340px;
 }
 
+/* Standard OpenStreetMap tiles. The credit chip stays small and quiet;
+   the OSM attribution itself is legally required and untouched. */
+
+/* Tile credits stay, but whisper: small, translucent, bottom-right. */
+.leaflet-control-attribution {
+  font-size: 9px !important;
+  line-height: 1.4 !important;
+  padding: 1px 5px !important;
+  background: rgba(10, 8, 5, 0.65) !important;
+  color: rgba(245, 241, 232, 0.6) !important;
+}
+
+.leaflet-control-attribution a {
+  color: rgba(245, 241, 232, 0.6) !important;
+}
+
 .map-box .leaflet-container {
   font: inherit;
 }
@@ -691,21 +1074,44 @@ button.sheet-item {
   color: var(--muted);
 }
 
-/* Landing page: flat cards, thin borders, one accent. Phone-first. */
+/* Landing page: full-bleed hero, contained sections, one accent. */
 .landing {
-  max-width: 960px;
+  max-width: none;
   margin: 0 auto;
-  padding: 0 16px 48px;
+  padding: 0 0 48px;
 }
 
 .landing-header {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 16px 0;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 24px;
+  max-width: none;
+  margin: 0;
+  padding: 16px max(20px, calc((100% - 1080px) / 2));
   flex-wrap: wrap;
+  background: #100e0a;
+  color: #f5f1e8;
+}
+
+.landing-header .landing-logo {
+  color: #f5f1e8;
+}
+
+.landing-header .landing-nav a {
+  color: rgba(245, 241, 232, 0.85);
+}
+
+.landing-header .landing-nav a:hover {
+  color: #fff;
+}
+
+.landing-header .btn-ghost {
+  color: #f5f1e8;
+  border-color: rgba(255, 255, 255, 0.35);
+}
+
+.landing-header .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.12);
 }
 
 .landing-logo {
@@ -741,31 +1147,192 @@ button.sheet-item {
 }
 
 .landing-hero {
-  display: grid;
-  gap: 16px;
-  margin-bottom: 32px;
+  display: block;
+  margin-bottom: 40px;
+}
+
+.hero-band {
+  position: relative;
+  overflow: hidden;
+  background-size: cover;
+  background-position: center 30%;
+  background-attachment: fixed;
+  border: 0;
+  border-radius: 0;
+  min-height: min(80vh, 640px);
+  display: flex;
+  align-items: center;
+}
+
+@media (max-width: 760px), (prefers-reduced-motion: reduce) {
+  .hero-band {
+    background-attachment: scroll;
+  }
+}
+
+.game-map {
+  height: 240px;
+  margin: 4px 0 0;
+}
+
+.hero-band::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(100deg, rgba(10, 8, 5, 0.94) 30%, rgba(10, 8, 5, 0.55) 60%, rgba(10, 8, 5, 0.15) 100%);
+  pointer-events: none;
+}
+
+.hero-band-inner {
+  position: relative;
+  z-index: 1;
+  width: min(560px, 100%);
+  margin: 0 auto;
+  padding: clamp(32px, 6vw, 72px) clamp(20px, 4vw, 48px);
+  color: #f5f1e8;
+}
+
+.hero-band-inner .landing-title {
+  color: #fff;
+}
+
+.hero-sub {
+  color: rgba(245, 241, 232, 0.82);
+  font-size: 16px;
+  margin: 0 0 4px;
+}
+
+.btn-hero-ghost {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.35);
+  color: #fff;
+}
+
+.landing-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.brand-mark {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  object-fit: cover;
+}
+
+.brand-mark-lg {
+  width: 56px;
+  height: 56px;
+  border-radius: 14px;
+}
+
+/* Wizard: one thing per screen, step dots, back/next. */
+.wizard-dots {
+  display: flex;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.wizard-dot {
+  flex: 1;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.wizard-dot-done {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.wizard-nav {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.wizard-nav .btn {
+  flex: 1;
+}
+
+.landing-title {
+  font-size: 40px;
+  line-height: 1.02;
+  margin: 10px 0 8px;
 }
 
 @media (min-width: 760px) {
-  .landing-hero {
-    grid-template-columns: 1fr 1fr;
-    align-items: start;
+  .landing-title {
+    font-size: 52px;
+  }
+}
+
+.landing-ctas {
+  margin: 16px 0 4px;
+}
+
+.landing-ctas .btn {
+  text-decoration: none;
+}
+
+.eyebrow {
+  display: inline-block;
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.eyebrow-accent {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 999px;
+  padding: 4px 12px;
+}
+
+@media (min-width: 760px) {
+  .landing-search {
+    grid-template-columns: 1fr 1.4fr;
   }
 }
 
 .landing-search {
   display: grid;
-  gap: 8px;
-  margin-top: 16px;
+  gap: 10px;
+  margin-top: 20px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: var(--radius);
+  padding: 12px;
 }
 
-.landing section {
-  margin-bottom: 32px;
+.landing-search .field {
+  color: #f5f1e8;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.landing-search .input {
+  background: rgba(255, 255, 255, 0.96);
+  border-color: transparent;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.landing > main > section:not(.landing-hero) {
+  max-width: 960px;
+  margin: 0 auto 40px;
+  padding: 0 20px;
 }
 
 .landing-steps {
   display: grid;
   gap: 12px;
+  counter-reset: step;
 }
 
 @media (min-width: 760px) {
@@ -775,11 +1342,24 @@ button.sheet-item {
 }
 
 .landing-step {
-  border-left: 3px solid transparent;
+  position: relative;
+  border-top: 4px solid var(--surface-2);
+  padding-top: 12px;
+  counter-increment: step;
+}
+
+.landing-step::before {
+  content: '0' counter(step);
+  display: block;
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  font-size: 40px;
+  line-height: 1;
+  color: var(--accent);
+  margin-bottom: 8px;
 }
 
 .landing-step-active {
-  border-left-color: var(--accent);
+  border-top-color: var(--accent);
 }
 
 .landing-cta {
@@ -795,7 +1375,9 @@ button.sheet-item {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
-  padding-top: 16px;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 16px 20px 0;
   border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 14px;
@@ -826,20 +1408,100 @@ button.sheet-item {
 .fab-gaffer {
   position: fixed;
   right: 16px;
-  bottom: 88px;
-  width: 52px;
+  bottom: 20px;
+  min-width: 52px;
   height: 52px;
-  border-radius: 50%;
-  border: 1px solid var(--border);
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 2px solid var(--accent-ink);
   background: var(--accent);
-  color: #0b0f14;
+  color: var(--accent-ink);
   font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
-  font-size: 24px;
+  font-size: 17px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 8px;
   cursor: pointer;
-  z-index: 40;
+  /* Above Leaflet's internal layers, below dialogs. */
+  z-index: 1500;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+
+.fab-gaffer .fab-gaffer-ball {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent-ink);
+  color: var(--accent);
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: 'Inter', system-ui, sans-serif;
+  font-weight: 800;
+}
+
+/* Gaffer slide-over: full sheet on phones, docked panel on desktop. */
+.gaffer-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  /* Above Leaflet's internal layers (controls sit at z-index 1000). */
+  z-index: 2000;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+
+.gaffer-panel {
+  background: var(--bg);
+  width: min(560px, 100%);
+  max-height: 92dvh;
+  border-radius: 20px 20px 0 0;
+  border: 1px solid var(--border);
+  border-bottom: 0;
+  overflow-y: auto;
+  animation: gaffer-rise 220ms ease-out;
+}
+
+@keyframes gaffer-rise {
+  from {
+    opacity: 0;
+    transform: translateY(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gaffer-panel {
+    animation: none;
+  }
+}
+
+.gaffer-panel-bar {
+  position: sticky;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+  z-index: 1;
+}
+
+.gaffer-panel-bar strong {
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  font-size: 18px;
 }
 
 .team-head {

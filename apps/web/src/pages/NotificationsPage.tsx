@@ -41,7 +41,11 @@ export default function NotificationsPage() {
 
   return (
     <div className="page">
-      <h1>Notifications</h1>
+      <div className="page-head">
+        <span className="eyebrow">Never miss tip-off</span>
+        <h1>Notifications</h1>
+        <p>Joins, bookings, results and circle events.</p>
+      </div>
       {loading ? <p className="loading">Loading…</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {!loading && notes.length === 0 ? (

@@ -998,3 +998,9 @@ export function availableActions(input: {
   if (!isFull) return ['join'];
   return [];
 }
+
+// Match Found moment: a join fills the last open seat. The caller passes the
+// count it saw before joining and the count the server returned after.
+export function didFillMatch(before: number, after: number, capacity: number): boolean {
+  return before < capacity && after >= capacity;
+}

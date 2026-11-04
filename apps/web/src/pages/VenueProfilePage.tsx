@@ -80,14 +80,19 @@ export default function VenueProfilePage() {
   return (
     <div className="page">
       <p><Link to="/explore">← Explore</Link></p>
-      <h1>{venue?.name ?? 'Venue'}</h1>
-      {venue ? (
-        <>
-          <p className="muted">
+      <div className="page-head">
+        <span className="eyebrow">Book the court</span>
+        <h1>{venue?.name ?? 'Venue'}</h1>
+        {venue ? (
+          <p>
             {[venue.area, venue.sports.join(', '), venue.facility_types.join(', ')]
               .filter(Boolean)
               .join(' · ')}
           </p>
+        ) : null}
+      </div>
+      {venue ? (
+        <>
           <div className="card">
             <div className="row">
               <strong>Free booking</strong>

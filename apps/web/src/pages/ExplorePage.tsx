@@ -4,6 +4,7 @@ import EmptyState from '../components/EmptyState';
 import ChallengeCard from '../components/ChallengeCard';
 import ExploreMap from '../components/ExploreMap';
 import MatchCard from '../components/MatchCard';
+import MatchFoundOverlay from '../components/MatchFoundOverlay';
 import { useAuth } from '../auth/AuthContext';
 import { fetchOpenMatches } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
@@ -11,7 +12,7 @@ import { fetchOpenChallenges } from '../lib/teams';
 import type { ChallengeListing } from '../lib/teams';
 import { fetchVenues } from '../lib/venues';
 import type { Venue } from '@chabuka/shared';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMatchActions } from '../lib/useMatchActions';
 
 type ExploreTab = 'play' | 'teams' | 'venues';
@@ -31,6 +32,16 @@ export default function ExplorePage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<ExploreTab>('play');
   const [mode, setMode] = useState<'list' | 'map'>('list');
+  // Deep link from the Gaffer ("View your game"): jump to the Play tab in
+  // list mode and flash the created card.
+  const [searchParams] = useSearchParams();
+  const highlightId = searchParams.get('highlight');
+  useEffect(() => {
+    if (highlightId) {
+      setTab('play');
+      setMode('list');
+    }
+  }, [highlightId]);
   const [selected, setSelected] = useState<MatchListing | null>(null);
   const [sport, setSport] = useState('All');
   const [query, setQuery] = useState('');
@@ -57,7 +68,8 @@ export default function ExplorePage() {
       .finally(() => setLoading(false));
   }, [reload]);
 
-  const { busyId, actionError, onJoin, onWithdraw } = useMatchActions(reload);
+  const { busyId, actionError, onJoin, onWithdraw, celebration, dismissCelebration } =
+    useMatchActions(reload);
 
   const onTouchStart = (e: TouchEvent) => {
     touchX.current = e.touches[0]?.clientX ?? null;
@@ -98,8 +110,14 @@ export default function ExplorePage() {
 
   return (
     <div className="page">
-      <h1>Explore</h1>
-      <p className="muted">Swipe or tap: games to play, teams to face, venues to book.</p>
+      {celebration ? (
+        <MatchFoundOverlay title={celebration.title} onClose={dismissCelebration} />
+      ) : null}
+      <div className="page-head">
+        <span className="eyebrow">Games · Teams · Venues</span>
+        <h1>Explore</h1>
+        <p>Swipe or tap: games to play, teams to face, venues to book.</p>
+      </div>
       <div className="chips" role="tablist" aria-label="Explore sections">
         {TABS.map((t) => (
           <button
@@ -161,6 +179,7 @@ export default function ExplorePage() {
                 {selected ? (
                   <MatchCard
                     listing={selected}
+                    highlighted={selected.match.id === highlightId}
                     busy={busyId === selected.match.id}
                     onJoin={onJoin}
                     onWithdraw={onWithdraw}
@@ -187,6 +206,7 @@ export default function ExplorePage() {
                       <MatchCard
                         key={listing.match.id}
                         listing={listing}
+                        highlighted={listing.match.id === highlightId}
                         busy={busyId === listing.match.id}
                         onJoin={onJoin}
                         onWithdraw={onWithdraw}
@@ -200,6 +220,7 @@ export default function ExplorePage() {
                   <MatchCard
                     key={listing.match.id}
                     listing={listing}
+                    highlighted={listing.match.id === highlightId}
                     busy={busyId === listing.match.id}
                     onJoin={onJoin}
                     onWithdraw={onWithdraw}

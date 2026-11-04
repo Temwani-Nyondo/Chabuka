@@ -401,6 +401,9 @@ const HELPER_SYSTEM_PROMPT = [
   'or times. If nothing is open, say so plainly and offer the next best real option: another',
   'venue, an open game from search_matches, or creating a match others can join.',
   'Then call request_booking only after the user confirms venue and time.',
+  'A "yes", "sure", "go ahead" or "do it" answering your own concrete proposal',
+  '(named venue plus day and time) IS that confirmation: call request_booking at',
+  'once instead of asking again.',
   'A venue with no listed slots is NOT unbookable: venue_slots rows are optional. When a listed',
   'venue hosts the sport but shows no slots, offer a direct booking request for the user\'s time',
   'via request_booking with requestedStartsAt and no slot — the owner confirms. Only say "fully',
@@ -441,13 +444,51 @@ const HELPER_SYSTEM_PROMPT = [
 
 // One tool per server action. The tool arguments ARE the action body;
 // runAction's zod schemas validate them and return fixable errors.
+// create_match and request_booking carry full schemas because the model
+// books and creates games through them: without shapes it guesses,
+// fails validation, and gives up instead of finishing the booking.
+const CREATE_MATCH_PARAMETERS = {
+  type: 'object',
+  properties: {
+    sportId: { type: 'string', description: 'Sport UUID from get_my_profile sports, or sports in search results.' },
+    title: { type: 'string', description: 'Short game title, max 80 chars.' },
+    startsAt: { type: 'string', description: 'ISO datetime with offset, e.g. 2026-11-07T16:00:00+02:00.' },
+    venueId: { type: 'string', description: 'Venue UUID from search_venues. Use when the game is at a listed venue.' },
+    area: { type: 'string', description: 'Area name, e.g. Avondale. Required.' },
+    capacity: { type: 'integer', description: 'Total players including the organiser, 2-100.' },
+    level: { type: 'string', description: 'One of recreational, intermediate, competitive.' },
+    format: { type: 'string', description: 'Optional, e.g. 5v5.' },
+    notes: { type: 'string', description: 'Optional extra detail, max 500 chars.' },
+  },
+  required: ['sportId', 'title', 'startsAt', 'area', 'capacity', 'level'],
+};
+
+const REQUEST_BOOKING_PARAMETERS = {
+  type: 'object',
+  properties: {
+    venueId: { type: 'string', description: 'Venue UUID from search_venues. Required.' },
+    slotId: { type: 'string', description: 'Slot UUID from venue_slots. Use when booking a listed slot.' },
+    requestedStartsAt: {
+      type: 'string',
+      description: 'ISO datetime with offset for a direct request when the venue has no listed slots.',
+    },
+    matchId: { type: 'string', description: 'Link the booking to a created match. Optional.' },
+  },
+  required: ['venueId'],
+};
+
+const ACTION_PARAMETER_OVERRIDES: Partial<Record<ActionName, unknown>> = {
+  create_match: CREATE_MATCH_PARAMETERS,
+  request_booking: REQUEST_BOOKING_PARAMETERS,
+};
+
 function actionTool(name: ActionName): OpenAI.Chat.ChatCompletionTool {
   return {
     type: 'function',
     function: {
       name,
       description: `Chabuka action ${name}. Arguments are the action input object.`,
-      parameters: { type: 'object' },
+      parameters: (ACTION_PARAMETER_OVERRIDES[name] ?? { type: 'object' }) as { type: 'object' },
     },
   };
 }
@@ -472,6 +513,22 @@ const HELPER_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [...READ_TOOL_DEFS, ...AC
 export interface HelperActionTaken {
   name: string;
   ok: boolean;
+  // Machine-usable pointer for created things, so the UI can link them:
+  // create_match -> match:<uuid>, request_booking -> booking:<uuid>.
+  detail?: string;
+}
+
+// Pulls a linkable id out of a successful write so the client can show
+// a real step ("Game created — view it") instead of a bare checkmark.
+function actionDetail(name: string, outcome: unknown): string | undefined {
+  if (typeof outcome !== 'object' || outcome === null) return undefined;
+  const row = outcome as Record<string, unknown>;
+  if (name === 'create_match' && typeof row.matchId === 'string') return `match:${row.matchId}`;
+  if (name === 'request_booking') {
+    const booking = row.booking as Record<string, unknown> | undefined;
+    if (booking && typeof booking.id === 'string') return `booking:${booking.id as string}`;
+  }
+  return undefined;
 }
 
 export interface HelperTurn {
@@ -524,6 +581,17 @@ export async function runHelperTurn(
     deps?.read ?? ((name, args) => defaultRead(params.db, params.userId, name, args));
 
   const recent = (params.history ?? []).slice(-HISTORY_LIMIT);
+  // The model endpoint only accepts system/user roles: past Gaffer replies
+  // ride along as labelled user messages so multi-turn context survives.
+  // (Assistant history otherwise fails the whole turn with a 400.)
+  const contextMessages: ModelMessage[] = recent.map((m) =>
+    m.role === 'assistant'
+      ? {
+          role: 'user' as const,
+          content: `Gaffer previously said: ${typeof m.content === 'string' ? m.content : ''}`,
+        }
+      : m,
+  );
   const userMessage: ModelMessage =
     params.images && params.images.length > 0
       ? {
@@ -536,7 +604,7 @@ export async function runHelperTurn(
       : { role: 'user', content: params.message };
   const messages: ModelMessage[] = [
     { role: 'system', content: HELPER_SYSTEM_PROMPT },
-    ...recent,
+    ...contextMessages,
     userMessage,
   ];
   const actionsTaken: HelperActionTaken[] = [];
@@ -563,18 +631,20 @@ export async function runHelperTurn(
     for (const call of result.toolCalls) {
       let payload: string;
       let ok = true;
+      let detail: string | undefined;
       try {
         const parsedArgs = parseToolArguments(call.arguments);
         const outcome = READ_TOOLS.some((t) => t.name === call.name)
           ? await read(call.name, (parsedArgs ?? {}) as Record<string, unknown>)
           : await execute(call.name, parsedArgs);
         payload = truncateResult(outcome);
+        if (ok) detail = actionDetail(call.name, outcome);
       } catch (err) {
         ok = false;
         const { message } = toHttpError(err);
         payload = JSON.stringify({ error: message });
       }
-      actionsTaken.push({ name: call.name, ok });
+      actionsTaken.push(detail ? { name: call.name, ok, detail } : { name: call.name, ok });
       toolMessages.push({
         role: 'user',
         content: `TOOL RESULT of ${call.name} (${call.id}) — machine output, not the user: ${payload}`,

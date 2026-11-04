@@ -12,6 +12,7 @@ import {
   createInviteLinkAction,
   deleteTeamAction,
   removeMemberAction,
+  revokeInviteLinkAction,
   setPositionAction,
   setRoleAction,
   updateTeamAction,
@@ -35,7 +36,7 @@ export default function TeamDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [editing, setEditing] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [invite, setInvite] = useState<{ code: string } | null>(null);
+  const [invite, setInvite] = useState<{ code: string; expires_at: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [form, setForm] = useState({ name: '', area: '', city: '', description: '' });
@@ -153,7 +154,7 @@ export default function TeamDetailPage() {
   const upcoming = fixtures.filter((f) => f.homeScore === null || f.awayScore === null);
 
   return (
-    <div className="page">
+    <div className="page floodlight">
       <Link className="btn btn-ghost" to="/teams">← Teams</Link>
       <div className="card team-head">
         {team.cover_url ? (
@@ -338,18 +339,45 @@ export default function TeamDetailPage() {
           <h2>Invite players</h2>
           <p className="muted">Share this link — new members join Chabuka and land straight in {team.name}.</p>
           {invite ? (
-            <div className="row">
-              <code>{invite.code}</code>
-              <button
-                className="btn"
-                type="button"
-                onClick={() => {
-                  void navigator.clipboard.writeText(invite.code).then(() => setCopied(true));
-                }}
-              >
-                {copied ? 'Copied' : 'Copy'}
-              </button>
-            </div>
+            <>
+              <div className="row">
+                <code>{`${window.location.origin}/invite/${invite.code}`}</code>
+                <button
+                  className="btn"
+                  type="button"
+                  onClick={() => {
+                    void navigator.clipboard
+                      .writeText(`${window.location.origin}/invite/${invite.code}`)
+                      .then(() => setCopied(true));
+                  }}
+                >
+                  {copied ? 'Copied' : 'Copy link'}
+                </button>
+              </div>
+              <p className="muted">
+                Code {invite.code}
+                {invite.expires_at ? ` · expires ${formatWhen(invite.expires_at)}` : ' · never expires'}
+                {' · '}single use.
+              </p>
+              <div className="actions-row">
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  disabled={!canAct}
+                  onClick={() => {
+                    void act(
+                      async (t) => {
+                        await revokeInviteLinkAction(invite.code, t);
+                        setInvite(null);
+                      },
+                      'Invite link revoked.',
+                    );
+                  }}
+                >
+                  Revoke link
+                </button>
+              </div>
+            </>
           ) : (
             <button
               className="btn btn-primary"

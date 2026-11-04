@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { MapContainer, CircleMarker, Popup, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import AuthForm from '../components/AuthForm';
+import { useTheme } from '../lib/theme';
 
 // Static first cut: every game and venue below is SAMPLE content, clearly
 // labelled, until the public-read RLS change is approved and real data is
@@ -93,43 +95,56 @@ const STEPS = [
   },
 ];
 
-function SampleMap({ games }: { games: SampleGame[] }) {
-  const center: [number, number] =
-    games.length > 0 ? [games[0]!.lat, games[0]!.lng] : [-15.4167, 28.2833];
+function GameMiniMap({ game }: { game: SampleGame }) {
   return (
-    <div className="map-box map-box-tall" aria-label="Sample map of games">
-      <MapContainer center={center} zoom={12} style={{ height: '100%', width: '100%' }}>
+    <div className="map-box game-map" aria-label={`Map for ${game.title}`}>
+      <MapContainer
+        key={game.id}
+        center={[game.lat, game.lng]}
+        zoom={14}
+        style={{ height: '100%', width: '100%' }}
+      >
         <TileLayer
           attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
           url="https://tile.openstreetmap.org/{z}/{x}/{y}.png"
         />
-        {games.map((g) => (
-          <CircleMarker
-            key={g.id}
-            center={[g.lat, g.lng]}
-            radius={8}
-            pathOptions={{ color: '#0b0f14', fillColor: '#c6ff00', fillOpacity: 0.95 }}
-          >
-            <Popup>
-              <strong>{g.title}</strong>
-              <br />
-              {g.area} · {g.day}
-            </Popup>
-          </CircleMarker>
-        ))}
+        <CircleMarker
+          center={[game.lat, game.lng]}
+          radius={8}
+          pathOptions={{ color: '#181206', fillColor: '#ffb300', fillOpacity: 0.95 }}
+        >
+          <Popup>
+            <strong>{game.title}</strong>
+            <br />
+            {game.area} · {game.day}
+          </Popup>
+        </CircleMarker>
       </MapContainer>
     </div>
   );
 }
 
 export default function LandingPage() {
-  const navigate = useNavigate();
   const [sport, setSport] = useState('All');
   const [query, setQuery] = useState('');
   const [activeStep, setActiveStep] = useState(0);
+  const [mapId, setMapId] = useState<string | null>(null);
+  const [authMode, setAuthMode] = useState<'signin' | 'signup' | null>(null);
   const stepsRef = useRef<HTMLDivElement>(null);
+  const { theme, toggle } = useTheme();
 
-  // Hero search plus chips filter the same sample list: map and cards move together.
+  // Floating auth modal: visitors sign in or up without leaving the page.
+  // After auth the landing gate sends them home on its own.
+  useEffect(() => {
+    if (!authMode) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setAuthMode(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [authMode]);
+
+  // Hero search plus chips filter the same sample list of games.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
     return SAMPLE_GAMES.filter((g) => {
@@ -163,15 +178,16 @@ export default function LandingPage() {
     return () => observer.disconnect();
   }, []);
 
-  const join = (id: string) => {
-    // Visitors sign in first, then land back here to finish joining.
-    navigate('/login', { state: { from: `/?game=${id}` } });
+  const join = (_id: string) => {
+    // Sample games are not joinable yet: signing up is the next step.
+    setAuthMode('signup');
   };
 
   return (
     <div className="landing">
       <header className="landing-header">
         <Link className="landing-logo" to="/">
+          <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={30} height={30} />
           Chabuka
         </Link>
         <nav className="landing-nav" aria-label="Primary">
@@ -180,23 +196,36 @@ export default function LandingPage() {
           <a href="#how">How it works</a>
         </nav>
         <div className="landing-auth">
-          <Link className="btn btn-ghost" to="/login">
+          <button className="btn btn-ghost" type="button" onClick={toggle} aria-label="Switch theme">
+            {theme === 'light' ? 'Dark' : 'Light'}
+          </button>
+          <button className="btn btn-ghost" type="button" onClick={() => setAuthMode('signin')}>
             Log in
-          </Link>
-          <Link className="btn btn-primary" to="/login">
+          </button>
+          <button className="btn btn-primary" type="button" onClick={() => setAuthMode('signup')}>
             Sign up
-          </Link>
+          </button>
         </div>
       </header>
 
       <main>
         <section className="landing-hero">
-          <div>
-            <h1>Find a game near you</h1>
-            <p className="muted">
-              Real-life sports matchmaking in Lusaka. Pick a sport and an area — the map and the
-              games below move together.
+          <div className="hero-band" style={{ backgroundImage: "url('/brand/hero-pitch.jpg')" }}>
+          <div className="hero-band-inner">
+            <h1 className="landing-title">Find your game. Book the court. Just show up.</h1>
+            <p className="hero-sub">
+              Chabuka matches you with open grassroots games and bookable venues near you —
+              football, basketball, netball and more. Pick a sport and an area, then open a
+              game below for its map and directions.
             </p>
+            <div className="actions-row landing-ctas">
+              <a className="btn btn-primary" href="#games">
+                Find a game
+              </a>
+              <button className="btn btn-hero-ghost" type="button" onClick={() => setAuthMode('signup')}>
+                Sign up free
+              </button>
+            </div>
             <div className="landing-search" role="search">
               <label className="field">
                 Sport
@@ -225,12 +254,12 @@ export default function LandingPage() {
               </label>
             </div>
           </div>
-          <SampleMap games={visible} />
+          </div>
         </section>
 
         <section id="games" aria-label="Open games near you">
           <div className="row">
-            <h2>Open games near you</h2>
+            <h2>Upcoming games</h2>
             <span className="tag">Sample data</span>
           </div>
           <div className="chips" role="group" aria-label="Filter by sport">
@@ -260,9 +289,28 @@ export default function LandingPage() {
               <p className="muted">
                 {g.title} · {g.area}
               </p>
-              <button className="btn btn-primary" type="button" onClick={() => join(g.id)}>
-                Join
-              </button>
+              <div className="actions-row">
+                <button className="btn btn-primary" type="button" onClick={() => join(g.id)}>
+                  Join
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  aria-expanded={mapId === g.id}
+                  onClick={() => setMapId(mapId === g.id ? null : g.id)}
+                >
+                  {mapId === g.id ? 'Hide map' : 'View on map'}
+                </button>
+                <a
+                  className="btn btn-ghost"
+                  href={`https://www.google.com/maps/dir/?api=1&destination=${g.lat},${g.lng}`}
+                  target="_blank"
+                  rel="noreferrer"
+                >
+                  Directions
+                </a>
+              </div>
+              {mapId === g.id ? <GameMiniMap game={g} /> : null}
             </div>
           ))}
         </section>
@@ -302,12 +350,13 @@ export default function LandingPage() {
           ))}
         </section>
 
-        <section className="card landing-cta" aria-label="Get started">
+        <section className="card landing-cta landing-cta-photo" aria-label="Get started">
+          <img className="brand-mark brand-mark-lg" src="/brand/logo-mark.png" alt="" width={56} height={56} />
           <h2>Your next game is already on</h2>
           <p className="muted">Sign in to join a side, book a court, or ask the Gaffer to sort it.</p>
-          <Link className="btn btn-primary" to="/login">
+          <button className="btn btn-primary" type="button" onClick={() => setAuthMode('signup')}>
             Sign up free
-          </Link>
+          </button>
         </section>
       </main>
 
@@ -318,6 +367,34 @@ export default function LandingPage() {
           <Link to="/community">Community</Link>
         </nav>
       </footer>
+      {authMode ? (
+        <div
+          className="modal-overlay modal-overlay-sports"
+          role="dialog"
+          aria-modal="true"
+          aria-label={authMode === 'signin' ? 'Log in' : 'Sign up'}
+          onClick={() => setAuthMode(null)}
+        >
+          <div className="modal-card" onClick={(e) => e.stopPropagation()}>
+            <div className="row">
+              <strong>{authMode === 'signin' ? 'Log in' : 'Sign up'}</strong>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                onClick={() => setAuthMode(null)}
+                aria-label="Close"
+              >
+                ✕
+              </button>
+            </div>
+            <AuthForm
+              key={authMode}
+              initialMode={authMode}
+              onAuthenticated={() => setAuthMode(null)}
+            />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

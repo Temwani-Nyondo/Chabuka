@@ -7,7 +7,8 @@ interface Props {
 
 export default function EmptyState({ title, hint, actionLabel, onAction }: Props) {
   return (
-    <div className="card empty">
+    <div className="card empty empty-brand">
+      <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={40} height={40} />
       <strong>{title}</strong>
       {hint ? <p className="muted">{hint}</p> : null}
       {actionLabel && onAction ? (

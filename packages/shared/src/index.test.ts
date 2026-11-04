@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   availableActions,
   createMatchSchema,
+  didFillMatch,
   formatEventLocation,
   levelSchema,
   onboardingSchema,
@@ -193,6 +194,17 @@ describe('availableActions', () => {
     expect(
       availableActions({ status: 'game_on', kind: 'players', isOrganiser: false, isParticipant: true, joinedCount: 3, capacity: 10 }),
     ).toEqual([]);
+  });
+});
+
+describe('didFillMatch', () => {
+  it('fires when a join takes the last seat', () => {
+    expect(didFillMatch(9, 10, 10)).toBe(true);
+  });
+
+  it('stays quiet on a normal join and on rejoin when full', () => {
+    expect(didFillMatch(3, 4, 10)).toBe(false);
+    expect(didFillMatch(10, 10, 10)).toBe(false);
   });
 });
 

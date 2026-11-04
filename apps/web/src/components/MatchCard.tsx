@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CTA_LABELS, LEVEL_LABELS, availableActions, formatEventLocation, googleCalendarUrl } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { downloadMatchIcs } from '../lib/api';
@@ -7,8 +7,9 @@ import type { MatchListing } from '../lib/matches';
 interface Props {
   listing: MatchListing;
   busy: boolean;
-  onJoin: (matchId: string) => void;
+  onJoin: (matchId: string, before?: number, title?: string) => void;
   onWithdraw: (matchId: string) => void;
+  highlighted?: boolean;
 }
 
 const dateFmt = new Intl.DateTimeFormat(undefined, {
@@ -19,10 +20,14 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
   minute: '2-digit',
 });
 
-export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) {
+export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlighted }: Props) {
   const { match, sport, venue, joinedCount, isParticipant, isOrganiser } = listing;
   const { session } = useAuth();
   const [error, setError] = useState<string | null>(null);
+  const cardRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (highlighted) cardRef.current?.scrollIntoView({ block: 'center' });
+  }, [highlighted]);
   const actions = availableActions({
     status: match.status,
     kind: match.kind,
@@ -38,13 +43,13 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw }: Props) 
       ? `https://www.google.com/maps/dir/?api=1&destination=${destLat},${destLng}`
       : null;
 
-  const act = (fn: (id: string) => void) => () => {
+  const act = (fn: (id: string, before?: number, title?: string) => void) => () => {
     setError(null);
-    fn(match.id);
+    fn(match.id, joinedCount, match.title);
   };
 
   return (
-    <article className="card">
+    <article ref={cardRef} className={highlighted ? 'card card-highlight' : 'card'}>
       <div className="row">
         <strong>{match.title}</strong>
         {isOrganiser ? <span className="tag">You host</span> : null}

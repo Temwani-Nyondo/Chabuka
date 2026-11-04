@@ -2,9 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import MatchCard from '../components/MatchCard';
+import MatchFoundOverlay from '../components/MatchFoundOverlay';
 import { useAuth } from '../auth/AuthContext';
 import { fetchMyMatches, fetchOpenMatches } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
+import { peekPendingInvite } from '../lib/pendingInvite';
 import { useMatchActions } from '../lib/useMatchActions';
 
 export default function HomePage() {
@@ -14,6 +16,11 @@ export default function HomePage() {
   const [nudge, setNudge] = useState<MatchListing | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [pendingInvite, setPendingInvite] = useState<string | null>(null);
+
+  useEffect(() => {
+    setPendingInvite(peekPendingInvite());
+  }, []);
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -36,18 +43,38 @@ export default function HomePage() {
       .finally(() => setLoading(false));
   }, [reload]);
 
-  const { busyId, actionError, onJoin, onWithdraw } = useMatchActions(reload);
+  const { busyId, actionError, onJoin, onWithdraw, celebration, dismissCelebration } =
+    useMatchActions(reload);
 
   return (
-    <div className="page">
-      <h1>What are you playing{firstName ? `, ${firstName}` : ''}?</h1>
+    <div className="page floodlight">
+      {celebration ? (
+        <MatchFoundOverlay title={celebration.title} onClose={dismissCelebration} />
+      ) : null}
+      <div className="page-head">
+        <span className="eyebrow">Home ground</span>
+        <h1>What are you playing{firstName ? `, ${firstName}` : ''}?</h1>
+        <p>Your games, your nudge, your way in.</p>
+      </div>
       {loading ? <p className="loading">Loading your games…</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {actionError ? <p className="error">{actionError}</p> : null}
+      {pendingInvite && !loading ? (
+        <div className="card card-highlight">
+          <div className="row">
+            <strong>You have a pending invite</strong>
+            <span className="tag">{pendingInvite}</span>
+          </div>
+          <p className="muted">Someone invited you — claim it to join them.</p>
+          <Link className="btn btn-primary" to={`/invite/${encodeURIComponent(pendingInvite)}`}>
+            Claim invite
+          </Link>
+        </div>
+      ) : null}
       {!loading && listings.length === 0 ? (
         <EmptyState
           title="No games yet"
-          hint="Find an open game on Explore, or tap + to create one."
+          hint="Find an open game on Explore, or tap Create to start one."
         />
       ) : null}
       {nudge && !loading ? (

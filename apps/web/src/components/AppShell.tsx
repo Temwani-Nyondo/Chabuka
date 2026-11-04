@@ -1,26 +1,78 @@
-import { useState } from 'react';
-import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
 import FindOpponentForm from './FindOpponentForm';
+import GafferPage from '../pages/GafferPage';
+import { useTheme } from '../lib/theme';
 
 type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
 
 export default function AppShell() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [mode, setMode] = useState<SheetMode>('menu');
+  const [gafferOpen, setGafferOpen] = useState(false);
   const navigate = useNavigate();
-  const location = useLocation();
-  const onGaffer = location.pathname.startsWith('/gaffer');
+  const { theme, toggle } = useTheme();
+
+  useEffect(() => {
+    if (!gafferOpen) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setGafferOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [gafferOpen]);
 
   const closeSheet = () => {
     setSheetOpen(false);
     setMode('menu');
   };
-  const tabClass = ({ isActive }: { isActive: boolean }) => (isActive ? 'tab tab-active' : 'tab');
+  const navClass = ({ isActive }: { isActive: boolean }) =>
+    isActive ? 'topbar-link topbar-link-active' : 'topbar-link';
 
   return (
     <div className="app">
+      <header className="topbar">
+        <button
+          className="topbar-brand"
+          type="button"
+          aria-label="Chabuka home"
+          onClick={() => navigate('/home')}
+        >
+          <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={26} height={26} />
+          <span>Chabuka</span>
+        </button>
+        <nav className="topbar-nav" aria-label="Primary">
+          <NavLink to="/home" end className={navClass}>
+            Home
+          </NavLink>
+          <NavLink to="/explore" className={navClass}>
+            Explore
+          </NavLink>
+          <NavLink to="/teams" className={navClass}>
+            Teams
+          </NavLink>
+          <NavLink to="/profile" className={navClass}>
+            Profile
+          </NavLink>
+        </nav>
+        <div className="topbar-actions">
+          <button
+            className="btn btn-primary topbar-create"
+            type="button"
+            onClick={() => {
+              setMode('menu');
+              setSheetOpen(true);
+            }}
+          >
+            Create
+          </button>
+          <button className="btn btn-ghost topbar-theme" type="button" onClick={toggle}>
+            {theme === 'light' ? 'Dark' : 'Light'}
+          </button>
+        </div>
+      </header>
       <main>
         <Outlet />
       </main>
@@ -58,29 +110,65 @@ export default function AppShell() {
               </>
             ) : (
               <>
-                <h2>Set something up</h2>
+                <h2>What do you want to do?</h2>
+                <p className="muted">Play</p>
                 <button className="sheet-item" type="button" onClick={() => setMode('match')}>
-                  <span>Create match</span>
-                  <span className="tag">Now</span>
+                  <span>Create a match</span>
+                  <span className="tag">Open game</span>
                 </button>
                 <button className="sheet-item" type="button" onClick={() => setMode('opponent')}>
-                  <span>Find opponent</span>
-                  <span className="tag">Now</span>
+                  <span>Challenge a team</span>
+                  <span className="tag">Team vs team</span>
                 </button>
+                <p className="muted">Organize</p>
                 <button className="sheet-item" type="button" onClick={() => setMode('team')}>
-                  <span>Create team</span>
-                  <span className="tag">Now</span>
+                  <span>Start a team</span>
+                  <span className="tag">Squad</span>
                 </button>
                 <button
                   className="sheet-item"
                   type="button"
                   onClick={() => {
                     closeSheet();
-                    navigate('/gaffer');
+                    navigate('/circles');
+                  }}
+                >
+                  <span>Join a circle</span>
+                  <span className="tag">Sport groups</span>
+                </button>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/venues/dashboard');
+                  }}
+                >
+                  <span>Register a venue</span>
+                  <span className="tag">Courts & pitches</span>
+                </button>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    navigate('/board');
+                  }}
+                >
+                  <span>Run a tournament</span>
+                  <span className="tag">Season board</span>
+                </button>
+                <p className="muted">Elsewhere</p>
+                <button
+                  className="sheet-item"
+                  type="button"
+                  onClick={() => {
+                    closeSheet();
+                    setGafferOpen(true);
                   }}
                 >
                   <span>Ask the Gaffer</span>
-                  <span className="tag">Now</span>
+                  <span className="tag">AI helper</span>
                 </button>
                 <button
                   className="sheet-item"
@@ -91,29 +179,7 @@ export default function AppShell() {
                   }}
                 >
                   <span>Notifications</span>
-                  <span className="tag">Now</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/circles');
-                  }}
-                >
-                  <span>Circles</span>
-                  <span className="tag">Now</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/board');
-                  }}
-                >
-                  <span>Create tournament</span>
-                  <span className="tag">Now</span>
+                  <span className="tag">Updates</span>
                 </button>
                 <button className="btn btn-ghost" type="button" onClick={closeSheet}>
                   Close
@@ -123,38 +189,30 @@ export default function AppShell() {
           </div>
         </div>
       ) : null}
-      {!onGaffer ? (
+      {!gafferOpen ? (
         <button
           className="fab-gaffer"
           type="button"
           aria-label="Ask the Gaffer"
-          onClick={() => navigate('/gaffer')}
+          onClick={() => setGafferOpen(true)}
         >
-          <span aria-hidden="true">G</span>
+          <span className="fab-gaffer-ball" aria-hidden="true">G</span>
+          Gaffer
         </button>
       ) : null}
-      <nav className="tabbar">
-        <NavLink to="/home" end className={tabClass}>
-          Home
-        </NavLink>
-        <NavLink to="/explore" className={tabClass}>
-          Explore
-        </NavLink>
-        <button
-          className="fab"
-          type="button"
-          aria-label="Set something up"
-          onClick={() => setSheetOpen(true)}
+      {gafferOpen ? (
+        <div
+          className="gaffer-overlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Ask the Gaffer"
+          onClick={() => setGafferOpen(false)}
         >
-          +
-        </button>
-        <NavLink to="/teams" className={tabClass}>
-          Teams
-        </NavLink>
-        <NavLink to="/profile" className={tabClass}>
-          Profile
-        </NavLink>
-      </nav>
+          <div className="gaffer-panel" onClick={(e) => e.stopPropagation()}>
+            <GafferPage onClose={() => setGafferOpen(false)} />
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

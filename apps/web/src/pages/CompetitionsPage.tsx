@@ -133,7 +133,11 @@ export default function CompetitionsPage() {
 
   return (
     <div className="page">
-      <h1>Season</h1>
+      <div className="page-head">
+        <span className="eyebrow">Season board</span>
+        <h1>Season</h1>
+        <p>Tournaments first: fixtures, results, standings, announcements.</p>
+      </div>
       {reveal ? (
         <MatchFoundOverlay
           home={reveal.home}
@@ -143,7 +147,6 @@ export default function CompetitionsPage() {
           onClose={() => setReveal(null)}
         />
       ) : null}
-      <p className="muted">Tournaments first: fixtures, results, standings, announcements.</p>
       {loading ? <p className="loading">Loading tournaments…</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {!loading && list.length === 0 && !showForm ? (

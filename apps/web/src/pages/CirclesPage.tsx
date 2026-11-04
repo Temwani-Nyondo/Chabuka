@@ -185,8 +185,11 @@ export default function CirclesPage() {
 
   return (
     <div className="page">
-      <h1>Circles</h1>
-      <p className="muted">Groups around a sport and place. Events posted in your circles find you.</p>
+      <div className="page-head">
+        <span className="eyebrow">Your crowds</span>
+        <h1>Circles</h1>
+        <p>Groups around a sport and place. Events posted in your circles find you.</p>
+      </div>
       {loading ? <p className="loading">Loading circles…</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {!loading && list.length === 0 && !showForm ? (

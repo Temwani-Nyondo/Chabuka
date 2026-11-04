@@ -180,6 +180,51 @@ describe('runHelperTurn', () => {
     expect((calls[calls.length - 1]?.[0]?.tools as unknown[]).length).toBe(0);
   });
 
+  it('attaches linkable ids to created matches and bookings', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({
+          toolCalls: [{ id: 'c1', name: 'create_match', arguments: '{"title":"Saturday run"}' }],
+        }),
+      )
+      .mockResolvedValueOnce(
+        result({
+          toolCalls: [{ id: 'c2', name: 'request_booking', arguments: '{"venueId":"v1"}' }],
+        }),
+      )
+      .mockResolvedValueOnce(result({ content: 'Game created and venue requested.' }));
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: 'organiser', actions: ['withdraw'], matchId: 'm-1' })
+      .mockResolvedValueOnce({ state: 'requested', actions: ['cancel_booking'], booking: { id: 'b-1' } });
+
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'Set it up.' }, { chat, execute });
+
+    expect(turn.actionsTaken).toEqual([
+      { name: 'create_match', ok: true, detail: 'match:m-1' },
+      { name: 'request_booking', ok: true, detail: 'booking:b-1' },
+    ]);
+  });
+
+  it('sends past Gaffer replies as user-role context', async () => {
+    const chat = vi.fn(async () => result({ content: 'ok' }));
+    const history = [
+      { role: 'user' as const, content: 'Find me a game.' },
+      { role: 'assistant' as const, content: 'Two games are open.' },
+    ];
+
+    await runHelperTurn({ db, userId: 'u1', message: 'Book one.', history }, { chat });
+
+    const sent = (chat.mock.calls as unknown[][])[0]?.[0] as {
+      messages: { role: string; content: string }[];
+    };
+    const roles = sent.messages.map((m) => m.role);
+    expect(roles).not.toContain('assistant');
+    expect(roles).toEqual(['system', 'user', 'user', 'user']);
+    expect(sent.messages[2]?.content).toContain('Gaffer previously said: Two games are open.');
+  });
+
   it('falls back to an action summary when even the closing round is empty', async () => {
     const chat = vi.fn(async () =>
       result({ toolCalls: [{ id: 'c1', name: 'get_my_brief', arguments: '{}' }] }),

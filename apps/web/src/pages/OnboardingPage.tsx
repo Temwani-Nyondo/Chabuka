@@ -51,6 +51,21 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null);
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [step, setStep] = useState(0);
+
+  const stepError = (e: FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    if (step === 0 && (!name.trim() || !area.trim())) {
+      setError('Add your name and area to continue.');
+      return;
+    }
+    if (step === 1 && picked.length === 0) {
+      setError('Pick at least one sport to continue.');
+      return;
+    }
+    setStep((s) => Math.min(2, s + 1));
+  };
 
   useEffect(() => {
     if (!supabase) {
@@ -153,113 +168,151 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="page page-narrow">
-      <h1>Your player profile</h1>
-      <p className="muted">Thirty seconds, then you are in.</p>
+    <div className="page page-narrow floodlight">
+      <div className="page-head">
+        <span className="eyebrow eyebrow-accent">First whistle</span>
+        <h1>Your player profile</h1>
+        <p>Thirty seconds, then you are in.</p>
+      </div>
       {loadError ? <p className="error">{loadError}</p> : null}
+      <div className="wizard-dots" aria-hidden="true">
+        {[0, 1, 2].map((i) => (
+          <span key={i} className={i <= step ? 'wizard-dot wizard-dot-done' : 'wizard-dot'} />
+        ))}
+      </div>
       <form
         className="card"
         onSubmit={(e) => {
-          void submit(e);
+          if (step < 2) stepError(e);
+          else void submit(e);
         }}
       >
-        <label className="field">
-          Name
-          <input
-            className="input"
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="Your name"
-            maxLength={80}
-          />
-        </label>
-        <label className="field">
-          Area
-          <input
-            className="input"
-            value={area}
-            onChange={(e) => setArea(e.target.value)}
-            placeholder="e.g. Woodlands"
-            maxLength={80}
-          />
-        </label>
-        <label className="field">
-          Town / locality (optional)
-          <input
-            className="input"
-            value={town}
-            onChange={(e) => setTown(e.target.value)}
-            placeholder="e.g. Lusaka"
-            maxLength={80}
-          />
-        </label>
-        <label className="field">
-          Year of birth (optional — shown only as an age band)
-          <input
-            className="input"
-            inputMode="numeric"
-            value={birthYear}
-            onChange={(e) => setBirthYear(e.target.value)}
-            placeholder="e.g. 1998"
-            maxLength={4}
-          />
-        </label>
-        <label className="field">
-          Gender (optional)
-          <input
-            className="input"
-            value={gender}
-            onChange={(e) => setGender(e.target.value)}
-            placeholder="How you describe yourself"
-            maxLength={40}
-          />
-        </label>
-        <label className="field">
-          Photo (optional)
-          <input className="input" type="file" accept="image/*" onChange={onPhoto} />
-        </label>
-        {preview ?? remoteAvatar ? (
-          <img
-            className="avatar-preview"
-            src={(preview ?? remoteAvatar) as string}
-            alt="Profile photo preview"
-          />
+        {step === 0 ? (
+          <>
+            <h2>Who are you?</h2>
+            <label className="field">
+              Name
+              <input
+                className="input"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Your name"
+                maxLength={80}
+              />
+            </label>
+            <label className="field">
+              Photo (optional)
+              <input className="input" type="file" accept="image/*" onChange={onPhoto} />
+            </label>
+            {preview ?? remoteAvatar ? (
+              <img
+                className="avatar-preview"
+                src={(preview ?? remoteAvatar) as string}
+                alt="Profile photo preview"
+              />
+            ) : null}
+            <label className="field">
+              Area
+              <input
+                className="input"
+                value={area}
+                onChange={(e) => setArea(e.target.value)}
+                placeholder="e.g. Woodlands"
+                maxLength={80}
+              />
+            </label>
+            <label className="field">
+              Town / locality (optional)
+              <input
+                className="input"
+                value={town}
+                onChange={(e) => setTown(e.target.value)}
+                placeholder="e.g. Lusaka"
+                maxLength={80}
+              />
+            </label>
+          </>
         ) : null}
-        <div className="field">
-          <span>My sports</span>
-          <div className="chips">
-            {sports.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className={picked.includes(s.id) ? 'chip chip-active' : 'chip'}
-                onClick={() => toggleSport(s.id)}
-              >
-                {s.name}
-              </button>
-            ))}
-          </div>
-        </div>
-        <div className="field">
-          <span>Level</span>
-          <div className="chips">
-            {LEVELS.map((l) => (
-              <button
-                key={l.value}
-                type="button"
-                className={level === l.value ? 'chip chip-active' : 'chip'}
-                onClick={() => setLevel(l.value)}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
-        </div>
+        {step === 1 ? (
+          <>
+            <h2>What do you play?</h2>
+            <div className="field">
+              <span>My sports</span>
+              <div className="chips">
+                {sports.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    className={picked.includes(s.id) ? 'chip chip-active' : 'chip'}
+                    onClick={() => toggleSport(s.id)}
+                  >
+                    {s.name}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="field">
+              <span>Level</span>
+              <div className="chips">
+                {LEVELS.map((l) => (
+                  <button
+                    key={l.value}
+                    type="button"
+                    className={level === l.value ? 'chip chip-active' : 'chip'}
+                    onClick={() => setLevel(l.value)}
+                  >
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </>
+        ) : null}
+        {step === 2 ? (
+          <>
+            <h2>Almost done</h2>
+            <p className="muted">Optional — helps place you in the right games.</p>
+            <label className="field">
+              Year of birth (shown only as an age band)
+              <input
+                className="input"
+                inputMode="numeric"
+                value={birthYear}
+                onChange={(e) => setBirthYear(e.target.value)}
+                placeholder="e.g. 1998"
+                maxLength={4}
+              />
+            </label>
+            <label className="field">
+              Gender (optional)
+              <input
+                className="input"
+                value={gender}
+                onChange={(e) => setGender(e.target.value)}
+                placeholder="How you describe yourself"
+                maxLength={40}
+              />
+            </label>
+          </>
+        ) : null}
         {warning ? <p className="hint">{warning}</p> : null}
         {error ? <p className="error">{error}</p> : null}
-        <button className="btn btn-primary" type="submit" disabled={busy}>
-          {busy ? 'Saving…' : 'Start playing'}
-        </button>
+        <div className="wizard-nav">
+          {step > 0 ? (
+            <button className="btn" type="button" onClick={() => { setError(null); setStep((s) => s - 1); }}>
+              Back
+            </button>
+          ) : null}
+          {step < 2 ? (
+            <button className="btn btn-primary" type="submit">
+              Continue
+            </button>
+          ) : (
+            <button className="btn btn-primary" type="submit" disabled={busy}>
+              {busy ? 'Saving…' : 'Start playing'}
+            </button>
+          )}
+        </div>
       </form>
       <button
         className="btn btn-ghost"
