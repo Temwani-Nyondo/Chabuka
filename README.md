@@ -10,6 +10,23 @@ arranged, not discussed: every screen moves someone from intent to a real game.
 Built for the Meta Global AI Developer Hackathon, Indie Developer track,
 "Build for Your World" (27 Oct – 4 Nov 2026). Solo build.
 
+## Try the live demo
+
+Sign in with any of these seeded accounts (all share one password):
+
+Password: `Chabuka demo 2026!`
+
+- `player1@demo.chabuka` (also `player2` … `player60`) — regular player.
+  Join the 9/10 tonight game to trigger the Match Found reveal live.
+- `captain@demo.chabuka` — team owner and captain. Create teams and
+  challenges, send invites, talk or chat to the Gaffer.
+- `organiser@demo.chabuka` — tournament organiser and venue-side flows.
+  Post results, confirm venue bookings.
+
+These are public demo accounts on seeded data — reset any mischief with
+`node supabase/seed/seed.mjs` followed by
+`node supabase/seed/simulate-activity.mjs`.
+
 ## What was built during the hackathon
 
 - 2026-10-27 (Day 1): monorepo scaffold, Supabase schema (sports, profiles,
