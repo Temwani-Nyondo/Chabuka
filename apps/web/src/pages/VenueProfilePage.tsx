@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import VenuePhoto from '../components/VenuePhoto';
 import type { Venue } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { cancelBookingAction, requestBookingAction } from '../lib/api';
@@ -19,6 +20,89 @@ const slotFmt = new Intl.DateTimeFormat(undefined, {
   minute: '2-digit',
 });
 
+const monthFmt = new Intl.DateTimeFormat(undefined, { month: 'long', year: 'numeric' });
+
+// Local calendar day, Mon-first grid. Days holding slots are tappable.
+function dayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function SlotCalendar({
+  slots,
+  viewYear,
+  viewMonth,
+  onPrevMonth,
+  onNextMonth,
+  selectedDay,
+  onSelectDay,
+}: {
+  slots: VenueSlot[];
+  viewYear: number;
+  viewMonth: number;
+  onPrevMonth: () => void;
+  onNextMonth: () => void;
+  selectedDay: string | null;
+  onSelectDay: (day: string | null) => void;
+}) {
+  const counts = new Map<string, number>();
+  const today = dayKey(new Date());
+  for (const s of slots) {
+    const k = dayKey(new Date(s.starts_at));
+    counts.set(k, (counts.get(k) ?? 0) + 1);
+  }
+  const first = new Date(viewYear, viewMonth, 1);
+  const lead = (first.getDay() + 6) % 7;
+  const daysInMonth = new Date(viewYear, viewMonth + 1, 0).getDate();
+  const cells: (number | null)[] = [...Array<null>(lead).fill(null)];
+  for (let d = 1; d <= daysInMonth; d += 1) cells.push(d);
+  while (cells.length % 7 !== 0) cells.push(null);
+
+  return (
+    <div className="card cal">
+      <div className="row">
+        <button className="btn btn-ghost cal-nav" type="button" onClick={onPrevMonth} aria-label="Previous month">
+          ←
+        </button>
+        <strong>{monthFmt.format(first)}</strong>
+        <button className="btn btn-ghost cal-nav" type="button" onClick={onNextMonth} aria-label="Next month">
+          →
+        </button>
+      </div>
+      <div className="cal-grid" role="grid" aria-label="Days with free slots">
+        {['M', 'T', 'W', 'T', 'F', 'S', 'S'].map((w, i) => (
+          <span key={i} className="cal-dow">{w}</span>
+        ))}
+        {cells.map((d, i) => {
+          if (d === null) return <span key={`b-${i}`} />;
+          const key = dayKey(new Date(viewYear, viewMonth, d));
+          const n = counts.get(key) ?? 0;
+          const past = key < today;
+          if (n === 0 || past) {
+            return (
+              <span key={key} className={key === today ? 'cal-day cal-today' : 'cal-day cal-empty'}>
+                {d}
+              </span>
+            );
+          }
+          return (
+            <button
+              key={key}
+              type="button"
+              className={selectedDay === key ? 'cal-day cal-active' : 'cal-day cal-free'}
+              aria-pressed={selectedDay === key}
+              aria-label={`${d}: ${n} free slot${n === 1 ? '' : 's'}`}
+              onClick={() => onSelectDay(selectedDay === key ? null : key)}
+            >
+              {d}
+              <span className="cal-count">{n}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Venue profile (Amendment 3): listed details, free schedule, booking.
 // Every booking is free in the MVP — no payment step anywhere.
 export default function VenueProfilePage() {
@@ -29,6 +113,9 @@ export default function VenueProfilePage() {
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [customTime, setCustomTime] = useState('');
+  const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
+  const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
+  const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -93,6 +180,7 @@ export default function VenueProfilePage() {
       </div>
       {venue ? (
         <>
+          <VenuePhoto photos={venue.photos} name={venue.name} banner />
           <div className="card">
             <div className="row">
               <strong>Free booking</strong>
@@ -110,44 +198,71 @@ export default function VenueProfilePage() {
             ) : null}
           </div>
 
-          <h2>Schedule — book a free slot</h2>
+          <h2>Schedule — pick a day</h2>
           {slots.length === 0 ? (
             <p className="hint">No listed slots yet. Request a time below and the venue confirms.</p>
           ) : (
-            slots.map((slot) => {
-              const mine = bookings.find(
-                (b) => b.slot_id === slot.id && (b.status === 'requested' || b.status === 'confirmed'),
-              );
-              return (
-                <article className="card" key={slot.id}>
-                  <div className="row">
-                    <strong>
-                      {slotFmt.format(new Date(slot.starts_at))} – {slotFmt.format(new Date(slot.ends_at))}
-                    </strong>
-                    <span className="tag">{slot.capacity} court(s)/pitch(es)</span>
-                  </div>
-                  {mine ? (
-                    <p className="muted">Your booking: {mine.status}</p>
-                  ) : (
-                    <button
-                      className="btn btn-primary"
-                      type="button"
-                      disabled={busy || !token}
-                      onClick={() =>
-                        token &&
-                        void act(
-                          () => requestBookingAction({ venueId: venue.id, slotId: slot.id }, token),
-                          'Requested — the venue confirms, then your free ticket appears here.',
-                        )
-                      }
-                    >
-                      Book free
-                    </button>
-                  )}
-                </article>
-              );
-            })
+            <SlotCalendar
+              slots={slots}
+              viewYear={viewYear}
+              viewMonth={viewMonth}
+              onPrevMonth={() => {
+                const d = new Date(viewYear, viewMonth - 1, 1);
+                const now = new Date();
+                if (d.getFullYear() < now.getFullYear() || (d.getFullYear() === now.getFullYear() && d.getMonth() < now.getMonth())) return;
+                setViewYear(d.getFullYear());
+                setViewMonth(d.getMonth());
+                setSelectedDay(null);
+              }}
+              onNextMonth={() => {
+                const d = new Date(viewYear, viewMonth + 1, 1);
+                setViewYear(d.getFullYear());
+                setViewMonth(d.getMonth());
+                setSelectedDay(null);
+              }}
+              selectedDay={selectedDay}
+              onSelectDay={setSelectedDay}
+            />
           )}
+          {selectedDay ? (
+            slots
+              .filter((slot) => dayKey(new Date(slot.starts_at)) === selectedDay)
+              .map((slot) => {
+                const mine = bookings.find(
+                  (b) => b.slot_id === slot.id && (b.status === 'requested' || b.status === 'confirmed'),
+                );
+                return (
+                  <article className="card" key={slot.id}>
+                    <div className="row">
+                      <strong>
+                        {slotFmt.format(new Date(slot.starts_at))} – {slotFmt.format(new Date(slot.ends_at))}
+                      </strong>
+                      <span className="tag">{slot.capacity} court(s)/pitch(es)</span>
+                    </div>
+                    {mine ? (
+                      <p className="muted">Your booking: {mine.status}</p>
+                    ) : (
+                      <button
+                        className="btn btn-primary"
+                        type="button"
+                        disabled={busy || !token}
+                        onClick={() =>
+                          token &&
+                          void act(
+                            () => requestBookingAction({ venueId: venue.id, slotId: slot.id }, token),
+                            'Requested — the venue confirms, then your free ticket appears here.',
+                          )
+                        }
+                      >
+                        Book free
+                      </button>
+                    )}
+                  </article>
+                );
+              })
+          ) : slots.length > 0 ? (
+            <p className="hint">Tap a highlighted day to see its free slots.</p>
+          ) : null}
 
           <div className="card">
             <strong>Request another time</strong>

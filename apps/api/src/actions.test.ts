@@ -32,6 +32,7 @@ import {
   setGameTypes,
   setPosition,
   setRole,
+  setSports,
   unblockUser,
   updateCircle,
   updateProfile,
@@ -190,6 +191,7 @@ function fakeDb() {
   const circles = new Map<string, Row>();
   const circleMembers = new Map<string, Row>();
   const sports = new Map<string, Row>();
+  const userSports = new Map<string, Row>();
   const invites = new Map<string, Row>();
   const reports = new Map<string, Row>();
   const blocks = new Map<string, Row>();
@@ -222,6 +224,9 @@ function fakeDb() {
         return new FakeQuery(gameTypes, (r) => `${String(r['user_id'])}:${String(r['game_type'])}`);
       }
       if (table === 'sports') return new FakeQuery(sports, (r) => String(r['id']));
+      if (table === 'user_sports') {
+        return new FakeQuery(userSports, (r) => `${String(r['user_id'])}:${String(r['sport_id'])}`);
+      }
       if (table === 'circles') return new FakeQuery(circles, (r) => String(r['id']));
       if (table === 'circle_members') {
         return new FakeQuery(circleMembers, (r) => `${String(r['circle_id'])}:${String(r['user_id'])}`);
@@ -234,7 +239,7 @@ function fakeDb() {
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, invites, reports, blocks, entries, circles, circleMembers };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, userSports, invites, reports, blocks, entries, circles, circleMembers };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -550,6 +555,23 @@ describe('onboarding profile (Amendment 3)', () => {
     expect(out.profile['terms_accepted_at']).toBe('2026-11-01T00:00:00.000Z');
     expect(out.profile['name']).toBe('Old');
     await expect(updateProfile(client, PLAYER_A, {})).rejects.toMatchObject({ status: 400 });
+  });
+
+  it('replaces the sports lineup with one level', async () => {
+    const { client, userSports } = fakeDb();
+    const out = (await setSports(client, PLAYER_A, {
+      sportIds: ['11111111-1111-4111-8111-111111111111', '22222222-2222-4222-8222-222222222222'],
+      level: 'recreational',
+    })) as { state: string; sports: number };
+    expect(out.state).toBe('saved');
+    expect(out.sports).toBe(2);
+    expect(userSports.size).toBe(2);
+    const out2 = (await setSports(client, PLAYER_A, {
+      sportIds: ['33333333-3333-4333-8333-333333333333'],
+      level: 'competitive',
+    })) as { state: string; sports: number };
+    expect(out2.sports).toBe(1);
+    expect(userSports.size).toBe(1);
   });
 
   it('replaces availability slots', async () => {

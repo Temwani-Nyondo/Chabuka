@@ -147,14 +147,31 @@ async function main() {
   });
   console.log('teams ready:', teams.length);
 
-  // --- venues: top the seeded six up to eight -------------------------------
+  // --- venues: top the seeded six up to eight, then photo all eight --------
+  // Local shots in apps/web/public/venues (no network dependency); the web
+  // card still falls back to a styled banner if one ever fails to load.
+  const img = (name) => `/venues/${name}.jpg`;
+  const VENUE_PHOTOS = {
+    'Woodlands Community Pitch': [img('woodlands')],
+    'Kabulonga Sports Ground': [img('kabulonga')],
+    'Chilenje Five-a-Side Arena': [img('chilenje')],
+    'UNZA Great East Courts': [img('unza')],
+    'Olympia Park Padel Club': [img('olympia')],
+    'Matero Community Courts': [img('matero')],
+    'Libala Community Ground': [img('libala')],
+    'Ibex Hill Trail Gate': [img('ibex')],
+  };
   for (const v of [
     { name: 'Libala Community Ground', area: 'Libala', lat: -15.455, lng: 28.315, sports: ['Football', 'netball'], facility_types: ['grass pitch'], price_note: 'Free - community ground' },
     { name: 'Ibex Hill Trail Gate', area: 'Ibex Hill', lat: -15.435, lng: 28.365, sports: ['hiking', 'marathon'], facility_types: ['trailhead'], price_note: 'Free - public trail' },
   ]) {
     const found = await api(`/rest/v1/venues?name=eq.${encodeURIComponent(v.name)}&select=id`);
-    if (!found.length) await api('/rest/v1/venues', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify(v) });
+    if (!found.length) await api('/rest/v1/venues', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ ...v, photos: VENUE_PHOTOS[v.name] ?? [] }) });
   }
+  for (const [name, photos] of Object.entries(VENUE_PHOTOS)) {
+    await api(`/rest/v1/venues?name=eq.${encodeURIComponent(name)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ photos }) });
+  }
+  console.log('venues ready: 8 with photos');
   const venues = await api('/rest/v1/venues?select=id,name,area,lat,lng,sports');
 
   // --- open matches (10, next 7 days, varied fill) ---------------------------
@@ -243,12 +260,30 @@ async function main() {
     method: 'POST',
     body: JSON.stringify({ name: 'Woodlands Football', sport_id: sportId.get('Football'), area: 'Woodlands', description: 'Pickup and league football in Woodlands.', age_bands: ['18–24', '25–34'], genders: [], levels: ['recreational', 'intermediate'], created_by: people[1].id }),
   });
+  const [mara] = await api('/rest/v1/circles', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Lusaka Marathon Club', sport_id: sportId.get('marathon'), area: 'Lusaka', description: 'Road runs, 10Ks and marathon prep.', age_bands: [], genders: [], levels: [], created_by: people[7].id }),
+  });
+  const [hoops] = await api('/rest/v1/circles', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Avondale Hoops', sport_id: sportId.get('basketball'), area: 'Avondale', description: 'Runs and pickup basketball in Avondale.', age_bands: [], genders: [], levels: [], created_by: people[9].id }),
+  });
+  const [net] = await api('/rest/v1/circles', {
+    method: 'POST',
+    body: JSON.stringify({ name: 'Northmead Netball', sport_id: sportId.get('netball'), area: 'Northmead', description: 'Social netball, all welcome.', age_bands: [], genders: [], levels: [], created_by: people[11].id }),
+  });
   const circleMembers = [];
   for (let i = 0; i < 18; i += 1) circleMembers.push({ circle_id: hike.id, user_id: people[i % people.length].id });
   for (let i = 0; i < 12; i += 1) circleMembers.push({ circle_id: foot.id, user_id: people[(i + 3) % people.length].id });
+  for (let i = 0; i < 15; i += 1) circleMembers.push({ circle_id: mara.id, user_id: people[(i + 5) % people.length].id });
+  for (let i = 0; i < 10; i += 1) circleMembers.push({ circle_id: hoops.id, user_id: people[(i + 8) % people.length].id });
+  for (let i = 0; i < 10; i += 1) circleMembers.push({ circle_id: net.id, user_id: people[(i + 11) % people.length].id });
   await api('/rest/v1/circle_members', { method: 'POST', headers: { Prefer: 'resolution=ignore-duplicates,return=minimal' }, body: JSON.stringify(circleMembers) });
   await api(`/rest/v1/matches?title=eq.${encodeURIComponent('Weekend hike: Lusaka trails')}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ circle_id: hike.id }) }).catch(() => {});
-  console.log('circles ready: 2');
+  await api(`/rest/v1/matches?title=eq.${encodeURIComponent('Sunrise 10K run')}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ circle_id: mara.id }) }).catch(() => {});
+  await api(`/rest/v1/matches?title=eq.${encodeURIComponent('Sunday basketball run')}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ circle_id: hoops.id }) }).catch(() => {});
+  await api(`/rest/v1/matches?title=eq.${encodeURIComponent('Netball social')}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ circle_id: net.id }) }).catch(() => {});
+  console.log('circles ready: 5');
   console.log('SEED_DONE');
 }
 

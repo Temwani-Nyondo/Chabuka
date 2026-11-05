@@ -4,7 +4,7 @@ import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
 import { createCircleAction, joinCircleAction, leaveCircleAction, updateCircleAction } from '../lib/api';
 import { uploadImage } from '../lib/upload';
-import { fetchCircleEvents, fetchCircles } from '../lib/circles';
+import { fetchCircleFeed, fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
 import { fetchSports } from '../lib/matches';
 import { supabase } from '../lib/supabase';
@@ -35,7 +35,7 @@ export default function CirclesPage() {
   const [list, setList] = useState<CircleListing[]>([]);
   const [levels, setLevels] = useState<Record<string, string>>({});
   const [sports, setSports] = useState<Sport[]>([]);
-  const [events, setEvents] = useState<Record<string, Match[]>>({});
+  const [events, setEvents] = useState<Record<string, { match: Match; tagged: boolean }[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
@@ -98,18 +98,22 @@ export default function CirclesPage() {
     }
   };
 
-  const toggleEvents = async (circleId: string) => {
-    if (events[circleId]) {
+  const toggleEvents = async (circle: Circle) => {
+    if (events[circle.id]) {
       setEvents((prev) => {
         const next = { ...prev };
-        delete next[circleId];
+        delete next[circle.id];
         return next;
       });
       return;
     }
+    if (!user) {
+      setActionError('Not signed in.');
+      return;
+    }
     try {
-      const rows = await fetchCircleEvents(circleId);
-      setEvents((prev) => ({ ...prev, [circleId]: rows }));
+      const rows = await fetchCircleFeed(circle, user.id);
+      setEvents((prev) => ({ ...prev, [circle.id]: rows }));
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'Could not load circle events.');
     }
@@ -303,7 +307,7 @@ export default function CirclesPage() {
             ) : (
               <button className="btn btn-primary" type="button" disabled={busy} onClick={() => { void run((t) => joinCircleAction(circle.id, t)); }}>Join circle</button>
             )}
-            <button className="btn" type="button" onClick={() => { void toggleEvents(circle.id); }}>
+            <button className="btn" type="button" onClick={() => { void toggleEvents(circle); }}>
               {events[circle.id] ? 'Hide events' : 'Events'}
             </button>
           </div>
@@ -345,10 +349,13 @@ export default function CirclesPage() {
           ) : null}
           {events[circle.id] ? (
             events[circle.id]!.length === 0 ? (
-              <p className="muted">No upcoming events in this circle yet.</p>
+              <p className="muted">Nothing on yet — games in this circle&apos;s sport land here automatically.</p>
             ) : (
-              events[circle.id]!.map((m) => (
-                <p key={m.id}>{m.title} · {new Date(m.starts_at).toLocaleString()}</p>
+              events[circle.id]!.map(({ match: m, tagged }) => (
+                <p key={m.id}>
+                  {m.title} · {new Date(m.starts_at).toLocaleString()}
+                  {tagged ? '' : ' · from Explore'}
+                </p>
               ))
             )
           ) : null}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Fragment, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ageBand } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
@@ -8,6 +8,11 @@ import { fetchMyTeams, isCaptainRole } from '../lib/teams';
 import type { MyTeam } from '../lib/teams';
 import { fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
+import { fetchMyBookings, fetchVenues } from '../lib/venues';
+import type { Booking } from '../lib/venues';
+import { setAvailabilityAction, setGameTypesAction } from '../lib/api';
+import { GAME_TYPES, TIME_BANDS, WEEK_DAYS } from '@chabuka/shared';
+import type { GameType, TimeBand } from '@chabuka/shared';
 import { SKINS, useSkin, useTheme } from '../lib/theme';
 import { API_BASE, fetchAgentTokens, mintAgentToken, revokeAgentToken } from '../lib/api';
 import type { AgentTokenRow } from '../lib/api';
@@ -38,6 +43,23 @@ export default function ProfilePage() {
   const [uploadingImg, setUploadingImg] = useState(false);
   const [imgError, setImgError] = useState<string | null>(null);
 
+  const removePicture = async (kind: 'photo' | 'cover') => {
+    if (!user || !supabase) return;
+    setUploadingImg(true);
+    setImgError(null);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .upsert({ id: user.id, ...(kind === 'photo' ? { photo_url: null } : { cover_url: null }) });
+      if (error) throw new Error(error.message);
+      await refreshProfile();
+    } catch (err) {
+      setImgError(err instanceof Error ? err.message : 'Could not remove the image.');
+    } finally {
+      setUploadingImg(false);
+    }
+  };
+
   const uploadPicture = async (kind: 'photo' | 'cover', file: File) => {
     if (!user || !supabase) return;
     setUploadingImg(true);
@@ -59,6 +81,15 @@ export default function ProfilePage() {
   const [myTeams, setMyTeams] = useState<MyTeam[]>([]);
   const [myCircles, setMyCircles] = useState<CircleListing[]>([]);
   const [upcoming, setUpcoming] = useState<{ id: string; title: string; startsAt: string }[]>([]);
+  const [myBookings, setMyBookings] = useState<Booking[]>([]);
+  const [venueNames, setVenueNames] = useState<Map<string, string>>(new Map());
+  const [week, setWeek] = useState<Set<string>>(new Set());
+  const [weekSaved, setWeekSaved] = useState<Set<string>>(new Set());
+  const [weekBusy, setWeekBusy] = useState(false);
+  const [weekMsg, setWeekMsg] = useState<string | null>(null);
+  const [gameTypes, setGameTypes] = useState<GameType[]>([]);
+  const [gameTypesBusy, setGameTypesBusy] = useState(false);
+  const [gameTypesMsg, setGameTypesMsg] = useState<string | null>(null);
   const { theme, toggle } = useTheme();
   const { skin, setSkin } = useSkin();
   const [tokens, setTokens] = useState<AgentTokenRow[]>([]);
@@ -93,6 +124,25 @@ export default function ProfilePage() {
     void reloadTokens();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- load once per login token
   }, [accessToken]);
+
+  useEffect(() => {
+    if (!user || !supabase) return;
+    void Promise.all([
+      supabase.from('user_availability').select('day,time_band').eq('user_id', user.id),
+      supabase.from('user_game_types').select('game_type').eq('user_id', user.id),
+    ]).then(([{ data: avail }, { data: types }]) => {
+      const set = new Set(
+        ((avail ?? []) as { day: number; time_band: string }[]).map((s) => `${s.day}-${s.time_band}`),
+      );
+      setWeek(set);
+      setWeekSaved(new Set(set));
+      setGameTypes(
+        ((types ?? []) as { game_type: string }[]).map((t) => t.game_type).filter((g): g is GameType =>
+          (GAME_TYPES as readonly string[]).includes(g),
+        ),
+      );
+    }).catch(() => undefined);
+  }, [user]);
 
   useEffect(() => {
     const db = supabase;
@@ -164,12 +214,23 @@ export default function ProfilePage() {
       void fetchCircles(user.id)
         .then((all) => setMyCircles(all.filter((c) => c.isMember).slice(0, 6)))
         .catch(() => setMyCircles([]));
+      void Promise.all([fetchVenues().catch(() => []), fetchMyBookings(user.id).catch(() => [])]).then(
+        ([allVenues, bookings]) => {
+          setVenueNames(new Map(allVenues.map((v) => [v.id, v.name])));
+          setMyBookings(
+            bookings
+              .filter((b) => b.status === 'requested' || b.status === 'confirmed')
+              .sort((a, b) => (a.requested_starts_at ?? '').localeCompare(b.requested_starts_at ?? '')),
+          );
+        },
+      );
     };
     void load().catch(() => {
       setLocker({ gamesPlayed: 0, streakWeeks: 0, nextGame: null, badges: [] });
       setUpcoming([]);
       setMyTeams([]);
       setMyCircles([]);
+      setMyBookings([]);
     });
   }, [user]);
 
@@ -188,6 +249,67 @@ export default function ProfilePage() {
       setTokenError(err instanceof Error ? err.message : 'Could not create the token.');
     } finally {
       setTokenBusy(false);
+    }
+  };
+
+  const toggleSlot = (day: number, band: TimeBand) => {
+    const key = `${day}-${band}`;
+    setWeek((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else if (next.size < 21) next.add(key);
+      return next;
+    });
+    setWeekMsg(null);
+  };
+
+  const weekDirty = week.size !== weekSaved.size || [...week].some((k) => !weekSaved.has(k));
+
+  const saveWeek = async () => {
+    if (!accessToken) {
+      setWeekMsg('Not signed in.');
+      return;
+    }
+    setWeekBusy(true);
+    setWeekMsg(null);
+    try {
+      await setAvailabilityAction(
+        {
+          slots: [...week].map((k) => {
+            const [d, b] = k.split('-');
+            return { day: Number(d), timeBand: b as TimeBand };
+          }),
+        },
+        accessToken,
+      );
+      setWeekSaved(new Set(week));
+      setWeekMsg('Saved — your For-you feed tunes to this week.');
+    } catch (err) {
+      setWeekMsg(err instanceof Error ? err.message : 'Could not save your week.');
+    } finally {
+      setWeekBusy(false);
+    }
+  };
+
+  const toggleGameType = (g: GameType) => {
+    setGameTypes((prev) => (prev.includes(g) ? prev.filter((x) => x !== g) : [...prev, g]));
+    setGameTypesMsg(null);
+  };
+
+  const saveGameTypes = async () => {
+    if (!accessToken) {
+      setGameTypesMsg('Not signed in.');
+      return;
+    }
+    setGameTypesBusy(true);
+    setGameTypesMsg(null);
+    try {
+      await setGameTypesAction({ gameTypes }, accessToken);
+      setGameTypesMsg('Saved.');
+    } catch (err) {
+      setGameTypesMsg(err instanceof Error ? err.message : 'Could not save game types.');
+    } finally {
+      setGameTypesBusy(false);
     }
   };
 
@@ -258,6 +380,26 @@ export default function ProfilePage() {
               e.target.value = '';
             }}
           />
+          {profile?.photo_url ? (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={uploadingImg}
+              onClick={() => { void removePicture('photo'); }}
+            >
+              Remove photo
+            </button>
+          ) : null}
+          {profile?.cover_url ? (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              disabled={uploadingImg}
+              onClick={() => { void removePicture('cover'); }}
+            >
+              Remove cover
+            </button>
+          ) : null}
           {uploadingImg ? <span className="muted">Uploading…</span> : null}
         </div>
         <div className="player-stats">
@@ -280,15 +422,25 @@ export default function ProfilePage() {
           <h2>My schedule</h2>
           <Link className="muted" to="/explore">Find games</Link>
         </div>
-        {upcoming.length === 0 ? (
-          <p className="muted">No upcoming games yet. Find one on Explore and it shows up here.</p>
+        {upcoming.length === 0 && myBookings.length === 0 ? (
+          <p className="muted">Nothing booked yet. Find a game on Explore or a court on a venue page.</p>
         ) : (
-          upcoming.map((m) => (
-            <div className="row" key={m.id}>
-              <strong>{m.title}</strong>
-              <span className="tag">{dateFmt.format(new Date(m.startsAt))}</span>
-            </div>
-          ))
+          <>
+            {upcoming.map((m) => (
+              <div className="row" key={`match-${m.id}`}>
+                <strong>{m.title}</strong>
+                <span className="tag">{dateFmt.format(new Date(m.startsAt))}</span>
+              </div>
+            ))}
+            {myBookings.map((b) => (
+              <div className="row" key={`booking-${b.id}`}>
+                <strong>{venueNames.get(b.venue_id) ?? 'Venue booking'}</strong>
+                <span className="tag">
+                  {b.requested_starts_at ? dateFmt.format(new Date(b.requested_starts_at)) : b.status}
+                </span>
+              </div>
+            ))}
+          </>
         )}
       </div>
       <div className="card">
@@ -322,6 +474,77 @@ export default function ProfilePage() {
             </div>
           ))
         )}
+      </div>
+      <div className="card">
+        <div className="row">
+          <h2>My week</h2>
+          <span className="muted">{week.size}/21 picked</span>
+        </div>
+        <p className="muted">When you are usually free to play. Your For-you feed ranks around this.</p>
+        <div className="week-grid" role="group" aria-label="Weekly availability">
+          <span />
+          {TIME_BANDS.map((b) => (
+            <span key={b} className="week-head">{b}</span>
+          ))}
+          {WEEK_DAYS.map((label, day) => (
+            <Fragment key={day}>
+              <span key={`d-${day}`} className="week-day">{label}</span>
+              {TIME_BANDS.map((b) => {
+                const on = week.has(`${day}-${b}`);
+                return (
+                  <button
+                    key={`${day}-${b}`}
+                    type="button"
+                    className={on ? 'week-cell week-cell-on' : 'week-cell'}
+                    aria-pressed={on}
+                    aria-label={`${label} ${b}`}
+                    onClick={() => toggleSlot(day, b)}
+                  >
+                    {on ? '●' : '○'}
+                  </button>
+                );
+              })}
+            </Fragment>
+          ))}
+        </div>
+        {weekMsg ? <p className={weekMsg.startsWith('Saved') ? 'hint' : 'error'}>{weekMsg}</p> : null}
+        <button
+          className="btn btn-primary"
+          type="button"
+          disabled={weekBusy || !weekDirty}
+          onClick={() => { void saveWeek(); }}
+        >
+          {weekBusy ? 'Saving…' : 'Save my week'}
+        </button>
+      </div>
+      <div className="card">
+        <div className="row">
+          <h2>Game types</h2>
+          <span className="muted">{gameTypes.length} picked</span>
+        </div>
+        <p className="muted">The kinds of games you want more of.</p>
+        <div className="chips">
+          {GAME_TYPES.map((g) => (
+            <button
+              key={g}
+              type="button"
+              className={gameTypes.includes(g) ? 'chip chip-active' : 'chip'}
+              aria-pressed={gameTypes.includes(g)}
+              onClick={() => toggleGameType(g)}
+            >
+              {g.replace(/_/g, ' ')}
+            </button>
+          ))}
+        </div>
+        {gameTypesMsg ? <p className={gameTypesMsg === 'Saved.' ? 'hint' : 'error'}>{gameTypesMsg}</p> : null}
+        <button
+          className="btn btn-primary"
+          type="button"
+          disabled={gameTypesBusy}
+          onClick={() => { void saveGameTypes(); }}
+        >
+          {gameTypesBusy ? 'Saving…' : 'Save game types'}
+        </button>
       </div>
       {locker && locker.badges.length > 0 ? (
         <div className="card">

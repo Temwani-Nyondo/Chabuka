@@ -785,6 +785,7 @@ export const ACTION_NAMES = [
   'leave_circle',
   'update_circle',
   'update_profile',
+  'set_sports',
   'update_team',
   'delete_team',
   'remove_member',
@@ -823,6 +824,31 @@ export type GameType = z.infer<typeof gameTypeSchema>;
 
 export const TIME_BANDS = ['morning', 'afternoon', 'evening'] as const;
 export const timeBandSchema = z.enum(TIME_BANDS);
+export type TimeBand = z.infer<typeof timeBandSchema>;
+
+export const WEEK_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const;
+
+// Weekly availability grid (Amendment 3): day + time band. Game suggestions
+// use it to filter and rank; a directly searched game is never hidden.
+export function timeBandForHour(hour: number): TimeBand {
+  if (hour < 5) return 'evening';
+  if (hour < 12) return 'morning';
+  if (hour < 17) return 'afternoon';
+  return 'evening';
+}
+
+export function matchSlot(d: Date): { day: number; timeBand: TimeBand } {
+  return { day: d.getDay(), timeBand: timeBandForHour(d.getHours()) };
+}
+
+export function slotKey(day: number, timeBand: TimeBand): string {
+  return `${day}-${timeBand}`;
+}
+
+// For-you rank: own sport counts most, then a free slot, then home area.
+export function forYouScore(input: { sportMatch: boolean; slotMatch: boolean; areaMatch: boolean }): number {
+  return (input.sportMatch ? 2 : 0) + (input.slotMatch ? 2 : 0) + (input.areaMatch ? 1 : 0);
+}
 
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
@@ -836,6 +862,14 @@ export const updateProfileSchema = z.object({
   termsAcceptedAt: z.iso.datetime({ offset: true }).optional(),
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
+
+// Chat-led setup: the Gaffer collects sports conversationally and writes
+// them with one level, same as the wizard's sports step.
+export const setSportsSchema = z.object({
+  sportIds: z.array(z.string().uuid()).min(1).max(12),
+  level: levelSchema,
+});
+export type SetSportsInput = z.infer<typeof setSportsSchema>;
 
 export const setAvailabilitySchema = z.object({
   slots: z

@@ -6,6 +6,7 @@ import MatchFoundOverlay from '../components/MatchFoundOverlay';
 import { useAuth } from '../auth/AuthContext';
 import { fetchMyMatches, fetchOpenMatches } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
+import { fetchForYouProfile, pickForYou } from '../lib/forYou';
 import { peekPendingInvite } from '../lib/pendingInvite';
 import { useMatchActions } from '../lib/useMatchActions';
 
@@ -14,6 +15,8 @@ export default function HomePage() {
   const firstName = profile?.name ? profile.name.split(' ')[0] : null;
   const [listings, setListings] = useState<MatchListing[]>([]);
   const [nudge, setNudge] = useState<MatchListing | null>(null);
+  const [forYou, setForYou] = useState<MatchListing[]>([]);
+  const [forYouTuned, setForYouTuned] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pendingInvite, setPendingInvite] = useState<string | null>(null);
@@ -24,7 +27,11 @@ export default function HomePage() {
 
   const reload = useCallback(async () => {
     if (!user) return;
-    const [mine, open] = await Promise.all([fetchMyMatches(user.id), fetchOpenMatches(user.id)]);
+    const [mine, open, tuned] = await Promise.all([
+      fetchMyMatches(user.id),
+      fetchOpenMatches(user.id),
+      fetchForYouProfile(user.id).catch(() => null),
+    ]);
     setListings(mine);
     const joined = new Set(mine.map((l) => l.match.id));
     const mineArea = profile?.area?.toLowerCase() ?? '';
@@ -33,6 +40,10 @@ export default function HomePage() {
       open.find((l) => !joined.has(l.match.id)) ??
       null;
     setNudge(candidate);
+    if (tuned) {
+      setForYou(pickForYou(open, tuned, mineArea, joined));
+      setForYouTuned(tuned.slots.size > 0 || tuned.sports.size > 0);
+    }
   }, [user, profile?.area]);
 
   useEffect(() => {
@@ -117,18 +128,46 @@ export default function HomePage() {
           onWithdraw={onWithdraw}
         />
       ))}
-      <p>
-        <Link to="/explore">Browse open games →</Link>
-      </p>
-      <p>
-        <Link to="/teams">Teams and challenges →</Link>
-      </p>
-      <p>
-        <Link to="/board">Season board →</Link>
-      </p>
-      <p>
-        <Link to="/roadmap">Coming next →</Link>
-      </p>
+      {forYou.length > 0 ? (
+        <section aria-label="For you">
+          <div className="section-head">
+            <h2>For you</h2>
+            <Link to="/profile">{forYouTuned ? 'Tuned to your week' : 'Tune on profile'}</Link>
+          </div>
+          <p className="muted">
+            {forYouTuned
+              ? 'Your sports, your free slots, your area — best first.'
+              : 'Set your sports and week on your profile and this feed sharpens up.'}
+          </p>
+          {forYou.map((listing) => (
+            <MatchCard
+              key={listing.match.id}
+              listing={listing}
+              busy={busyId === listing.match.id}
+              onJoin={onJoin}
+              onWithdraw={onWithdraw}
+            />
+          ))}
+        </section>
+      ) : null}
+      <nav className="home-links" aria-label="Quick links">
+        <Link className="home-link" to="/explore">
+          <strong>Browse open games</strong>
+          <span aria-hidden="true">→</span>
+        </Link>
+        <Link className="home-link" to="/teams">
+          <strong>Teams and challenges</strong>
+          <span aria-hidden="true">→</span>
+        </Link>
+        <Link className="home-link" to="/board">
+          <strong>Season board</strong>
+          <span aria-hidden="true">→</span>
+        </Link>
+        <Link className="home-link" to="/roadmap">
+          <strong>Coming next</strong>
+          <span aria-hidden="true">→</span>
+        </Link>
+      </nav>
     </div>
   );
 }

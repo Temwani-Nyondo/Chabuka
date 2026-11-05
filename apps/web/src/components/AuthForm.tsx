@@ -6,6 +6,11 @@ import { isSupabaseConfigured, supabase } from '../lib/supabase';
 
 type Mode = 'signin' | 'signup';
 
+// Demo switch: social buttons are hidden until Google/Meta OAuth credentials
+// are configured in Supabase. Flip back to true to restore them — the OAuth
+// handlers below stay wired and need no other change.
+const SOCIAL_LOGIN_ENABLED = false;
+
 // Shared sign-in / sign-up form: the /login page and the landing-page modal
 // render the same form so visitors never leave the page to authenticate.
 export default function AuthForm({
@@ -95,6 +100,8 @@ export default function AuthForm({
 
   return (
     <div className="card">
+      {SOCIAL_LOGIN_ENABLED ? (
+      <>
       <button
         className="btn btn-brand"
         type="button"
@@ -143,9 +150,13 @@ export default function AuthForm({
         </span>
         {busy === 'google' ? 'Continuing…' : 'Continue with Google'}
       </button>
-      <div className="divider" role="separator">
-        or
-      </div>
+      </>
+      ) : null}
+      {SOCIAL_LOGIN_ENABLED ? (
+        <div className="divider" role="separator">
+          or
+        </div>
+      ) : null}
       <div className="chips" role="tablist" aria-label="Sign in or create account">
         <button
           type="button"

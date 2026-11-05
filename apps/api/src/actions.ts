@@ -46,6 +46,7 @@ import {
   setGameTypesSchema,
   setPositionSchema,
   setRoleSchema,
+  setSportsSchema,
   teamIdSchema,
   teamSchema,
   ticketIdSchema,
@@ -92,6 +93,7 @@ import type {
   SetGameTypesInput,
   SetPositionInput,
   SetRoleInput,
+  SetSportsInput,
   Team,
   Ticket,
   UpdateCircleInput,
@@ -1209,6 +1211,25 @@ export async function setAvailability(
   return { state: 'saved', slots: input.slots };
 }
 
+export async function setSports(
+  db: SupabaseClient,
+  userId: string,
+  input: SetSportsInput,
+): Promise<unknown> {
+  const { error: validError } = await db
+    .from('sports')
+    .select('id')
+    .in('id', input.sportIds)
+    .limit(input.sportIds.length);
+  if (validError) throw dbError(validError);
+  const { error: delError } = await db.from('user_sports').delete().eq('user_id', userId);
+  if (delError) throw dbError(delError);
+  const rows = input.sportIds.map((sportId) => ({ user_id: userId, sport_id: sportId, level: input.level }));
+  const { error } = await db.from('user_sports').insert(rows);
+  if (error) throw dbError(error);
+  return { state: 'saved', sports: input.sportIds.length };
+}
+
 export async function addPlace(
   db: SupabaseClient,
   userId: string,
@@ -1649,6 +1670,8 @@ export async function runAction(
       return updateCircle(db, userId, updateCircleSchema.parse(body));
     case 'update_profile':
       return updateProfile(db, userId, updateProfileSchema.parse(body));
+    case 'set_sports':
+      return setSports(db, userId, setSportsSchema.parse(body));
     case 'set_availability':
       return setAvailability(db, userId, setAvailabilitySchema.parse(body));
     case 'add_place':

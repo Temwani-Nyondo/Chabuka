@@ -827,6 +827,220 @@ code {
   flex-shrink: 0;
 }
 
+.venue-photo {
+  width: 100%;
+  height: 160px;
+  object-fit: cover;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.venue-photo-banner {
+  height: 200px;
+  border-radius: var(--radius);
+}
+
+.venue-photo-fallback {
+  width: 100%;
+  height: 160px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(120deg, #100e0a 30%, #26211a 100%);
+}
+
+.venue-photo-fallback.venue-photo-banner {
+  height: 200px;
+  border-radius: var(--radius);
+}
+
+.venue-photo-fallback span {
+  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
+  font-size: 64px;
+  line-height: 1;
+  color: var(--accent);
+}
+
+/* Home quick links: 2-up grid of tappable rows. */
+.home-links {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+@media (min-width: 560px) {
+  .home-links {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+.home-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  font-size: 15px;
+  box-shadow: var(--shadow);
+}
+
+.home-link span {
+  color: var(--accent);
+  font-weight: 800;
+}
+
+/* Slot calendar: month grid, free days highlighted with their slot count. */
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.cal-dow {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--muted);
+  padding: 4px 0;
+}
+
+.cal-day {
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  border-radius: 10px;
+  font-weight: 700;
+  font-size: 14px;
+  color: var(--muted);
+}
+
+.cal-today {
+  color: var(--text);
+  border: 1px dashed var(--border);
+}
+
+button.cal-day {
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.cal-free {
+  border-color: var(--accent);
+}
+
+.cal-count {
+  font-size: 10px;
+  font-weight: 800;
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-radius: 999px;
+  min-width: 18px;
+  padding: 0 5px;
+  text-align: center;
+}
+
+.cal-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
+.cal-active .cal-count {
+  background: var(--accent-ink);
+  color: var(--accent);
+}
+
+.cal-nav {
+  min-height: 0;
+  padding: 6px 12px;
+}
+
+/* Onboarding chat with the Gaffer. */
+.chat-log {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 12px;
+}
+
+.chat-log p {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  font-size: 15px;
+}
+
+.chat-gaffer {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text);
+  align-self: flex-start;
+  max-width: 92%;
+}
+
+.chat-user {
+  background: var(--accent);
+  color: var(--accent-ink);
+  align-self: flex-end;
+  max-width: 92%;
+}
+
+/* My week: 7 days plus 3 time bands. */
+.week-grid {
+  display: grid;
+  grid-template-columns: 48px repeat(3, 1fr);
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0 12px;
+}
+
+.week-head {
+  text-align: center;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.week-day {
+  font-weight: 800;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.week-cell {
+  min-height: 44px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--muted);
+  font-size: 15px;
+  cursor: pointer;
+}
+
+.week-cell-on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+
 .player-identity {
   display: flex;
   align-items: center;

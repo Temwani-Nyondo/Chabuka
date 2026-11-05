@@ -6,6 +6,8 @@ import type {
   CreateTeamInput,
   PostChallengeInput,
   RemoveMemberInput,
+  SetAvailabilityInput,
+  SetGameTypesInput,
   SetPositionInput,
   SetRoleInput,
   UpdateTeamInput,
@@ -215,6 +217,14 @@ export function claimInviteLinkAction(
 
 export function revokeInviteLinkAction(code: string, accessToken: string): Promise<unknown> {
   return runAction('revoke_invite_link', { code }, accessToken);
+}
+
+export function setAvailabilityAction(input: SetAvailabilityInput, accessToken: string): Promise<unknown> {
+  return runAction('set_availability', input, accessToken);
+}
+
+export function setGameTypesAction(input: SetGameTypesInput, accessToken: string): Promise<unknown> {
+  return runAction('set_game_types', input, accessToken);
 }
 
 export function postChallengeAction(input: PostChallengeInput, accessToken: string): Promise<unknown> {

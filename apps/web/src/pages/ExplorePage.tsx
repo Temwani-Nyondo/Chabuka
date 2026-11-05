@@ -5,6 +5,7 @@ import ChallengeCard from '../components/ChallengeCard';
 import ExploreMap from '../components/ExploreMap';
 import MatchCard from '../components/MatchCard';
 import MatchFoundOverlay from '../components/MatchFoundOverlay';
+import VenuePhoto from '../components/VenuePhoto';
 import { useAuth } from '../auth/AuthContext';
 import { fetchOpenMatches } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
@@ -14,6 +15,8 @@ import { fetchVenues } from '../lib/venues';
 import type { Venue } from '@chabuka/shared';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMatchActions } from '../lib/useMatchActions';
+import { fetchForYouProfile, pickForYou } from '../lib/forYou';
+import type { ForYouProfile } from '../lib/forYou';
 
 type ExploreTab = 'play' | 'teams' | 'venues';
 const TABS: ExploreTab[] = ['play', 'teams', 'venues'];
@@ -25,7 +28,7 @@ const TAB_LABELS: Record<ExploreTab, string> = {
 const SWIPE_PX = 60;
 
 export default function ExplorePage() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [listings, setListings] = useState<MatchListing[]>([]);
   const [challenges, setChallenges] = useState<ChallengeListing[]>([]);
   const [loading, setLoading] = useState(true);
@@ -45,18 +48,22 @@ export default function ExplorePage() {
   const [selected, setSelected] = useState<MatchListing | null>(null);
   const [sport, setSport] = useState('All');
   const [query, setQuery] = useState('');
+  const [forYouOnly, setForYouOnly] = useState(false);
+  const [tuned, setTuned] = useState<ForYouProfile | null>(null);
   const [venues, setVenues] = useState<Venue[]>([]);
   const [venueQuery, setVenueQuery] = useState('');
   const touchX = useRef<number | null>(null);
 
   const reload = useCallback(async () => {
     if (!user) return;
-    const [rows, open] = await Promise.all([
+    const [rows, open, forYou] = await Promise.all([
       fetchOpenMatches(user.id),
       fetchOpenChallenges(user.id),
+      fetchForYouProfile(user.id).catch(() => null),
     ]);
     setListings(rows);
     setChallenges(open);
+    setTuned(forYou);
     setVenues(await fetchVenues().catch(() => []));
   }, [user]);
 
@@ -87,7 +94,7 @@ export default function ExplorePage() {
   };
 
   const sports = ['All', ...new Set(listings.map((l) => l.sport?.name).filter(Boolean) as string[])];
-  const visibleGames = listings.filter((l) => {
+  const baseGames = listings.filter((l) => {
     if (sport !== 'All' && l.sport?.name !== sport) return false;
     const q = query.trim().toLowerCase();
     if (!q) return true;
@@ -97,8 +104,14 @@ export default function ExplorePage() {
       (l.sport?.name ?? '').toLowerCase().includes(q)
     );
   });
+  const joinedIds = new Set(listings.filter((l) => l.isParticipant).map((l) => l.match.id));
+  const visibleGames =
+    forYouOnly && tuned
+      ? pickForYou(baseGames, tuned, (profile?.area ?? '').toLowerCase(), joinedIds, 100)
+      : baseGames;
+  const forYouTuned = tuned !== null && (tuned.slots.size > 0 || tuned.sports.size > 0);
   // Bucketed into sport cards when browsing everything.
-  const grouped = sport === 'All' && !query.trim();
+  const grouped = sport === 'All' && !query.trim() && !forYouOnly;
   const groups = new Map<string, MatchListing[]>();
   if (grouped) {
     for (const l of visibleGames) {
@@ -138,6 +151,14 @@ export default function ExplorePage() {
         {tab === 'play' ? (
           <>
             <div className="chips" role="group" aria-label="Filter by sport">
+              <button
+                type="button"
+                className={forYouOnly ? 'chip chip-active' : 'chip'}
+                aria-pressed={forYouOnly}
+                onClick={() => setForYouOnly((v) => !v)}
+              >
+                For you
+              </button>
               {sports.map((s) => (
                 <button
                   key={s}
@@ -150,6 +171,11 @@ export default function ExplorePage() {
                 </button>
               ))}
             </div>
+            {forYouOnly && !forYouTuned ? (
+              <p className="hint">
+                Set your sports and week on your <Link to="/profile">profile</Link> to tune this feed.
+              </p>
+            ) : null}
             <input
               className="input"
               value={query}
@@ -268,6 +294,7 @@ export default function ExplorePage() {
               })
               .map((venue) => (
                 <article className="card" key={venue.id}>
+                  <VenuePhoto photos={venue.photos} name={venue.name} />
                   <div className="row">
                     <strong>{venue.name}</strong>
                     <span className="tag">Free booking</span>

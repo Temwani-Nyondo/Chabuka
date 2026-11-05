@@ -6,11 +6,13 @@ import type { Level, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { createMatchAction } from '../lib/api';
 import { fetchSports } from '../lib/matches';
+import { fetchCircles } from '../lib/circles';
+import type { CircleListing } from '../lib/circles';
 import VenuePicker from './VenuePicker';
 import type { VenuePick } from './VenuePicker';
 
 export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
-  const { session, profile } = useAuth();
+  const { session, profile, user } = useAuth();
   const navigate = useNavigate();
   const [sports, setSports] = useState<Sport[]>([]);
   const [sportId, setSportId] = useState('');
@@ -23,6 +25,8 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const [visibility, setVisibility] = useState<'public' | 'private'>('public');
   const [notes, setNotes] = useState('');
   const [venuePick, setVenuePick] = useState<VenuePick>({});
+  const [circles, setCircles] = useState<CircleListing[]>([]);
+  const [circleId, setCircleId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -35,7 +39,12 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : 'Could not load sports.'),
       );
-  }, []);
+    if (user) {
+      fetchCircles(user.id)
+        .then((all) => setCircles(all.filter((c) => c.isMember)))
+        .catch(() => undefined);
+    }
+  }, [user]);
 
   const sport = sports.find((s) => s.id === sportId);
 
@@ -62,6 +71,7 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
       level,
       visibility,
       notes: notes.trim() || undefined,
+      circleId: circleId || undefined,
     });
     if (!parsed.success) {
       setError(parsed.error.issues[0]?.message ?? 'Check the form and try again.');
@@ -191,6 +201,19 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
           maxLength={500}
         />
       </label>
+      {circles.length > 0 ? (
+        <label className="field">
+          Share to a circle (optional)
+          <select className="input" value={circleId} onChange={(e) => setCircleId(e.target.value)}>
+            <option value="">No circle — Explore only</option>
+            {circles.map(({ circle }) => (
+              <option key={circle.id} value={circle.id}>
+                {circle.name}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {error ? <p className="error">{error}</p> : null}
       <button className="btn btn-primary" type="submit" disabled={busy}>
         {busy ? 'Creating…' : 'Create match'}

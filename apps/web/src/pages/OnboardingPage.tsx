@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import type { MutableRefObject } from 'react';
 import type { ChangeEvent, FormEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { onboardingSchema, sportListSchema } from '@chabuka/shared';
 import type { Level, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
+import { askGaffer, transcribeVoiceNote } from '../lib/api';
+import { blobToDataUrl, recordingToWav, speakReply, stopSpeaking } from '../lib/voice';
 
 const LEVELS: { value: Level; label: string }[] = [
   { value: 'recreational', label: 'Recreational' },
@@ -12,9 +15,22 @@ const LEVELS: { value: Level; label: string }[] = [
   { value: 'competitive', label: 'Competitive' },
 ];
 
+type SetupMode = 'wizard' | 'chat';
+
+interface ChatMsg {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+const CHAT_INTRO: ChatMsg = {
+  role: 'assistant',
+  content: "I'm the Gaffer — tell me your name and we'll get your player card sorted, one question at a time.",
+};
+
 export default function OnboardingPage() {
-  const { user, refreshProfile, signOut } = useAuth();
+  const { user, refreshProfile, signOut, session } = useAuth();
   const navigate = useNavigate();
+  const [mode, setMode] = useState<SetupMode>('wizard');
   const [sports, setSports] = useState<Sport[]>([]);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [name, setName] = useState('');
@@ -52,6 +68,103 @@ export default function OnboardingPage() {
   const [warning, setWarning] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState(0);
+  const [chat, setChat] = useState<ChatMsg[]>([CHAT_INTRO]);
+  const [draft, setDraft] = useState('');
+  const [chatBusy, setChatBusy] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatDone, setChatDone] = useState(false);
+  const [voiceOn, setVoiceOn] = useState(true);
+  const [recording, setRecording] = useState(false);
+  const recorderRef = useRef<MediaRecorder | null>(null);
+  const chunksRef = useRef<Blob[]>([]) as MutableRefObject<Blob[]>;
+
+  // Leaving the chat (or the page) stops any spoken reply.
+  useEffect(() => stopSpeaking, []);
+  useEffect(() => {
+    if (mode !== 'chat') stopSpeaking();
+  }, [mode]);
+
+  const sendChatText = async (raw: string) => {
+    const text = raw.trim();
+    const token = session?.access_token;
+    if (!text || chatBusy || !token) return;
+    const next = [...chat, { role: 'user' as const, content: text }];
+    setChat(next);
+    setDraft('');
+    setChatBusy(true);
+    setChatError(null);
+    try {
+      const turn = await askGaffer(text, next.slice(-10), token);
+      setChat([...next, { role: 'assistant' as const, content: turn.reply }]);
+      if (voiceOn) speakReply(turn.reply);
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : 'The Gaffer went quiet. Try again.');
+    } finally {
+      setChatBusy(false);
+    }
+  };
+
+  const toggleRecording = async () => {
+    if (recording) {
+      recorderRef.current?.stop();
+      return;
+    }
+    const token = session?.access_token;
+    if (!token || chatBusy) return;
+    if (typeof MediaRecorder === 'undefined') {
+      setChatError('Voice notes are not supported in this browser.');
+      return;
+    }
+    setChatError(null);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const recorder = new MediaRecorder(stream);
+      chunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data.size > 0) chunksRef.current.push(e.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        if (blob.size === 0) return;
+        setChatBusy(true);
+        void recordingToWav(blob)
+          .then((wav) => blobToDataUrl(wav))
+          .then((dataUrl) => transcribeVoiceNote(dataUrl, token))
+          .then(
+            (heardRaw) => {
+              const heard = (heardRaw ?? '').trim();
+              if (!heard) throw new Error('Did not catch that — try again.');
+              return sendChatText(heard);
+            },
+            (err: unknown) => {
+              setChatError(err instanceof Error ? err.message : 'Could not transcribe that. Try again.');
+            },
+          )
+          .finally(() => setChatBusy(false));
+      };
+      recorder.onerror = () => {
+        stream.getTracks().forEach((t) => t.stop());
+        setRecording(false);
+        setChatError('Recording failed. Try again.');
+      };
+      recorderRef.current = recorder;
+      recorder.start();
+      setRecording(true);
+    } catch {
+      setChatError('Microphone blocked. Allow mic access to talk instead of typing.');
+    }
+  };
+
+  const checkCard = async () => {
+    if (!user || !supabase) return;
+    await refreshProfile();
+    const { data } = await supabase.from('profiles').select('name').eq('id', user.id).maybeSingle();
+    const done = !!data && !!((data as { name: string | null }).name);
+    setChatDone(done);
+    if (!done) setChatError('Card is still blank — give the Gaffer your name and area first.');
+  };
 
   const stepError = (e: FormEvent) => {
     e.preventDefault();
@@ -175,6 +288,26 @@ export default function OnboardingPage() {
         <p>Thirty seconds, then you are in.</p>
       </div>
       {loadError ? <p className="error">{loadError}</p> : null}
+      <div className="chips" role="group" aria-label="Setup style">
+        <button
+          type="button"
+          className={mode === 'wizard' ? 'chip chip-active' : 'chip'}
+          aria-pressed={mode === 'wizard'}
+          onClick={() => setMode('wizard')}
+        >
+          Step by step
+        </button>
+        <button
+          type="button"
+          className={mode === 'chat' ? 'chip chip-active' : 'chip'}
+          aria-pressed={mode === 'chat'}
+          onClick={() => setMode('chat')}
+        >
+          Chat with the Gaffer
+        </button>
+      </div>
+      {mode === 'wizard' ? (
+      <>
       <div className="wizard-dots" aria-hidden="true">
         {[0, 1, 2].map((i) => (
           <span key={i} className={i <= step ? 'wizard-dot wizard-dot-done' : 'wizard-dot'} />
@@ -314,6 +447,82 @@ export default function OnboardingPage() {
           )}
         </div>
       </form>
+      </>
+      ) : (
+      <div className="card">
+        <h2>Set up with the Gaffer</h2>
+        <p className="muted">Talk it through — name, area, sports — and it writes your card as you go.</p>
+        <div className="chat-log" aria-live="polite">
+          {chat.map((m, i) => (
+            <p key={i} className={m.role === 'user' ? 'chat-user' : 'chat-gaffer'}>
+              {m.content}
+            </p>
+          ))}
+          {chatBusy ? <p className="muted">The Gaffer is thinking…</p> : null}
+        </div>
+        {chatError ? <p className="error">{chatError}</p> : null}
+        {chatDone ? (
+          <>
+            <p className="hint">Card sorted. Welcome in.</p>
+            <button className="btn btn-primary" type="button" onClick={() => navigate('/', { replace: true })}>
+              Head home
+            </button>
+          </>
+        ) : (
+          <>
+            <label className="field">
+              Message the Gaffer
+              <input
+                className="input"
+                value={draft}
+                onChange={(e) => setDraft(e.target.value)}
+                placeholder="e.g. I'm Chanda from Kabulonga, I play football"
+                maxLength={500}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    e.preventDefault();
+                    void sendChatText(draft);
+                  }
+                }}
+              />
+            </label>
+            {recording ? <p className="hint" role="status">Listening… tap the mic to finish.</p> : null}
+            <div className="actions-row">
+              <button className="btn btn-primary" type="button" disabled={chatBusy || !draft.trim()} onClick={() => { void sendChatText(draft); }}>
+                {chatBusy ? 'Sending…' : 'Send'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                disabled={chatBusy && !recording}
+                onClick={() => { void toggleRecording(); }}
+                aria-pressed={recording}
+                aria-label={recording ? 'Stop recording' : 'Talk instead of typing'}
+              >
+                {recording ? 'Stop' : 'Talk'}
+              </button>
+              <button
+                className="btn btn-ghost"
+                type="button"
+                onClick={() => {
+                  setVoiceOn((v) => {
+                    if (v) stopSpeaking();
+                    return !v;
+                  });
+                }}
+                aria-pressed={voiceOn}
+                aria-label={voiceOn ? 'Mute the Gaffer' : 'Hear the Gaffer'}
+              >
+                {voiceOn ? 'Sound on' : 'Muted'}
+              </button>
+              <button className="btn btn-ghost" type="button" disabled={chatBusy} onClick={() => { void checkCard(); }}>
+                Check my card
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+      )}
       <button
         className="btn btn-ghost"
         type="button"

@@ -3,10 +3,14 @@ import {
   availableActions,
   createMatchSchema,
   didFillMatch,
+  forYouScore,
   formatEventLocation,
   levelSchema,
+  matchSlot,
   onboardingSchema,
   requestBookingSchema,
+  slotKey,
+  timeBandForHour,
   venueListSchema,
   venueSchema,
 } from './index';
@@ -205,6 +209,30 @@ describe('didFillMatch', () => {
   it('stays quiet on a normal join and on rejoin when full', () => {
     expect(didFillMatch(3, 4, 10)).toBe(false);
     expect(didFillMatch(10, 10, 10)).toBe(false);
+  });
+});
+
+describe('timeBandForHour', () => {
+  it('bands the day at 5, 12 and 17', () => {
+    expect(timeBandForHour(4)).toBe('evening');
+    expect(timeBandForHour(9)).toBe('morning');
+    expect(timeBandForHour(12)).toBe('afternoon');
+    expect(timeBandForHour(19)).toBe('evening');
+  });
+
+  it('keys a match to its weekday slot', () => {
+    const d = new Date(2026, 10, 4, 18, 30); // a Wednesday evening
+    expect(d.getDay()).toBe(3);
+    expect(matchSlot(d)).toEqual({ day: 3, timeBand: 'evening' });
+    expect(slotKey(3, 'evening')).toBe('3-evening');
+  });
+});
+
+describe('forYouScore', () => {
+  it('weighs sport and slot above area', () => {
+    expect(forYouScore({ sportMatch: true, slotMatch: true, areaMatch: false })).toBe(4);
+    expect(forYouScore({ sportMatch: false, slotMatch: false, areaMatch: true })).toBe(1);
+    expect(forYouScore({ sportMatch: true, slotMatch: false, areaMatch: false })).toBe(2);
   });
 });
 

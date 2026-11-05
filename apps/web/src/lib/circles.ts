@@ -1,6 +1,7 @@
 import { circleSchema, matchSchema } from '@chabuka/shared';
 import type { Circle, Match } from '@chabuka/shared';
 import { supabase } from './supabase';
+import { fetchOpenMatches } from './matches';
 
 export interface CircleListing {
   circle: Circle;
@@ -52,4 +53,26 @@ export async function fetchCircleEvents(circleId: string): Promise<Match[]> {
       return parsed.success ? parsed.data : null;
     })
     .filter((m): m is Match => m !== null);
+}
+
+// Subscriber feed: games tagged to the circle plus every open game in the
+// circle's sport, soonest first. A marathon circle sees marathons whether
+// or not anyone tagged them; a sport-less circle shows tagged games only.
+export async function fetchCircleFeed(
+  circle: Pick<Circle, 'id' | 'sport_id'>,
+  userId: string,
+): Promise<{ match: Match; tagged: boolean }[]> {
+  const tagged = await fetchCircleEvents(circle.id);
+  const seen = new Set(tagged.map((m) => m.id));
+  const feed: { match: Match; tagged: boolean }[] = tagged.map((match) => ({ match, tagged: true }));
+  if (circle.sport_id) {
+    const open = await fetchOpenMatches(userId).catch(() => []);
+    for (const listing of open) {
+      if (seen.has(listing.match.id)) continue;
+      if (listing.match.sport_id !== circle.sport_id) continue;
+      seen.add(listing.match.id);
+      feed.push({ match: listing.match, tagged: false });
+    }
+  }
+  return feed.sort((a, b) => +new Date(a.match.starts_at) - +new Date(b.match.starts_at));
 }
