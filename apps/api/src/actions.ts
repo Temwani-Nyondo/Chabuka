@@ -395,6 +395,19 @@ export async function postChallenge(
   return challengeResult(challenge, []);
 }
 
+// Writes that must land on rows the caller does not own (an opponent
+// accepting/declining/proposing on the poster's challenge and match) cannot
+// ride the caller's JWT past RLS. The action-layer checks above already ran,
+// so the service client finishes the agreed writes. Falls back to the
+// caller's client only where no server env exists (unit tests).
+function privilegedClient(db: SupabaseClient): SupabaseClient {
+  try {
+    return createServiceClient();
+  } catch {
+    return db;
+  }
+}
+
 export async function acceptChallenge(
   db: SupabaseClient,
   userId: string,
@@ -419,7 +432,12 @@ export async function acceptChallenge(
   const home = await loadTeam(db, challenge.team_id);
   const away = await loadTeam(db, opponentId);
   const starts = challenge.proposed_starts_at ?? startsAt ?? challenge.window_start;
-  const { data: matchRow, error: matchErr } = await db
+  // Both writes land on rows the accepter does not own (the poster's match
+  // and challenge), so RLS would refuse them on the caller's client. The
+  // authorization above already ran — captains on the acting side only —
+  // so the service client finishes the agreed writes, same as notifications.
+  const service = privilegedClient(db);
+  const { data: matchRow, error: matchErr } = await service
     .from('matches')
     .insert({
       organiser_id: challenge.created_by,
@@ -438,7 +456,7 @@ export async function acceptChallenge(
     .single();
   if (matchErr) throw dbError(matchErr);
   const matchId = (matchRow as { id: string }).id;
-  const { error: updErr } = await db
+  const { error: updErr } = await service
     .from('challenges')
     .update({ status: 'accepted', opponent_team_id: opponentId, match_id: matchId })
     .eq('id', challenge.id);
@@ -463,7 +481,9 @@ export async function declineChallenge(
     if (!opponentTeamId) throw new ActionError(403, 'Only a team captain or owner can do that.');
     await requireCaptain(db, opponentTeamId, userId);
   }
-  const { error } = await db.from('challenges').update({ status: 'declined' }).eq('id', challenge.id);
+  // An opponent's decline touches the poster's row; the caller checks above
+  // already ran, so the service client applies the agreed update.
+  const { error } = await privilegedClient(db).from('challenges').update({ status: 'declined' }).eq('id', challenge.id);
   if (error) throw dbError(error);
   const updated = await loadChallenge(db, challenge.id);
   return challengeResult(updated, []);
@@ -484,7 +504,9 @@ export async function proposeTime(
     throw new ActionError(409, 'A team cannot propose a time on its own challenge.');
   }
   await requireCaptain(db, opponentTeamId, userId);
-  const { error } = await db
+  // Same ownership problem as accept/decline: the service client applies it
+  // after the captain check above.
+  const { error } = await privilegedClient(db)
     .from('challenges')
     .update({
       status: 'reschedule_proposed',
