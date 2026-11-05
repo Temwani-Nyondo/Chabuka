@@ -717,11 +717,35 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
     <div className="page floodlight">
       <div className="row">
         <h1>Ask the Gaffer</h1>
-        {onClose ? (
-          <button className="btn btn-ghost" type="button" onClick={onClose} aria-label="Close Gaffer">
-            ✕
-          </button>
-        ) : null}
+        <div className="actions-row">
+          {messages.length > 0 ? (
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => {
+                window.speechSynthesis?.cancel();
+                if (recorderRef.current && recorderRef.current.state !== 'inactive') {
+                  recorderRef.current.stop();
+                }
+                setMessages([]);
+                setError(null);
+                try {
+                  if (user) window.localStorage.removeItem(`gaffer:chat:${user.id}`);
+                } catch {
+                  // Private mode: nothing stored, nothing to clear.
+                }
+              }}
+              aria-label="Clear chat"
+            >
+              Clear chat
+            </button>
+          ) : null}
+          {onClose ? (
+            <button className="btn btn-ghost" type="button" onClick={onClose} aria-label="Close Gaffer">
+              ✕
+            </button>
+          ) : null}
+        </div>
       </div>
       <p className="muted">Game plans, rules, briefs, bookings — the Gaffer sorts it.</p>
       {messages.length === 0 ? (
