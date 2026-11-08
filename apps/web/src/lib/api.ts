@@ -133,12 +133,18 @@ export async function downloadMatchIcs(matchId: string, accessToken: string): Pr
 
 // The Gaffer chats through the internal helper endpoint (path kept);
 // only the external name is the Gaffer.
+const GAFFER_TIMEOUT_MS = 120_000;
+
 export async function askGaffer(
   message: string,
   history: { role: 'user' | 'assistant'; content: string }[],
   accessToken: string,
   images: string[] = [],
+  signal?: AbortSignal,
 ): Promise<GafferTurn> {
+  // The caller's cancel signal and a hard timeout both stop the request.
+  const timeout = AbortSignal.timeout(GAFFER_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}/api/helper`, {
@@ -148,8 +154,11 @@ export async function askGaffer(
         authorization: `Bearer ${accessToken}`,
       },
       body: JSON.stringify({ message, history, images }),
+      signal: combined,
     });
-  } catch {
+  } catch (err) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (timeout.aborted) throw new Error('The Gaffer took too long. Try again.');
     throw new Error('Could not reach the Chabuka server. Is the API running?');
   }
   const data = (await res.json().catch(() => null)) as (GafferTurn & { error?: string }) | null;

@@ -12,7 +12,7 @@ interface AuthValue {
   profile: Profile | null;
   sportsCount: number;
   needsOnboarding: boolean;
-  signInWithPassword: (email: string, password: string) => Promise<void>;
+  signInWithPassword: (email: string, password: string, captchaToken?: string) => Promise<void>;
   signInWithOAuth: (provider: 'facebook' | 'google') => Promise<void>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -91,17 +91,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // OAuth code anywhere: the App ID/secret live in Supabase settings.
   // Password sign-in sends no email, so Supabase's email rate limits
   // never apply. This is the scalable path for real users.
-  const signInWithPassword = async (email: string, password: string) => {
+  const signInWithPassword = async (email: string, password: string, captchaToken?: string) => {
     if (!supabase) throw new Error('Supabase is not configured.');
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+      options: captchaToken ? { captchaToken } : undefined,
+    });
     if (error) throw error;
   };
 
+  // The provider sends people back to /login, where AuthForm routes them on
+  // (onboarding, the page they came from, or a pending invite).
   const signInWithOAuth = async (provider: 'facebook' | 'google') => {
     if (!supabase) throw new Error('Supabase is not configured.');
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
-      options: { redirectTo: window.location.origin },
+      options: { redirectTo: `${window.location.origin}/login` },
     });
     if (error) throw error;
   };

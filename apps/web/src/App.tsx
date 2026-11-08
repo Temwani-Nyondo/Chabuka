@@ -5,6 +5,7 @@ import AppShell from './components/AppShell';
 import LandingPage from './pages/LandingPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
+import ResetPasswordPage from './pages/ResetPasswordPage';
 import RoadmapPage from './pages/RoadmapPage';
 import NotificationsPage from './pages/NotificationsPage';
 import { CommunityPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
@@ -37,6 +38,7 @@ export default function App() {
     <Routes>
       <Route path="/" element={<LandingGate />} />
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route path="/invite/:code" element={<InvitePage />} />
       <Route path="/invite" element={<InvitePage />} />
       <Route path="/privacy" element={<PrivacyPage />} />

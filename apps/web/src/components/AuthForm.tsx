@@ -1,15 +1,56 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { FormEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import { isSupabaseConfigured, supabase } from '../lib/supabase';
+import Turnstile, { TURNSTILE_SITE_KEY } from './Turnstile';
+import type { TurnstileHandle } from './Turnstile';
 
-type Mode = 'signin' | 'signup';
+type Mode = 'signin' | 'signup' | 'forgot';
 
-// Demo switch: social buttons are hidden until Google/Meta OAuth credentials
-// are configured in Supabase. Flip back to true to restore them — the OAuth
-// handlers below stay wired and need no other change.
-const SOCIAL_LOGIN_ENABLED = false;
+// Social buttons need the Google and Facebook providers enabled in Supabase
+// (Auth > Providers) with their client IDs and secrets.
+const SOCIAL_LOGIN_ENABLED = true;
+
+const FROM_KEY = 'chabuka:oauth-from';
+const RESEND_SECONDS = 60;
+
+// The OAuth round trip leaves the page, so remember where to return to.
+function stashFrom(from: string | undefined): void {
+  try {
+    if (from) window.sessionStorage.setItem(FROM_KEY, from);
+  } catch {
+    // Private mode: they land on the default page instead.
+  }
+}
+
+function readStashedFrom(): string | null {
+  try {
+    return window.sessionStorage.getItem(FROM_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function clearStashedFrom(): void {
+  try {
+    window.sessionStorage.removeItem(FROM_KEY);
+  } catch {
+    // Nothing to clear.
+  }
+}
+
+function friendlyError(err: unknown, fallback: string): string {
+  const msg = err instanceof Error ? err.message : '';
+  const lower = msg.toLowerCase();
+  if (lower.includes('invalid login credentials')) return 'Wrong email or password.';
+  if (lower.includes('email not confirmed'))
+    return 'Confirm your email first. Check your inbox for the link, or resend it below.';
+  if (lower.includes('captcha')) return 'Verification failed. Please try the check again.';
+  if (lower.includes('rate limit') || lower.includes('too many'))
+    return 'Too many attempts. Wait a few minutes and try again.';
+  return msg || fallback;
+}
 
 // Shared sign-in / sign-up form: the /login page and the landing-page modal
 // render the same form so visitors never leave the page to authenticate.
@@ -30,8 +71,22 @@ export default function AuthForm({
   const [password, setPassword] = useState('');
   const [agreed, setAgreed] = useState(false);
   const [sent, setSent] = useState(false);
+  const [resetSent, setResetSent] = useState(false);
+  const [needsConfirm, setNeedsConfirm] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [captcha, setCaptcha] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [info, setInfo] = useState<string | null>(null);
   const [busy, setBusy] = useState<'meta' | 'google' | 'password' | null>(null);
+  const captchaRef = useRef<TurnstileHandle | null>(null);
+  const [params] = useSearchParams();
+  const justConfirmed = params.get('confirmed') === '1';
+
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const t = window.setTimeout(() => setCooldown((c) => c - 1), 1000);
+    return () => window.clearTimeout(t);
+  }, [cooldown]);
 
   useEffect(() => {
     if (loading || !user) return;
@@ -39,7 +94,9 @@ export default function AuthForm({
       navigate('/onboarding', { replace: true });
       return;
     }
-    const safeFrom = from && from.startsWith('/') && !from.startsWith('//') ? from : null;
+    const target = from ?? readStashedFrom();
+    const safeFrom = target && target.startsWith('/') && !target.startsWith('//') ? target : null;
+    clearStashedFrom();
     if (safeFrom) {
       navigate(safeFrom, { replace: true });
       return;
@@ -47,26 +104,52 @@ export default function AuthForm({
     onAuthenticated?.();
   }, [loading, user, needsOnboarding, from, navigate, onAuthenticated]);
 
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError(null);
+    setInfo(null);
+    setSent(false);
+    setResetSent(false);
+    setNeedsConfirm(false);
+    captchaRef.current?.reset();
+  };
+
+  // Captcha is required whenever a site key is configured; the token is
+  // single use, so every attempt resets the widget.
+  const captchaMissing = TURNSTILE_SITE_KEY !== '' && !captcha;
+  const finishAttempt = () => {
+    captchaRef.current?.reset();
+    setBusy(null);
+  };
+
   const oauth = async (provider: 'facebook' | 'google', label: 'meta' | 'google') => {
     setBusy(label);
     setError(null);
+    stashFrom(from);
     try {
       await signInWithOAuth(provider);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
+      setError(friendlyError(err, 'Sign-in failed.'));
       setBusy(null);
     }
   };
 
   const submitSignIn = async (e: FormEvent) => {
     e.preventDefault();
+    if (captchaMissing) {
+      setError('Please complete the verification check.');
+      return;
+    }
     setBusy('password');
     setError(null);
+    setNeedsConfirm(false);
     try {
-      await signInWithPassword(email.trim(), password);
+      await signInWithPassword(email.trim(), password, captcha ?? undefined);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-in failed.');
-      setBusy(null);
+      const msg = friendlyError(err, 'Sign-in failed.');
+      setError(msg);
+      setNeedsConfirm(err instanceof Error && err.message.toLowerCase().includes('email not confirmed'));
+      finishAttempt();
     }
   };
 
@@ -76,27 +159,90 @@ export default function AuthForm({
       setError('Sign-up is not available right now. Try again later.');
       return;
     }
+    if (captchaMissing) {
+      setError('Please complete the verification check.');
+      return;
+    }
     setBusy('password');
     setError(null);
     try {
-      const { error } = await supabase.auth.signUp({
+      const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
         password,
         options: {
           data: { name: name.trim() },
+          captchaToken: captcha ?? undefined,
           // The confirmation email bounces back to OUR url; Supabase
           // verifies the link and hands the session to the app there.
           emailRedirectTo: `${window.location.origin}/login?confirmed=1`,
         },
       });
       if (error) throw error;
+      // Supabase answers "success" with no identities for an email that is
+      // already registered, to avoid leaking which emails have accounts.
+      if (data.user && (data.user.identities?.length ?? 0) === 0) {
+        setError('That email already has an account. Sign in instead, or reset your password.');
+        return;
+      }
       setSent(true);
+      setCooldown(RESEND_SECONDS);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Sign-up failed.');
+      setError(friendlyError(err, 'Sign-up failed.'));
     } finally {
-      setBusy(null);
+      finishAttempt();
     }
   };
+
+  const resendConfirmation = async () => {
+    if (!supabase || cooldown > 0) return;
+    if (captchaMissing) {
+      setError('Please complete the verification check.');
+      return;
+    }
+    setError(null);
+    setInfo(null);
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email: email.trim(),
+      options: {
+        captchaToken: captcha ?? undefined,
+        emailRedirectTo: `${window.location.origin}/login?confirmed=1`,
+      },
+    });
+    captchaRef.current?.reset();
+    if (error) {
+      setError(friendlyError(error, 'Could not resend the email.'));
+      return;
+    }
+    setInfo(`Sent again to ${email.trim()}.`);
+    setCooldown(RESEND_SECONDS);
+  };
+
+  const submitForgot = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!supabase) return;
+    if (captchaMissing) {
+      setError('Please complete the verification check.');
+      return;
+    }
+    setBusy('password');
+    setError(null);
+    try {
+      const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        captchaToken: captcha ?? undefined,
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      // Same answer whether or not the email has an account.
+      setResetSent(true);
+    } catch (err) {
+      setError(friendlyError(err, 'Could not send the reset email.'));
+    } finally {
+      finishAttempt();
+    }
+  };
+
+  const captchaWidget = <Turnstile ref={captchaRef} onToken={setCaptcha} />;
 
   return (
     <div className="card">
@@ -118,7 +264,7 @@ export default function AuthForm({
             />
           </svg>
         </span>
-        {busy === 'meta' ? 'Continuing…' : 'Continue with Meta'}
+        {busy === 'meta' ? 'Continuing…' : 'Continue with Facebook'}
       </button>
       <button
         className="btn btn-brand"
@@ -161,13 +307,9 @@ export default function AuthForm({
         <button
           type="button"
           role="tab"
-          aria-selected={mode === 'signin'}
-          className={mode === 'signin' ? 'chip chip-active' : 'chip'}
-          onClick={() => {
-            setMode('signin');
-            setError(null);
-            setSent(false);
-          }}
+          aria-selected={mode !== 'signup'}
+          className={mode !== 'signup' ? 'chip chip-active' : 'chip'}
+          onClick={() => switchMode('signin')}
         >
           Sign in
         </button>
@@ -176,16 +318,54 @@ export default function AuthForm({
           role="tab"
           aria-selected={mode === 'signup'}
           className={mode === 'signup' ? 'chip chip-active' : 'chip'}
-          onClick={() => {
-            setMode('signup');
-            setError(null);
-            setSent(false);
-          }}
+          onClick={() => switchMode('signup')}
         >
           Create account
         </button>
       </div>
-      {mode === 'signin' ? (
+      {justConfirmed && mode === 'signin' && !user ? (
+        <p className="muted">Email confirmed. Sign in to continue.</p>
+      ) : null}
+      {mode === 'forgot' ? (
+        resetSent ? (
+          <div>
+            <p>
+              <strong>Check your inbox.</strong> If {email.trim()} has an account, a reset link is on
+              its way.
+            </p>
+            <button className="btn" type="button" onClick={() => switchMode('signin')}>
+              Back to sign in
+            </button>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              void submitForgot(e);
+            }}
+          >
+            <label className="field">
+              Email
+              <input
+                className="input"
+                type="email"
+                required
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="you@example.com"
+                autoComplete="email"
+              />
+            </label>
+            {captchaWidget}
+            {error ? <p className="error">{error}</p> : null}
+            <button className="btn btn-primary" type="submit" disabled={busy !== null || captchaMissing}>
+              {busy === 'password' ? 'Sending…' : 'Send reset link'}
+            </button>
+            <button className="btn" type="button" onClick={() => switchMode('signin')}>
+              Back to sign in
+            </button>
+          </form>
+        )
+      ) : mode === 'signin' ? (
         <form
           onSubmit={(e) => {
             void submitSignIn(e);
@@ -215,10 +395,29 @@ export default function AuthForm({
               autoComplete="current-password"
             />
           </label>
+          {captchaWidget}
           {error ? <p className="error">{error}</p> : null}
-          <button className="btn btn-primary" type="submit" disabled={busy !== null}>
+          {info ? <p className="muted">{info}</p> : null}
+          <button className="btn btn-primary" type="submit" disabled={busy !== null || captchaMissing}>
             {busy === 'password' ? 'Signing in…' : 'Sign in'}
           </button>
+          {needsConfirm ? (
+            <button
+              className="btn"
+              type="button"
+              disabled={cooldown > 0 || captchaMissing}
+              onClick={() => {
+                void resendConfirmation();
+              }}
+            >
+              {cooldown > 0 ? `Resend confirmation (${cooldown}s)` : 'Resend confirmation email'}
+            </button>
+          ) : null}
+          <p className="muted">
+            <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
+              Forgot password?
+            </button>
+          </p>
         </form>
       ) : sent ? (
         <div>
@@ -226,7 +425,20 @@ export default function AuthForm({
             <strong>Check your inbox.</strong> We sent a confirmation email to {email.trim()}.
             Click the link in it and you will be signed straight in.
           </p>
-          <p className="muted">No email yet? Check spam, then try again in a few minutes.</p>
+          <p className="muted">No email yet? Check spam, then resend it.</p>
+          {captchaWidget}
+          {error ? <p className="error">{error}</p> : null}
+          {info ? <p className="muted">{info}</p> : null}
+          <button
+            className="btn"
+            type="button"
+            disabled={cooldown > 0 || captchaMissing}
+            onClick={() => {
+              void resendConfirmation();
+            }}
+          >
+            {cooldown > 0 ? `Resend email (${cooldown}s)` : 'Resend email'}
+          </button>
         </div>
       ) : (
         <form
@@ -281,8 +493,9 @@ export default function AuthForm({
             />{' '}
             I agree to the <Link to="/terms">Terms of Use</Link>.
           </label>
+          {captchaWidget}
           {error ? <p className="error">{error}</p> : null}
-          <button className="btn btn-primary" type="submit" disabled={busy !== null}>
+          <button className="btn btn-primary" type="submit" disabled={busy !== null || captchaMissing}>
             {busy === 'password' ? 'Creating…' : 'Create account'}
           </button>
         </form>

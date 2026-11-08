@@ -753,7 +753,11 @@ export async function respondBooking(
   if (decision === 'decline') {
     const { error } = await db.from('bookings').update({ status: 'declined' }).eq('id', booking.id);
     if (error) throw dbError(error);
-    await notifyUsers([booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
+    await notifyUsers([booking.requester_id], 'booking_answered', {
+    bookingId: booking.id,
+    venueId: booking.venue_id,
+    decision,
+  });
     return { state: 'declined', actions: [], booking: await loadBooking(db, booking.id) };
   }
   let capacity = 1;
@@ -767,7 +771,11 @@ export async function respondBooking(
   }
   const { error } = await db.from('bookings').update({ status: 'confirmed' }).eq('id', booking.id);
   if (error) throw dbError(error);
-  await notifyUsers([booking.requester_id], 'booking_answered', { bookingId: booking.id, decision });
+  await notifyUsers([booking.requester_id], 'booking_answered', {
+    bookingId: booking.id,
+    venueId: booking.venue_id,
+    decision,
+  });
   const code = `CHB-${crypto.randomUUID().replace(/-/g, '').slice(0, 8).toUpperCase()}`;
   const { data: ticketRow, error: ticketErr } = await db
     .from('tickets')

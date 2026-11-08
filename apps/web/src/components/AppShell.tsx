@@ -5,6 +5,7 @@ import CreateTeamForm from './CreateTeamForm';
 import FindOpponentForm from './FindOpponentForm';
 import GafferPage from '../pages/GafferPage';
 import { useTheme } from '../lib/theme';
+import { useUnreadCount } from '../lib/notifications';
 
 type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
 
@@ -14,6 +15,7 @@ export default function AppShell() {
   const [gafferOpen, setGafferOpen] = useState(false);
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
+  const unread = useUnreadCount();
 
   useEffect(() => {
     if (!gafferOpen) return;
@@ -52,6 +54,10 @@ export default function AppShell() {
           </NavLink>
           <NavLink to="/teams" className={navClass}>
             Teams
+          </NavLink>
+          <NavLink to="/notifications" className={navClass} aria-label={unread > 0 ? `Alerts, ${unread} unread` : 'Alerts'}>
+            Alerts
+            {unread > 0 ? <span className="nav-badge">{unread > 9 ? '9+' : unread}</span> : null}
           </NavLink>
           <NavLink to="/profile" className={navClass}>
             Profile

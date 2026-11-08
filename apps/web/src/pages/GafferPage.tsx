@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent } from 'react';
+import type { FormEvent, KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
 import { askGaffer, transcribeVoiceNote } from '../lib/api';
+import { blobToDataUrl, recordingToWav } from '../lib/voice';
 
 interface ChatMessage {
   from: 'user' | 'gaffer';
@@ -11,19 +12,46 @@ interface ChatMessage {
   actionsTaken?: { name: string; ok: boolean; detail?: string }[];
 }
 
-// Spoken step labels: what the Gaffer did, in the user's words, so the
-// card reads as progress ("Booking venue… booked") not tool names.
+// Spoken step labels: what the Gaffer did, in the user's words. Only
+// actions that change something are listed; lookups stay out of the card.
 const STEP_LABELS: Record<string, string> = {
-  create_match: 'Creating game',
-  request_booking: 'Booking venue',
-  post_challenge: 'Posting challenge',
-  create_poll: 'Starting poll',
-  post_result: 'Posting result',
-  report_score: 'Reporting score',
-  search_venues: 'Checking venues',
-  venue_slots: 'Checking slots',
-  search_matches: 'Checking open games',
+  create_match: 'Created game',
+  join_match: 'Joined game',
+  withdraw_match: 'Left game',
+  request_booking: 'Requested venue booking',
+  cancel_booking: 'Cancelled booking',
+  create_team: 'Created team',
+  post_challenge: 'Posted challenge',
+  accept_challenge: 'Accepted challenge',
+  decline_challenge: 'Declined challenge',
+  propose_time: 'Proposed a time',
+  create_poll: 'Started poll',
+  answer_poll: 'Answered poll',
+  post_result: 'Posted result',
+  report_score: 'Reported score',
+  post_announcement: 'Posted announcement',
+  join_circle: 'Joined circle',
+  leave_circle: 'Left circle',
+  create_circle: 'Created circle',
+  update_profile: 'Updated profile',
+  set_sports: 'Updated sports',
+  set_availability: 'Updated availability',
+  set_position: 'Updated position',
+  set_game_types: 'Updated game types',
+  add_place: 'Added place',
+  remove_place: 'Removed place',
+  save_memory: 'Remembered that',
+  forget_memory: 'Forgot that',
 };
+
+function stepLabel(name: string): string | null {
+  const known = STEP_LABELS[name];
+  if (known) return known;
+  // Lookups (get_*, search_*, venue_slots, poll_status) are not shown.
+  if (/^(get_|search_)/.test(name) || name === 'venue_slots' || name === 'poll_status') return null;
+  const words = name.replace(/_/g, ' ');
+  return words.charAt(0).toUpperCase() + words.slice(1);
+}
 
 function stepLink(detail: string | undefined): { href: string; label: string } | null {
   if (!detail) return null;
@@ -46,12 +74,6 @@ const STARTERS = [
   'Explain the 5v5 basketball rules',
   'Recap my week',
 ];
-
-// Meta's transcribe endpoint only takes WAV (mono 16-bit PCM). The mic
-// usually records webm/opus, so decode it here and re-encode 16 kHz mono
-// WAV — no server ffmpeg needed.
-const WAV_SAMPLE_RATE = 16000;
-const MAX_VOICE_SECONDS = 180;
 
 // Browser speech recognition runs alongside the mic capture purely as a
 // live display: words appear as you speak so you can see he is listening.
@@ -97,76 +119,6 @@ function startInterimListen(onText: (text: string) => void): (() => void) | null
   } catch {
     return null;
   }
-}
-
-function encodeWav(samples: Float32Array, sampleRate: number): Blob {
-  const buffer = new ArrayBuffer(44 + samples.length * 2);
-  const view = new DataView(buffer);
-  const writeAscii = (offset: number, text: string) => {
-    for (let i = 0; i < text.length; i += 1) view.setUint8(offset + i, text.charCodeAt(i));
-  };
-  writeAscii(0, 'RIFF');
-  view.setUint32(4, 36 + samples.length * 2, true);
-  writeAscii(8, 'WAVE');
-  writeAscii(12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * 2, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, 16, true);
-  writeAscii(36, 'data');
-  view.setUint32(40, samples.length * 2, true);
-  for (let i = 0; i < samples.length; i += 1) {
-    const clamped = Math.max(-1, Math.min(1, samples[i] ?? 0));
-    view.setInt16(44 + i * 2, clamped < 0 ? clamped * 0x8000 : clamped * 0x7fff, true);
-  }
-  return new Blob([buffer], { type: 'audio/wav' });
-}
-
-async function recordingToWav(blob: Blob): Promise<Blob> {
-  const source = await blob.arrayBuffer();
-  const Ctor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) throw new Error('Voice notes are not supported in this browser.');
-  const ctx = new Ctor();
-  let decoded: AudioBuffer;
-  try {
-    decoded = await ctx.decodeAudioData(source);
-  } finally {
-    void ctx.close().catch(() => undefined);
-  }
-  if (!Number.isFinite(decoded.duration) || decoded.duration <= 0) {
-    throw new Error('Could not read the recording. Try again.');
-  }
-  if (decoded.duration > MAX_VOICE_SECONDS) {
-    throw new Error('Voice note is too long. Keep it under 3 minutes.');
-  }
-  const offline = new OfflineAudioContext(
-    1,
-    Math.max(1, Math.floor(decoded.duration * WAV_SAMPLE_RATE)),
-    WAV_SAMPLE_RATE,
-  );
-  const src = offline.createBufferSource();
-  src.buffer = decoded;
-  src.connect(offline.destination);
-  src.start(0);
-  const rendered = await offline.startRendering();
-  return encodeWav(rendered.getChannelData(0), WAV_SAMPLE_RATE);
-}
-
-function blobToDataUrl(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () =>
-      typeof reader.result === 'string' && reader.result
-        ? resolve(reader.result)
-        : reject(new Error('Could not read the recording. Try again.'));
-    reader.onerror = () => reject(new Error('Could not read the recording. Try again.'));
-    reader.readAsDataURL(blob);
-  });
 }
 
 // Phone photos are megabytes; downscale to ~1024px JPEG before upload so
@@ -432,6 +384,9 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
   const [draft, setDraft] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
+  const abortRef = useRef<AbortController | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [recording, setRecording] = useState(false);
   const [convo, setConvo] = useState<'off' | 'listening' | 'thinking' | 'speaking'>('off');
   const [hearing, setHearing] = useState('');
@@ -444,10 +399,24 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
     () => () => {
       convoActiveRef.current = false;
       convoStopCaptureRef.current?.();
+      abortRef.current?.abort();
       window.speechSynthesis?.cancel();
     },
     [],
   );
+
+  // Always show the newest message.
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
+  }, [messages.length, busy, convo]);
+
+  // Composer grows with the text (up to a cap), like a standard chat box.
+  useEffect(() => {
+    const el = inputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
+  }, [draft]);
 
   // Keep the conversation across navigation: one stored thread per user.
   useEffect(() => {
@@ -514,16 +483,39 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
     ]);
     setDraft('');
     setPhotos([]);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const turn = await askGaffer(message || 'What do you see in these photos?', history, token, attached);
+      const turn = await askGaffer(
+        message || 'What do you see in these photos?',
+        history,
+        token,
+        attached,
+        controller.signal,
+      );
       setMessages((prev) => [
         ...prev,
         { from: 'gaffer', text: turn.reply, actionsTaken: turn.actionsTaken },
       ]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'The Gaffer could not answer. Try again.');
+      // Nothing was answered: take the message back out of the thread and
+      // put it in the composer so it can be sent again, not retyped.
+      setMessages((prev) => prev.slice(0, -1));
+      setDraft(message);
+      setPhotos(attached);
+      if (!(err instanceof DOMException && err.name === 'AbortError')) {
+        setError(err instanceof Error ? err.message : 'The Gaffer could not answer. Try again.');
+      }
     } finally {
+      abortRef.current = null;
       setBusy(false);
+    }
+  };
+
+  const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
+      e.preventDefault();
+      void send(draft);
     }
   };
 
@@ -694,7 +686,12 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
             reply = turn.reply;
             actionsTaken = turn.actionsTaken;
           } catch (err) {
-            reply = err instanceof Error ? err.message : reply;
+            const text = err instanceof Error ? err.message : '';
+            reply = /sign-in|signed in/i.test(text)
+              ? 'Your session expired. Sign in again.'
+              : /too many|slow down/i.test(text)
+                ? 'Give me a moment, then ask again.'
+                : "Sorry, I couldn't get that done. Say that again?";
           }
           if (!reply.trim()) reply = "I couldn't get that done. Say that again?";
           if (!convoActiveRef.current) break;
@@ -723,6 +720,8 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
               className="btn btn-ghost"
               type="button"
               onClick={() => {
+                abortRef.current?.abort();
+                if (convoActiveRef.current) stopConvo();
                 window.speechSynthesis?.cancel();
                 if (recorderRef.current && recorderRef.current.state !== 'inactive') {
                   recorderRef.current.stop();
@@ -768,36 +767,60 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
           ))}
         </div>
       ) : null}
-      {messages.map((m, i) =>
-        m.from === 'user' ? (
-          <p className="muted" key={i}>
-            You: {m.text}
-          </p>
-        ) : (
-          <div className="card" key={i}>
-            <div className="row">
-              <strong>Gaffer</strong>
+      <div className="chat-thread" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation with the Gaffer">
+        {messages.map((m, i) =>
+          m.from === 'user' ? (
+            <div className="bubble-row bubble-row-user" key={i}>
+              <p className="bubble bubble-user">{m.text}</p>
             </div>
-            <p>{m.text}</p>
-            {m.actionsTaken && m.actionsTaken.length > 0 ? (
-              <ul className="steps">
-                {m.actionsTaken.map((a, j) => {
-                  const link = stepLink(a.detail);
-                  const label = STEP_LABELS[a.name] ?? a.name.replace(/_/g, ' ');
-                  return (
-                    <li key={j} className={a.ok ? 'step-ok' : 'step-bad'}>
-                      <span>
-                        {label} {a.ok ? '✓' : '✗'}
-                      </span>
-                      {link ? <Link to={link.href}>{link.label}</Link> : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            ) : null}
+          ) : (
+            <div className="card" key={i}>
+              <div className="row">
+                <strong>Gaffer</strong>
+              </div>
+              <p>{m.text}</p>
+              {(() => {
+                const steps = (m.actionsTaken ?? []).flatMap((a) => {
+                  const label = stepLabel(a.name);
+                  return label ? [{ a, label }] : [];
+                });
+                return steps.length > 0 ? (
+                  <ul className="steps">
+                    {steps.map(({ a, label }, j) => {
+                      const link = stepLink(a.detail);
+                      return (
+                        <li key={j} className={a.ok ? 'step-ok' : 'step-bad'}>
+                          <span>
+                            {a.ok ? label : `Could not complete: ${label.toLowerCase()}`}
+                          </span>
+                          {link ? <Link to={link.href}>{link.label}</Link> : null}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                ) : null;
+              })()}
+            </div>
+          ),
+        )}
+        {busy && convo === 'off' && !recording ? (
+          <div className="bubble-row" role="status">
+            <p className="bubble bubble-gaffer typing" aria-label="Gaffer is thinking">
+              <span className="dot" />
+              <span className="dot" />
+              <span className="dot" />
+            </p>
+            <button
+              className="btn btn-ghost"
+              type="button"
+              onClick={() => abortRef.current?.abort()}
+            >
+              Stop
+            </button>
           </div>
-        ),
-      )}
+        ) : null}
+        <div ref={bottomRef} />
+      </div>
       {error ? <p className="error">{error}</p> : null}
       {convo !== 'off' ? (
         <p className="muted" role="status">
@@ -812,18 +835,30 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
       ) : null}
       <form onSubmit={submit}>
         {photos.length > 0 ? (
-          <p className="muted">
-            {photos.length} photo{photos.length > 1 ? 's' : ''} attached{' '}
-            <button className="btn btn-ghost" type="button" onClick={() => setPhotos([])}>
-              Clear
-            </button>
-          </p>
+          <div className="photo-strip">
+            {photos.map((src, i) => (
+              <div className="photo-thumb" key={i}>
+                <img src={src} alt={`Attached photo ${i + 1}`} />
+                <button
+                  type="button"
+                  className="photo-remove"
+                  aria-label={`Remove photo ${i + 1}`}
+                  onClick={() => setPhotos((prev) => prev.filter((_, k) => k !== i))}
+                >
+                  &times;
+                </button>
+              </div>
+            ))}
+          </div>
         ) : null}
         <div className="composer">
-          <input
+          <textarea
+            ref={inputRef}
             className="composer-input"
+            rows={1}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onKeyDown={onComposerKey}
             placeholder="Ask the Gaffer…"
             maxLength={2000}
             aria-label="Message the Gaffer"

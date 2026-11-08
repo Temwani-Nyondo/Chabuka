@@ -35,11 +35,67 @@ app.use((req, res, next) => {
   next();
 });
 
+// Per-IP rate limit on /api (in-memory, one Render instance). Behind
+// Cloudflare the real client IP is CF-Connecting-IP; Cloudflare's own WAF
+// rules are the main defence, this is the backstop.
+app.set('trust proxy', 1);
+const RATE_WINDOW_MS = 60_000;
+const RATE_MAX = 120;
+const hits = new Map<string, { count: number; resetAt: number }>();
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of hits) if (v.resetAt <= now) hits.delete(k);
+}, RATE_WINDOW_MS).unref();
+app.use('/api', (req, res, next) => {
+  if (req.method === 'OPTIONS') {
+    next();
+    return;
+  }
+  const key = req.header('cf-connecting-ip') ?? req.ip ?? 'unknown';
+  const now = Date.now();
+  const entry = hits.get(key);
+  if (!entry || entry.resetAt <= now) {
+    hits.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    next();
+    return;
+  }
+  entry.count += 1;
+  if (entry.count > RATE_MAX) {
+    res.setHeader('Retry-After', String(Math.ceil((entry.resetAt - now) / 1000)));
+    res.status(429).json({ error: 'Too many requests. Slow down and try again shortly.' });
+    return;
+  }
+  next();
+});
+
+// Model routes cost real money per call, so they get a much tighter
+// per-user limit than the general per-IP one above.
+const MODEL_RATE_MAX = 20;
+const userHits = new Map<string, { count: number; resetAt: number }>();
+function modelRateLimited(userId: string, res: express.Response): boolean {
+  const now = Date.now();
+  const entry = userHits.get(userId);
+  if (!entry || entry.resetAt <= now) {
+    userHits.set(userId, { count: 1, resetAt: now + RATE_WINDOW_MS });
+    return false;
+  }
+  entry.count += 1;
+  if (entry.count <= MODEL_RATE_MAX) return false;
+  res.setHeader('Retry-After', String(Math.ceil((entry.resetAt - now) / 1000)));
+  res.status(429).json({ error: 'Slow down: too many Gaffer requests this minute. Try again shortly.' });
+  return true;
+}
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of userHits) if (v.resetAt <= now) userHits.delete(k);
+}, RATE_WINDOW_MS).unref();
+
 // Voice notes arrive as base64 (~4/3 wire size), so this route is
 // registered BEFORE the default-limit parser and parses its own body.
 app.post('/api/helper/transcribe', express.json({ limit: '15mb' }), async (req, res) => {
   const userId = await authedUserId(req, res);
   if (!userId) return;
+  if (modelRateLimited(userId, res)) return;
   try {
     const audio = typeof req.body?.audio === 'string' ? req.body.audio : '';
     const match = /^data:(audio\/[^;,]+(?:;[^;,=]+=[^;,]+)*);base64,([\s\S]+)$/.exec(audio);
@@ -74,6 +130,9 @@ app.post('/api/helper/transcribe', express.json({ limit: '15mb' }), async (req, 
   }
 });
 
+// The Gaffer takes up to 3 attached photos (data URLs), well past the 100 KB
+// default, so it parses its own larger body before the default parser runs.
+app.use('/api/helper', express.json({ limit: '16mb' }));
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
@@ -113,7 +172,8 @@ app.post('/api/actions/:name', async (req, res) => {
 const helperBodySchema = z.object({
   message: z.string().min(1).max(2000),
   history: z
-    .array(z.object({ role: z.enum(['system', 'user', 'assistant']), content: z.string().max(4000) }))
+    // 'system' is deliberately not accepted: clients cannot write the rules.
+    .array(z.object({ role: z.enum(['user', 'assistant']), content: z.string().max(4000) }))
     .max(10)
     .optional(),
   // Optional attached photos as data URLs (jpeg/png/webp, max 3).
@@ -141,6 +201,7 @@ app.post('/api/helper', async (req, res) => {
       res.status(401).json({ error: 'Invalid or expired sign-in.' });
       return;
     }
+    if (modelRateLimited(data.user.id, res)) return;
     const turn = await runHelperTurn({
       db,
       userId: data.user.id,

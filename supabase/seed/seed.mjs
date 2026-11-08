@@ -171,7 +171,13 @@ async function main() {
   for (const [name, photos] of Object.entries(VENUE_PHOTOS)) {
     await api(`/rest/v1/venues?name=eq.${encodeURIComponent(name)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ photos }) });
   }
-  console.log('venues ready: 8 with photos');
+  // Seeded venues belong to the demo organiser, so the booking requests that
+  // land on them can actually be confirmed or declined from the dashboard.
+  const organiser = people.find((p) => p.email === 'organiser@demo.chabuka');
+  if (organiser?.id) {
+    await api('/rest/v1/venues?owner_id=is.null', { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ owner_id: organiser.id }) });
+  }
+  console.log('venues ready: 8 with photos, owned by the demo organiser');
   const venues = await api('/rest/v1/venues?select=id,name,area,lat,lng,sports');
 
   // --- open matches (10, next 7 days, varied fill) ---------------------------

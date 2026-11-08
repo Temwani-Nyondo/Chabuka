@@ -1,22 +1,10 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
+import { describeNote, markAllRead } from '../lib/notifications';
+import type { Note } from '../lib/notifications';
 import { supabase } from '../lib/supabase';
-
-interface Note {
-  id: string;
-  type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-  read_at: string | null;
-}
-
-const TITLES: Record<string, string> = {
-  circle_event: 'New event in your circle',
-  player_joined: 'A player joined your match',
-  result_posted: 'New result on a board you follow',
-  booking_answered: 'Your booking was answered',
-};
 
 export default function NotificationsPage() {
   const { user } = useAuth();
@@ -26,17 +14,27 @@ export default function NotificationsPage() {
 
   useEffect(() => {
     if (!user || !supabase) return;
-    supabase
-      .from('notifications')
-      .select('*')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: false })
-      .limit(30)
-      .then(({ data, error: err }) => {
-        if (err) setError(err.message);
-        else setNotes((data ?? []) as Note[]);
-        setLoading(false);
-      });
+    let cancelled = false;
+    void (async () => {
+      const { data, error: err } = await supabase!
+        .from('notifications')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false })
+        .limit(30);
+      if (cancelled) return;
+      if (err) setError(err.message);
+      else {
+        // Keep this visit's unread highlighting, then mark everything read so
+        // the nav badge clears.
+        setNotes((data ?? []) as Note[]);
+        void markAllRead(user.id);
+      }
+      setLoading(false);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [user]);
 
   return (
@@ -48,18 +46,22 @@ export default function NotificationsPage() {
       </div>
       {loading ? <p className="loading">Loading…</p> : null}
       {error ? <p className="error">{error}</p> : null}
-      {!loading && notes.length === 0 ? (
+      {!loading && !error && notes.length === 0 ? (
         <EmptyState title="All quiet" hint="Joins, results and circle events land here." />
       ) : null}
-      {notes.map((n) => (
-        <div className="card" key={n.id}>
-          <div className="row">
-            <strong>{TITLES[n.type] ?? 'Update'}</strong>
-            <span className="tag">{new Date(n.created_at).toLocaleDateString()}</span>
+      {notes.map((n) => {
+        const d = describeNote(n);
+        return (
+          <div className={n.read_at === null ? 'card note-unread' : 'card'} key={n.id}>
+            <div className="row">
+              <strong>{d.title}</strong>
+              <span className="tag">{new Date(n.created_at).toLocaleDateString()}</span>
+            </div>
+            {d.body ? <p className="muted">{d.body}</p> : null}
+            {d.href ? <Link to={d.href}>View</Link> : null}
           </div>
-          <p className="muted">{String(n.payload.title ?? n.payload.decision ?? '')}</p>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
