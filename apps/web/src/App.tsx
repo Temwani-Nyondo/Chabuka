@@ -10,6 +10,8 @@ import RoadmapPage from './pages/RoadmapPage';
 import NotificationsPage from './pages/NotificationsPage';
 import { CommunityPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
 import OnboardingPage from './pages/OnboardingPage';
+import WaitAppConnectPage from './pages/WaitAppConnectPage';
+import AdminVenuesPage from './pages/AdminVenuesPage';
 import CirclesPage from './pages/CirclesPage';
 import CompetitionsPage from './pages/CompetitionsPage';
 import GafferPage from './pages/GafferPage';
@@ -46,6 +48,7 @@ export default function App() {
       <Route path="/community" element={<CommunityPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/onboarding" element={<OnboardingPage />} />
+        <Route path="/connect/waitapp" element={<WaitAppConnectPage />} />
         <Route element={<AppShell />}>
           <Route path="home" element={<HomePage />} />
           <Route path="explore" element={<ExplorePage />} />
@@ -58,6 +61,7 @@ export default function App() {
           <Route path="roadmap" element={<RoadmapPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="venues/dashboard" element={<VenueDashboardPage />} />
+          <Route path="admin/venues" element={<AdminVenuesPage />} />
           <Route path="venues/:venueId" element={<VenueProfilePage />} />
         </Route>
       </Route>

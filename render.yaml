@@ -30,3 +30,9 @@ services:
         sync: false
       - key: META_TRANSCRIBE_MODEL_ID
         sync: false
+      - key: WAITAPP_BASE_URL
+        sync: false # https://waitapp.online
+      - key: WAITAPP_PARTNER_SECRET
+        sync: false # same value as WaitApp CHABUKA_PARTNER_SECRET
+      - key: WAITAPP_TOKEN_KEY
+        sync: false # base64 of 32 random bytes

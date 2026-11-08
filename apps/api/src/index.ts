@@ -6,7 +6,20 @@ import { runHelperTurn } from './helper.js';
 import { transcribeVoice } from './model.js';
 import { handleMcpRequest } from './mcp.js';
 import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
-import { createUserClient } from './supabase.js';
+import { createServiceClient, createUserClient } from './supabase.js';
+import { isPlatformAdmin, listVenuesForReview, requireAdmin, reviewVenue } from './venues.js';
+import { reviewVenueSchema } from '@chabuka/shared';
+import {
+  buildConnectUrl,
+  claimTickets,
+  completeLink,
+  createTicketing,
+  getLinkSummary,
+  handleWebhook,
+  refreshTicketing,
+  removeLink,
+  ticketingInputSchema,
+} from './waitapp.js';
 import { buildIcs, formatEventLocation, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 import { loadServerEnv } from './env.js';
 
@@ -127,6 +140,23 @@ app.post('/api/helper/transcribe', express.json({ limit: '15mb' }), async (req, 
     }
     console.error(err);
     res.status(500).json({ error: 'Transcription failed. Try again.' });
+  }
+});
+
+// WaitApp -> Chabuka ticket notifications. The signature covers the exact raw
+// bytes, so this route reads the body raw instead of through express.json.
+app.post('/api/webhooks/waitapp', express.raw({ type: '*/*', limit: '100kb' }), async (req, res) => {
+  try {
+    const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+    const result = await handleWebhook(createServiceClient(), raw, {
+      timestamp: req.header('x-waitapp-timestamp') ?? '',
+      signature: req.header('x-waitapp-signature') ?? '',
+    });
+    res.json({ ok: true, ...result });
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    if (status >= 500) console.error('waitapp webhook failed:', err);
+    res.status(status).json({ error: message });
   }
 });
 
@@ -274,6 +304,149 @@ app.delete('/api/agent-tokens/:id', async (req, res) => {
     const { status, message } = toHttpError(err);
     if (status >= 500) console.error('agent-token revoke failed:', err);
     res.status(status).json({ error: message });
+  }
+});
+
+// --- Venue approval (platform admins only) -----------------------------------
+app.get('/api/admin/me', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json({ admin: await isPlatformAdmin(createServiceClient(), userId) });
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    res.status(status).json({ error: message });
+  }
+});
+
+app.get('/api/admin/venues', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const status = z.enum(['pending', 'approved', 'rejected']).catch('pending').parse(req.query['status']);
+  try {
+    const service = createServiceClient();
+    await requireAdmin(service, userId);
+    res.json({ venues: await listVenuesForReview(service, status) });
+  } catch (err) {
+    const { status: code, message } = toHttpError(err);
+    if (code >= 500) console.error('admin venues failed:', err);
+    res.status(code).json({ error: message });
+  }
+});
+
+app.post('/api/admin/venues/:id/review', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = reviewVenueSchema.safeParse(req.body ?? {});
+  const venueId = z.string().uuid().safeParse(req.params['id']);
+  if (!parsed.success || !venueId.success) {
+    res.status(400).json({ error: 'Choose approve or reject for a valid venue.' });
+    return;
+  }
+  try {
+    const service = createServiceClient();
+    await requireAdmin(service, userId);
+    res.json(await reviewVenue(service, userId, venueId.data, parsed.data));
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    if (status >= 500) console.error('venue review failed:', err);
+    res.status(status).json({ error: message });
+  }
+});
+
+// --- Ticketed games (WaitApp ticket engine) ---------------------------------
+// All writes go through the service role inside waitapp.ts, after the caller
+// is identified and checked as the game's organiser.
+function sendError(res: express.Response, err: unknown, label: string): void {
+  const { status, message } = toHttpError(err);
+  if (status >= 500) console.error(`${label} failed:`, err);
+  res.status(status).json({ error: message });
+}
+
+app.get('/api/waitapp/link', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json({ link: await getLinkSummary(createServiceClient(), userId) });
+  } catch (err) {
+    sendError(res, err, 'waitapp link read');
+  }
+});
+
+app.post('/api/waitapp/connect-url', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json({ url: buildConnectUrl(userId) });
+  } catch (err) {
+    sendError(res, err, 'waitapp connect-url');
+  }
+});
+
+app.post('/api/waitapp/link', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = z.object({ code: z.string().min(10).max(200), state: z.string().min(10).max(400) }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Missing link details.' });
+    return;
+  }
+  try {
+    res.json({ link: await completeLink(createServiceClient(), userId, parsed.data.code, parsed.data.state) });
+  } catch (err) {
+    sendError(res, err, 'waitapp link');
+  }
+});
+
+app.delete('/api/waitapp/link', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    await removeLink(createServiceClient(), userId);
+    res.json({ ok: true });
+  } catch (err) {
+    sendError(res, err, 'waitapp unlink');
+  }
+});
+
+app.post('/api/waitapp/ticketing', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = ticketingInputSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the ticket details.' });
+    return;
+  }
+  try {
+    res.json({ ticketing: await createTicketing(createServiceClient(), userId, parsed.data) });
+  } catch (err) {
+    sendError(res, err, 'waitapp ticketing');
+  }
+});
+
+app.post('/api/waitapp/ticketing/refresh', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = z.object({ matchId: z.string().uuid() }).safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: 'Missing game.' });
+    return;
+  }
+  try {
+    res.json({ ticketing: await refreshTicketing(createServiceClient(), userId, parsed.data.matchId) });
+  } catch (err) {
+    sendError(res, err, 'waitapp refresh');
+  }
+});
+
+// Called once after sign-in: attaches tickets bought before the account existed.
+app.post('/api/waitapp/claim', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json(await claimTickets(createServiceClient(), userId));
+  } catch (err) {
+    sendError(res, err, 'waitapp claim');
   }
 });
 

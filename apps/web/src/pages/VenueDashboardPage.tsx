@@ -59,6 +59,8 @@ export default function VenueDashboardPage() {
   // New slot form (per venue id)
   const [slotStart, setSlotStart] = useState<Record<string, string>>({});
   const [slotEnd, setSlotEnd] = useState<Record<string, string>>({});
+  const [slotPrice, setSlotPrice] = useState<Record<string, string>>({});
+  const [slotWeeks, setSlotWeeks] = useState<Record<string, number>>({});
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -116,7 +118,7 @@ export default function VenueDashboardPage() {
           },
           token,
         ),
-      'Venue registered. Add schedule slots below.',
+      'Venue submitted for approval. You can add slots now; it goes live once an admin approves it.',
     );
     setName('');
     setArea('');
@@ -176,7 +178,7 @@ export default function VenueDashboardPage() {
       ) : null}
 
       <form className="card" onSubmit={createVenue}>
-        <strong>Register a venue (free)</strong>
+        <strong>List a venue</strong>
         <label className="field">Name<input className="input" value={name} onChange={(e) => setName(e.target.value)} maxLength={80} /></label>
         <label className="field">
           Location — search or drop a pin
@@ -201,10 +203,41 @@ export default function VenueDashboardPage() {
         <section key={venue.id}>
           <h2>{venue.name}</h2>
           <p className="muted">{venue.area} · <Link to={`/venues/${venue.id}`}>View profile</Link></p>
+          {venue.status === 'pending' ? (
+            <p className="hint"><span className="tag">Waiting for approval</span> Only you can see this venue until an admin approves it.</p>
+          ) : null}
+          {venue.status === 'rejected' ? (
+            <p className="error"><span className="tag">Not approved</span> {venue.review_note ?? 'Contact support to find out why.'}</p>
+          ) : null}
           <div className="card">
-            <strong>Add a free schedule slot</strong>
+            <strong>Add schedule slots</strong>
             <label className="field">Starts<input className="input" type="datetime-local" value={slotStart[venue.id] ?? ''} onChange={(e) => setSlotStart({ ...slotStart, [venue.id]: e.target.value })} /></label>
             <label className="field">Ends<input className="input" type="datetime-local" value={slotEnd[venue.id] ?? ''} onChange={(e) => setSlotEnd({ ...slotEnd, [venue.id]: e.target.value })} /></label>
+            <label className="field">
+              Price per slot (leave empty for free)
+              <input
+                className="input"
+                inputMode="decimal"
+                placeholder="e.g. 150"
+                value={slotPrice[venue.id] ?? ''}
+                onChange={(e) => setSlotPrice({ ...slotPrice, [venue.id]: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              Repeat weekly for
+              <select
+                className="input"
+                value={slotWeeks[venue.id] ?? 1}
+                onChange={(e) => setSlotWeeks({ ...slotWeeks, [venue.id]: Number(e.target.value) })}
+              >
+                {[1, 4, 8, 12].map((w) => (
+                  <option key={w} value={w}>{w === 1 ? 'Just this one' : `${w} weeks`}</option>
+                ))}
+              </select>
+            </label>
+            {slotPrice[venue.id] ? (
+              <p className="hint">Paid slots show their price, but paid booking opens with WaitApp payments. Until then players cannot book them.</p>
+            ) : null}
             <button
               className="btn"
               type="button"
@@ -219,6 +252,10 @@ export default function VenueDashboardPage() {
                         startsAt: new Date(slotStart[venue.id] as string).toISOString(),
                         endsAt: new Date(slotEnd[venue.id] as string).toISOString(),
                         capacity: 1,
+                        repeatWeeks: slotWeeks[venue.id] ?? 1,
+                        ...(slotPrice[venue.id]?.trim() && Number.isFinite(Number(slotPrice[venue.id]))
+                          ? { price: Number(slotPrice[venue.id]), currency: 'ZMW' }
+                          : {}),
                       },
                       token,
                     ),
@@ -231,6 +268,7 @@ export default function VenueDashboardPage() {
             {(slotsByVenue[venue.id] ?? []).map((slot) => (
               <p className="muted" key={slot.id}>
                 {fmt.format(new Date(slot.starts_at))} – {fmt.format(new Date(slot.ends_at))} · capacity {slot.capacity}
+                {slot.price != null && slot.price > 0 ? ` · ${slot.currency ?? ''} ${slot.price}` : ' · free'}
               </p>
             ))}
           </div>

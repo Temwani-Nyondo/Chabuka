@@ -166,7 +166,7 @@ async function main() {
     { name: 'Ibex Hill Trail Gate', area: 'Ibex Hill', lat: -15.435, lng: 28.365, sports: ['hiking', 'marathon'], facility_types: ['trailhead'], price_note: 'Free - public trail' },
   ]) {
     const found = await api(`/rest/v1/venues?name=eq.${encodeURIComponent(v.name)}&select=id`);
-    if (!found.length) await api('/rest/v1/venues', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ ...v, photos: VENUE_PHOTOS[v.name] ?? [] }) });
+    if (!found.length) await api('/rest/v1/venues', { method: 'POST', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ ...v, photos: VENUE_PHOTOS[v.name] ?? [], status: 'approved' }) });
   }
   for (const [name, photos] of Object.entries(VENUE_PHOTOS)) {
     await api(`/rest/v1/venues?name=eq.${encodeURIComponent(name)}`, { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ photos }) });
@@ -175,7 +175,7 @@ async function main() {
   // land on them can actually be confirmed or declined from the dashboard.
   const organiser = people.find((p) => p.email === 'organiser@demo.chabuka');
   if (organiser?.id) {
-    await api('/rest/v1/venues?owner_id=is.null', { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ owner_id: organiser.id }) });
+    await api('/rest/v1/venues?owner_id=is.null', { method: 'PATCH', headers: { Prefer: 'return=minimal' }, body: JSON.stringify({ owner_id: organiser.id, status: 'approved' }) });
   }
   console.log('venues ready: 8 with photos, owned by the demo organiser');
   const venues = await api('/rest/v1/venues?select=id,name,area,lat,lng,sports');

@@ -54,6 +54,40 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/explore',
       };
     }
+    case 'ticket_refunded':
+      return {
+        title: 'Your ticket was refunded',
+        body: text(p.title),
+        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    case 'game_cancelled':
+      return {
+        title: 'A game you have a ticket for was cancelled',
+        body: [text(p.title), text(p.reason)].filter(Boolean).join(' - '),
+        href: null,
+      };
+    case 'game_postponed': {
+      const when = text(p.newDate) ? new Date(text(p.newDate)).toLocaleString() : '';
+      return {
+        title: 'A game you have a ticket for moved',
+        body: [text(p.title), when ? `now ${when}` : ''].filter(Boolean).join(' - '),
+        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    }
+    case 'venue_pending':
+      return { title: 'A venue is waiting for approval', body: text(p.title), href: '/admin/venues' };
+    case 'venue_approved':
+      return {
+        title: 'Your venue was approved',
+        body: text(p.title),
+        href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/venues/dashboard',
+      };
+    case 'venue_rejected':
+      return {
+        title: 'Your venue was not approved',
+        body: [text(p.title), text(p.note)].filter(Boolean).join(' - '),
+        href: '/venues/dashboard',
+      };
     case 'result_posted':
       return { title: 'New result on a board you follow', body: '', href: '/board' };
     default:

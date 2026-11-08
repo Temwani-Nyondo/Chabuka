@@ -182,9 +182,15 @@ export default function VenueProfilePage() {
         <>
           <VenuePhoto photos={venue.photos} name={venue.name} banner />
           <div className="card">
+            {venue.status === 'pending' ? (
+              <p className="hint"><span className="tag">Waiting for approval</span> Only you can see this venue until an admin approves it.</p>
+            ) : null}
+            {venue.status === 'rejected' ? (
+              <p className="error"><span className="tag">Not approved</span> {venue.review_note ?? ''}</p>
+            ) : null}
             <div className="row">
-              <strong>Free booking</strong>
-              <span className="tag">Free — MVP demo</span>
+              <strong>Booking</strong>
+              <span className="tag">Request, then the venue confirms</span>
             </div>
             <p className="muted">{venue.price_note ?? 'Free — MVP demo'}</p>
             {venue.contact ? <p className="muted">Contact: {venue.contact}</p> : null}
@@ -237,10 +243,12 @@ export default function VenueProfilePage() {
                       <strong>
                         {slotFmt.format(new Date(slot.starts_at))} – {slotFmt.format(new Date(slot.ends_at))}
                       </strong>
-                      <span className="tag">{slot.capacity} court(s)/pitch(es)</span>
+                      <span className="tag">{slot.price != null && slot.price > 0 ? `${slot.currency ?? ''} ${slot.price}` : 'Free'}</span>
                     </div>
                     {mine ? (
                       <p className="muted">Your booking: {mine.status}</p>
+                    ) : slot.price != null && slot.price > 0 ? (
+                      <p className="hint">Paid booking opens soon.</p>
                     ) : (
                       <button
                         className="btn btn-primary"

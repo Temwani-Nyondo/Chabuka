@@ -3,6 +3,8 @@ import { CTA_LABELS, LEVEL_LABELS, availableActions, formatEventLocation, google
 import { useAuth } from '../auth/AuthContext';
 import { downloadMatchIcs } from '../lib/api';
 import type { MatchListing } from '../lib/matches';
+import { checkoutLink, priceLabel, ticketLookupUrl } from '../lib/waitapp';
+import TicketingPanel from './TicketingPanel';
 
 interface Props {
   listing: MatchListing;
@@ -10,6 +12,8 @@ interface Props {
   onJoin: (matchId: string, before?: number, title?: string) => void;
   onWithdraw: (matchId: string) => void;
   highlighted?: boolean;
+  // Called after ticket sales are set up or refreshed so the list reloads.
+  onTicketingChanged?: () => void;
 }
 
 const dateFmt = new Intl.DateTimeFormat(undefined, {
@@ -20,9 +24,9 @@ const dateFmt = new Intl.DateTimeFormat(undefined, {
   minute: '2-digit',
 });
 
-export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlighted }: Props) {
-  const { match, sport, venue, joinedCount, isParticipant, isOrganiser } = listing;
-  const { session } = useAuth();
+export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlighted, onTicketingChanged }: Props) {
+  const { match, sport, venue, joinedCount, isParticipant, isOrganiser, ticketing, myTickets } = listing;
+  const { session, user } = useAuth();
   const [error, setError] = useState<string | null>(null);
   const cardRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
@@ -54,12 +58,14 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlight
         <strong>{match.title}</strong>
         {isOrganiser ? <span className="tag">You host</span> : null}
         <span className="tag">{match.kind === 'team-vs-team' ? 'Team game' : 'Join to play'}</span>
-        <span className="tag">Free</span>
+        <span className="tag">{ticketing ? priceLabel(ticketing) : 'Free'}</span>
       </div>
       <p className="muted">
         {match.kind === 'team-vs-team'
           ? 'For teams — register your side.'
-          : 'Open to anyone — tap Join to play.'}
+          : ticketing
+            ? 'Tickets are sold through WaitApp. Buy one to join.'
+            : 'Open to anyone — tap Join to play.'}
       </p>
       <p className="muted">
         {sport ? `${sport.name}${match.format ? ` · ${match.format}` : ''} · ` : ''}
@@ -72,15 +78,37 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlight
         players in
       </p>
       {match.notes ? <p>{match.notes}</p> : null}
+      {ticketing && myTickets ? (
+        <p className="hint">
+          You have {myTickets.total} ticket{myTickets.total === 1 ? '' : 's'}
+          {myTickets.checkedIn > 0 ? ` (${myTickets.checkedIn} checked in)` : ''}. Your QR ticket was sent by email.{' '}
+          <a href={ticketLookupUrl(ticketing)} target="_blank" rel="noreferrer">
+            Find my ticket
+          </a>
+        </p>
+      ) : null}
+      {match.status === 'cancelled' ? <p className="error">This game was cancelled.{ticketing ? ' Ticket holders are refunded by WaitApp.' : ''}</p> : null}
       {error ? <p className="error">{error}</p> : null}
       {actions.length > 0 ? (
         <div className="actions-row">
-          {actions.includes('join') ? (
+          {actions.includes('join') && ticketing ? (
+            ticketing.status === 'on_sale' && user ? (
+              <a className="btn btn-primary" href={checkoutLink(ticketing, user.id)} target="_blank" rel="noreferrer">
+                Buy ticket
+              </a>
+            ) : (
+              <p className="hint">Tickets are not on sale yet.</p>
+            )
+          ) : null}
+          {actions.includes('join') && !ticketing ? (
             <button className="btn btn-primary" type="button" disabled={busy} onClick={act(onJoin)}>
               {CTA_LABELS['join']}
             </button>
           ) : null}
-          {actions.includes('withdraw') ? (
+          {actions.includes('withdraw') && ticketing ? (
+            <p className="hint">You have a ticket. Ask for a refund through WaitApp to give up your spot.</p>
+          ) : null}
+          {actions.includes('withdraw') && !ticketing ? (
             <button className="btn" type="button" disabled={busy} onClick={act(onWithdraw)}>
               {CTA_LABELS['withdraw']}
             </button>
@@ -94,6 +122,9 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlight
       ) : (
         <p className="hint">{match.kind === 'team-vs-team' ? 'Team game — sides are set through challenges. See the Teams tab.' : match.status === 'full' || joinedCount >= match.capacity ? 'Full' : match.status}</p>
       )}
+      {isOrganiser && match.kind === 'players' ? (
+        <TicketingPanel matchId={match.id} ticketing={ticketing} onChanged={() => onTicketingChanged?.()} />
+      ) : null}
       <div className="actions-row">
           <button
             className="btn"

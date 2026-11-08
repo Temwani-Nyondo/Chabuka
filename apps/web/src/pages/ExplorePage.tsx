@@ -209,6 +209,7 @@ export default function ExplorePage() {
                     busy={busyId === selected.match.id}
                     onJoin={onJoin}
                     onWithdraw={onWithdraw}
+                    onTicketingChanged={() => void reload()}
                   />
                 ) : (
                   <p className="hint">Tap a green pin to see that match.</p>
@@ -236,6 +237,7 @@ export default function ExplorePage() {
                         busy={busyId === listing.match.id}
                         onJoin={onJoin}
                         onWithdraw={onWithdraw}
+                        onTicketingChanged={() => void reload()}
                       />
                     ))}
                   </section>
@@ -250,6 +252,7 @@ export default function ExplorePage() {
                     busy={busyId === listing.match.id}
                     onJoin={onJoin}
                     onWithdraw={onWithdraw}
+                    onTicketingChanged={() => void reload()}
                   />
                 ))
               : null}

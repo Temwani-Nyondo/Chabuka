@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
@@ -6,6 +6,8 @@ import FindOpponentForm from './FindOpponentForm';
 import GafferPage from '../pages/GafferPage';
 import { useTheme } from '../lib/theme';
 import { useUnreadCount } from '../lib/notifications';
+import { useAuth } from '../auth/AuthContext';
+import { claimTickets } from '../lib/waitapp';
 
 type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
 
@@ -16,6 +18,17 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { theme, toggle } = useTheme();
   const unread = useUnreadCount();
+  const { session } = useAuth();
+  const claimedFor = useRef<string | null>(null);
+
+  // Tickets bought before this account existed are attached once per sign-in.
+  useEffect(() => {
+    const token = session?.access_token;
+    const uid = session?.user.id ?? null;
+    if (!token || !uid || claimedFor.current === uid) return;
+    claimedFor.current = uid;
+    void claimTickets(token).catch(() => undefined);
+  }, [session]);
 
   useEffect(() => {
     if (!gafferOpen) return;

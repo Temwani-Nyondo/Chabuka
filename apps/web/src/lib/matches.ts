@@ -1,6 +1,8 @@
 import { matchSchema, sportListSchema, venueListSchema } from '@chabuka/shared';
 import type { Match, Sport, Venue } from '@chabuka/shared';
 import { supabase } from './supabase';
+import { fetchMyTickets, fetchTicketing } from './waitapp';
+import type { MatchTicketing, MyTickets } from './waitapp';
 
 export interface MatchListing {
   match: Match;
@@ -9,6 +11,10 @@ export interface MatchListing {
   joinedCount: number;
   isParticipant: boolean;
   isOrganiser: boolean;
+  // Set when the game sells tickets through WaitApp.
+  ticketing: MatchTicketing | null;
+  // The signed-in player's own tickets for this game, if it sells them.
+  myTickets: MyTickets | null;
 }
 
 async function buildListings(rows: unknown[], userId: string): Promise<MatchListing[]> {
@@ -41,6 +47,8 @@ async function buildListings(rows: unknown[], userId: string): Promise<MatchList
     if (p.user_id === userId) mine.add(p.match_id);
   }
 
+  const [ticketingByMatch, myTicketsByMatch] = await Promise.all([fetchTicketing(ids), fetchMyTickets(ids, userId)]);
+
   const venueIds = [...new Set(matches.map((m) => m.venue_id).filter(Boolean))] as string[];
   const venueById = new Map<string, Venue>();
   if (venueIds.length > 0) {
@@ -59,6 +67,8 @@ async function buildListings(rows: unknown[], userId: string): Promise<MatchList
     joinedCount: counts.get(match.id) ?? 0,
     isParticipant: mine.has(match.id),
     isOrganiser: match.organiser_id === userId,
+    ticketing: ticketingByMatch.get(match.id) ?? null,
+    myTickets: myTicketsByMatch.get(match.id) ?? null,
   }));
 }
 

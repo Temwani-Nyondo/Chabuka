@@ -126,6 +126,7 @@ export default function HomePage() {
           busy={busyId === listing.match.id}
           onJoin={onJoin}
           onWithdraw={onWithdraw}
+          onTicketingChanged={() => void reload()}
         />
       ))}
       {forYou.length > 0 ? (

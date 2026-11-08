@@ -239,6 +239,20 @@ export async function createMatch(
   return { matchId, ...resultFor(match, userId, true, count, 'organiser') };
 }
 
+// A game that sells tickets is joined by buying one and left by refunding it,
+// both on WaitApp. Letting the free buttons through would either oversell the
+// game or leave a paid-for spot with nobody on it.
+async function refuseIfTicketed(db: SupabaseClient, matchId: string, what: 'join' | 'withdraw'): Promise<void> {
+  const { data } = await db.from('match_ticketing').select('match_id').eq('match_id', matchId).maybeSingle();
+  if (!data) return;
+  throw new ActionError(
+    409,
+    what === 'join'
+      ? 'This game sells tickets. Buy a ticket to join.'
+      : 'This game sells tickets. Ask for a refund through WaitApp to give up your spot.',
+  );
+}
+
 export async function joinMatch(
   db: SupabaseClient,
   userId: string,
@@ -251,6 +265,7 @@ export async function joinMatch(
   if (match.status !== 'open' && match.status !== 'full') {
     throw new ActionError(409, 'This match is not open.');
   }
+  await refuseIfTicketed(db, matchId, 'join');
   const existing = await participantStatus(db, matchId, userId);
   const before = await joinedCount(db, matchId);
   if (existing === 'joined') {
@@ -276,6 +291,7 @@ export async function withdrawMatch(
   matchId: string,
 ): Promise<ActionResult> {
   const match = await loadMatch(db, matchId);
+  await refuseIfTicketed(db, matchId, 'withdraw');
   const existing = await participantStatus(db, matchId, userId);
   if (existing !== 'joined') {
     const count = await joinedCount(db, matchId);
@@ -663,12 +679,27 @@ export async function createVenue(
       price_note: input.priceNote,
       contact: input.contact ?? null,
       photos: [],
+      // Always starts pending: a platform admin approves it before anyone else sees it.
+      status: 'pending',
     })
     .select('id')
     .single();
-  if (error) throw dbError(error);
+  if (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new ActionError(409, 'This place is already listed on Chabuka.');
+    }
+    throw dbError(error);
+  }
   const venue = await loadVenue(db, (data as { id: string }).id);
-  return { state: 'created', actions: ['create_venue_slot', 'request_booking'], venue };
+  // Tell the admins a venue is waiting. Best effort: the admin screen lists it anyway.
+  try {
+    const { data: admins } = await createServiceClient().from('platform_admins').select('user_id');
+    const adminIds = ((admins ?? []) as { user_id: string }[]).map((a) => a.user_id);
+    await notifyUsers(adminIds, 'venue_pending', { venueId: venue.id, title: input.name });
+  } catch {
+    // never blocks the owner
+  }
+  return { state: 'pending_review', actions: ['create_venue_slot'], venue };
 }
 
 export async function createVenueSlot(
@@ -680,19 +711,23 @@ export async function createVenueSlot(
   if (new Date(input.endsAt).getTime() <= new Date(input.startsAt).getTime()) {
     throw new ActionError(400, 'The slot must end after it starts.');
   }
-  const { data, error } = await db
-    .from('venue_slots')
-    .insert({
-      venue_id: input.venueId,
-      starts_at: input.startsAt,
-      ends_at: input.endsAt,
-      capacity: input.capacity,
-    })
-    .select('id')
-    .single();
+  if (input.price !== undefined && !input.currency) {
+    throw new ActionError(400, 'Give the currency for a priced slot.');
+  }
+  const weekMs = 7 * 24 * 60 * 60 * 1000;
+  const rows = Array.from({ length: input.repeatWeeks }, (_, i) => ({
+    venue_id: input.venueId,
+    starts_at: new Date(new Date(input.startsAt).getTime() + i * weekMs).toISOString(),
+    ends_at: new Date(new Date(input.endsAt).getTime() + i * weekMs).toISOString(),
+    capacity: input.capacity,
+    price: input.price ?? null,
+    currency: input.price !== undefined ? (input.currency ?? null) : null,
+  }));
+  const { data, error } = await db.from('venue_slots').insert(rows).select('id');
   if (error) throw dbError(error);
-  const slot = await loadSlot(db, (data as { id: string }).id);
-  return { state: 'created', actions: ['request_booking'], slot };
+  const ids = (data as { id: string }[]) ?? [];
+  const slot = await loadSlot(db, ids[0]?.id ?? '');
+  return { state: 'created', actions: ['request_booking'], slot, created: ids.length };
 }
 
 export async function requestBooking(
@@ -701,10 +736,18 @@ export async function requestBooking(
   input: RequestBookingInput,
 ): Promise<unknown> {
   const venue = await loadVenue(db, input.venueId);
+  if (venue.status !== 'approved') {
+    throw new ActionError(409, 'This venue is waiting for approval and cannot take bookings yet.');
+  }
   let startsAt = input.requestedStartsAt ?? null;
   if (input.slotId) {
     const slot = await loadSlot(db, input.slotId);
     if (slot.venue_id !== venue.id) throw new ActionError(400, 'That slot is for another venue.');
+    // Paid slots are collected through WaitApp, which is not switched on yet:
+    // refuse rather than quietly book a priced slot for free.
+    if (slot.price != null && slot.price > 0) {
+      throw new ActionError(409, 'This slot is paid. Paid booking is not available yet.');
+    }
     startsAt = slot.starts_at;
     const { data: mine } = await db
       .from('bookings')
@@ -1064,7 +1107,7 @@ async function loadCircle(db: SupabaseClient, circleId: string): Promise<Circle>
   return circleSchema.parse(data);
 }
 
-async function notifyUsers(
+export async function notifyUsers(
   userIds: string[],
   type: string,
   payload: Record<string, unknown>,

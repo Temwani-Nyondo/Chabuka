@@ -11,7 +11,9 @@ export async function fetchVenues(sportName?: string): Promise<Venue[]> {
   if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase
     .from('venues')
-    .select('id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos')
+    .select('id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos,status,review_note')
+    // The public list is approved venues only; an owner also sees their own pending ones elsewhere.
+    .eq('status', 'approved')
     .order('name');
   if (error) throw new Error(error.message);
   const parsed = venueListSchema.safeParse(data ?? []);
@@ -21,7 +23,7 @@ export async function fetchVenues(sportName?: string): Promise<Venue[]> {
   return parsed.data.filter((v) => v.sports.some((s) => s.toLowerCase() === wanted));
 }
 
-const VENUE_COLS = 'id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos';
+const VENUE_COLS = 'id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos,status,review_note';
 
 export async function fetchVenueById(venueId: string): Promise<Venue | null> {
   if (!supabase) return null;
@@ -34,7 +36,7 @@ export async function fetchVenueSlots(venueId: string): Promise<VenueSlot[]> {
   if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase
     .from('venue_slots')
-    .select('id,venue_id,starts_at,ends_at,capacity')
+    .select('id,venue_id,starts_at,ends_at,capacity,price,currency')
     .eq('venue_id', venueId)
     .gte('ends_at', new Date().toISOString())
     .order('starts_at');

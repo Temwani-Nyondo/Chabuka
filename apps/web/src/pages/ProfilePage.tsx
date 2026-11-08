@@ -9,6 +9,7 @@ import type { MyTeam } from '../lib/teams';
 import { fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
 import { fetchMyBookings, fetchVenues } from '../lib/venues';
+import { useIsAdmin } from '../lib/admin';
 import type { Booking } from '../lib/venues';
 import { setAvailabilityAction, setGameTypesAction } from '../lib/api';
 import { GAME_TYPES, TIME_BANDS, WEEK_DAYS } from '@chabuka/shared';
@@ -40,6 +41,7 @@ function tierFor(gamesPlayed: number): { name: string; className: string } {
 
 export default function ProfilePage() {
   const { profile, sportsCount, signOut, session, user, refreshProfile } = useAuth();
+  const isAdmin = useIsAdmin();
   const [uploadingImg, setUploadingImg] = useState(false);
   const [imgError, setImgError] = useState<string | null>(null);
 
@@ -644,6 +646,11 @@ export default function ProfilePage() {
         </div>
       </div>
       <p className="muted">
+        {isAdmin ? (
+          <>
+            <Link to="/admin/venues">Review venues</Link> ·{' '}
+          </>
+        ) : null}
         <Link to="/notifications">Notifications</Link> · <Link to="/privacy">Privacy</Link> ·{' '}
         <Link to="/terms">Terms</Link> · <Link to="/community">Community &amp; safety</Link>
       </p>

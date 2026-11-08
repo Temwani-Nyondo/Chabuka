@@ -164,8 +164,12 @@ export const venueSchema = z.object({
   price_note: z.string().nullable().optional(),
   contact: z.string().nullable().optional(),
   photos: z.array(z.string()).default([]),
+  // Approval state. Defaults to approved so rows read before the column existed still parse.
+  status: z.enum(['pending', 'approved', 'rejected']).default('approved'),
+  review_note: z.string().nullable().optional(),
 });
 export type Venue = z.infer<typeof venueSchema>;
+export type VenueStatus = Venue['status'];
 
 export const venueListSchema = z.array(venueSchema);
 
@@ -194,6 +198,9 @@ export const venueSlotSchema = z.object({
   starts_at: z.string(),
   ends_at: z.string(),
   capacity: z.number().int().positive(),
+  // Null or absent means a free slot.
+  price: z.coerce.number().nonnegative().nullable().optional(),
+  currency: z.string().nullable().optional(),
 });
 export type VenueSlot = z.infer<typeof venueSlotSchema>;
 
@@ -202,8 +209,18 @@ export const createVenueSlotSchema = z.object({
   startsAt: z.iso.datetime({ offset: true }),
   endsAt: z.iso.datetime({ offset: true }),
   capacity: z.number().int().min(1).max(50).default(1),
+  price: z.number().min(0).max(1_000_000).optional(),
+  currency: z.string().trim().length(3).optional(),
+  // Repeat the same window weekly, e.g. 8 = this week plus the next seven.
+  repeatWeeks: z.number().int().min(1).max(12).default(1),
 });
 export type CreateVenueSlotInput = z.infer<typeof createVenueSlotSchema>;
+
+export const reviewVenueSchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  note: z.string().trim().max(300).optional(),
+});
+export type ReviewVenueInput = z.infer<typeof reviewVenueSchema>;
 
 export const BOOKING_STATUSES = ['requested', 'confirmed', 'declined', 'cancelled'] as const;
 export const bookingStatusSchema = z.enum(BOOKING_STATUSES);
