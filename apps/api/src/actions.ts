@@ -265,6 +265,9 @@ export async function joinMatch(
   if (match.status !== 'open' && match.status !== 'full') {
     throw new ActionError(409, 'This match is not open.');
   }
+  if (new Date(match.starts_at).getTime() < Date.now()) {
+    throw new ActionError(409, 'This game has already started or finished.');
+  }
   await refuseIfTicketed(db, matchId, 'join');
   const existing = await participantStatus(db, matchId, userId);
   const before = await joinedCount(db, matchId);
@@ -1289,12 +1292,6 @@ export async function setSports(
   userId: string,
   input: SetSportsInput,
 ): Promise<unknown> {
-  const { error: validError } = await db
-    .from('sports')
-    .select('id')
-    .in('id', input.sportIds)
-    .limit(input.sportIds.length);
-  if (validError) throw dbError(validError);
   const { error: delError } = await db.from('user_sports').delete().eq('user_id', userId);
   if (delError) throw dbError(delError);
   const rows = input.sportIds.map((sportId) => ({ user_id: userId, sport_id: sportId, level: input.level }));

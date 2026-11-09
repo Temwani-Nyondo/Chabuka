@@ -30,14 +30,15 @@ import {
   updateProfileSchema,
   updateTeamSchema,
   type ActionName,
+  type OnboardingProgress,
 } from '@chabuka/shared';
-import { chatOnce, type ModelMessage, type ModelResult } from './model.js';
+import { chatOnce, chatStream, type ModelMessage, type ModelResult } from './model.js';
 import { ActionError, runAction, toHttpError } from './actions.js';
 
-// Day 6 Gaffer: "Ask the Gaffer" in the web nav lands here. Reads go
+// Day 6 Gaffer: "Ask Gaffer" in the web nav lands here. Reads go
 // through Gaffer-only context tools below; writes go through the one
 // action layer as the signed-in user, so RLS applies exactly as in the
-// app. Bookings and tickets are free in the MVP; the Gaffer always says so.
+// app. Bookings and tickets are free in the MVP; Gaffer always says so.
 const READ_LIMIT = 25;
 const MEMORY_LIMIT = 40;
 
@@ -115,6 +116,9 @@ async function readSearchMatches(
     .from('matches')
     .select('id,title,sport_id,starts_at,area,venue_name,level,status')
     .eq('status', 'open')
+    // Only games still to come: a past game can keep its "open" status, and sorted by
+    // start time it would otherwise be the first thing Gaffer finds.
+    .gte('starts_at', new Date().toISOString())
     .order('starts_at')
     .limit(READ_LIMIT);
   const sport = strArg(args, 'sport');
@@ -392,7 +396,7 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn; parameters?
   },
   {
     name: 'get_my_memories',
-    description: 'What the Gaffer remembers about the user (position, availability, home ground). Read early in planning. No arguments.',
+    description: 'What Gaffer remembers about the user (position, availability, home ground). Read early in planning. No arguments.',
     read: (db, userId) => readMemories(db, userId),
   },
   {
@@ -434,7 +438,8 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn; parameters?
   },
 ];
 
-const HELPER_SYSTEM_PROMPT = [
+// Who Gaffer is and how he sounds. Shared by every mode.
+const STYLE_PROMPT = [
   'Rule zero, highest priority, applies to EVERY reply including the first: never say who you are,',
   'never greet, never describe what you can do. No preamble of any kind. No acknowledgements',
   'either: never open with "Got you", "Noted", "All ears", "I\'m here" or anything like them.',
@@ -443,17 +448,28 @@ const HELPER_SYSTEM_PROMPT = [
   'know is a defect, not warmth — never do it.',
   'Keep replies short and speakable: one or two short sentences, plain words, no emojis, no lists',
   'unless the user asked for detail. Replies are read aloud, so never say anything you would not speak.',
-  'You are the Gaffer, the Chabuka assistant. Chabuka arranges real-life grassroots sport:',
+  'You are Gaffer, the Chabuka assistant. Chabuka arranges real-life grassroots sport:',
   'find a game, find an opponent, find a place, and play. Talk like a person arranging a game,',
   'not a menu: never echo the user\'s words back, never repeat a proposal verbatim.',
+  'Character: you are a warm, quick-witted football coach who genuinely likes people who play sport.',
+  'Sound like a person: contractions, short sentences, the odd light joke. Warmth comes from tone and',
+  'reactions, never from echoing the player back.',
+  'Human reactions: you may open a reply with ONE short natural reaction when it truly fits.',
+  '"Hmm," when you are weighing something up. "Ohhh," when something clicks or you spot a nice detail.',
+  '"Wow," or "Woah," when something is impressive or unexpected (a big fixture, a long playing history,',
+  'lots of sports). "Haha," when the player is funny or the moment is light. At most one reaction per',
+  'reply, in roughly one reply out of three, never in two replies in a row, and vary which one you use.',
+  'Never react this way to bad news, complaints, errors, injuries, safety, or a frustrated player: then',
+  'be calm and direct. A reaction answers what the person just said. It is not a greeting, not an echo',
+  'and not an acknowledgement like "Got you", which stay banned. Write laughter as words ("haha"),',
+  'never as an emoji, and keep the rest of the reply short and speakable. When the player shares something',
+  'notable, impressive or funny, lean towards reacting rather than skipping it, but never force one.',
+].join(' ');
+
+// Everything Gaffer does once a player is set up.
+const GENERAL_PROMPT = [
   'Know the player before you plan: pull get_my_profile (sports, area), get_my_teams and',
   'get_my_schedule early in a planning conversation instead of asking for facts you can look up.',
-  'First-run setup: when get_my_profile has no name yet, you are the onboarding. Walk it',
-  'conversationally, one question per reply: name, then area, then the sports they play.',
-  'Write each answer down as you go (update_profile for name and area, set_sports once',
-  'they pick sports) so nothing is lost, then confirm the card back briefly and send them to',
-  'Home. Offer the week grid (set_availability: day plus morning/afternoon/evening) and game',
-  'types (set_game_types) as an optional second pass, never as a gate.',
   'Remember everything said in this conversation, including your own earlier replies, which arrive as',
   'assistant history; never re-ask what the user already told you and never redo work you already reported.',
   'Never end a reply on a promise like "one moment" or "let me check": if you ran tools, report what',
@@ -522,6 +538,8 @@ const HELPER_SYSTEM_PROMPT = [
   'and never invent a workaround. Say plainly what is missing.',
 ].join(' ');
 
+const HELPER_SYSTEM_PROMPT = `${STYLE_PROMPT} ${GENERAL_PROMPT}`;
+
 // One tool per server action. The tool arguments ARE the action body;
 // runAction's zod schemas validate them and return fixable errors.
 // create_match and request_booking carry full schemas because the model
@@ -557,7 +575,7 @@ const REQUEST_BOOKING_PARAMETERS = {
   required: ['venueId'],
 };
 
-// Code-level guardrails (the prompt alone is not a boundary). The Gaffer may
+// Code-level guardrails (the prompt alone is not a boundary). Gaffer may
 // only call the actions below; everything else (deleting teams, removing
 // members, roles, blocking, reporting, venue and tournament admin, check-in)
 // stays a human action in the app, whatever the model is told or tricked into.
@@ -681,7 +699,7 @@ const READ_TOOL_DEFS: OpenAI.Chat.ChatCompletionTool[] = READ_TOOLS.map(readTool
 const AFFIRMATIVE =
   /\b(yes|yep|yeah|yup|sure|ok|okay|confirm(?:ed)?|go ahead|do it|please do|book it|send it|post it|sounds good|let'?s do it|that'?s right|correct)\b/i;
 
-// Everything the Gaffer can call: context reads first, then the actions.
+// Everything Gaffer can call: context reads first, then the actions.
 const HELPER_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [...READ_TOOL_DEFS, ...ACTION_TOOLS];
 
 export interface HelperActionTaken {
@@ -709,9 +727,183 @@ export interface HelperTurn {
   reply: string;
   actionsTaken: HelperActionTaken[];
   provider: string;
+  // Only in onboarding mode: what the card now holds.
+  progress?: OnboardingProgress;
 }
 
+// ── Onboarding: the first-time setup agent ──────────────────────────────────
+// A separate mode with its own short prompt and ONLY the four tools that write
+// the player's card, so it cannot wander into schedules or games. The server
+// reads the card fresh every turn and tells the model what is still missing.
+
+export type HelperMode = 'general' | 'onboarding';
+
+// The model is told to react sparingly and never to someone who is annoyed,
+// but models drift, so the two rules are also enforced here: a reaction opener
+// is dropped when either of Gaffer's last two replies already had one, or when
+// the player sounds impatient or annoyed. Only the opener is removed; the rest
+// of the reply is untouched.
+const REACTION_OPENER = /^(?:h+m+|o+h+|a+h+|w+o+w+|w+o+a+h+|w+h+o+a+|(?:ha){2,}h?)[,.!\u2026]*\s+/i;
+const IMPATIENT = /\b(hurry|taking (?:so )?(?:long|forever)|too slow|so slow|annoying|annoyed|useless|stupid|waste of|fed up|frustrat|ridiculous|not working|doesn'?t work|just finish|just do it|no,? no)\b/i;
+
+export function tameReaction(reply: string, recentGafferReplies: string[], playerMessage: string): string {
+  const text = reply.trim();
+  if (!REACTION_OPENER.test(text)) return reply;
+  const recentlyReacted = recentGafferReplies.slice(-2).some((r) => REACTION_OPENER.test(r.trim()));
+  if (!recentlyReacted && !IMPATIENT.test(playerMessage)) return reply;
+  const rest = text.replace(REACTION_OPENER, '').trim();
+  return rest ? rest.charAt(0).toUpperCase() + rest.slice(1) : reply;
+}
+
+export interface CardState {
+  name: string | null;
+  area: string | null;
+  city: string | null;
+  birthYear: number | null;
+  travelKm: number | null;
+  sportsCount: number;
+  sportsLevel: string | null;
+  availabilityCount: number;
+  gameTypesCount: number;
+  sports: { id: string; name: string }[];
+}
+
+export async function readCardState(db: SupabaseClient, userId: string): Promise<CardState> {
+  const [profile, userSports, availability, gameTypes, sports] = await Promise.all([
+    db.from('profiles').select('name,area,city,birth_year,travel_km').eq('id', userId).maybeSingle(),
+    db.from('user_sports').select('level').eq('user_id', userId),
+    db.from('user_availability').select('day', { count: 'exact', head: true }).eq('user_id', userId),
+    db.from('user_game_types').select('game_type', { count: 'exact', head: true }).eq('user_id', userId),
+    db.from('sports').select('id,name').order('name'),
+  ]);
+  const p = (profile.data ?? {}) as {
+    name?: string | null;
+    area?: string | null;
+    city?: string | null;
+    birth_year?: number | null;
+    travel_km?: number | null;
+  };
+  const levels = ((userSports.data ?? []) as { level: string | null }[]).map((r) => r.level);
+  return {
+    name: p.name ?? null,
+    area: p.area ?? null,
+    city: p.city ?? null,
+    birthYear: p.birth_year ?? null,
+    travelKm: p.travel_km ?? null,
+    sportsCount: levels.length,
+    sportsLevel: levels[0] ?? null,
+    availabilityCount: availability.count ?? 0,
+    gameTypesCount: gameTypes.count ?? 0,
+    sports: ((sports.data ?? []) as { id: string; name: string }[]).map((s) => ({ id: s.id, name: s.name })),
+  };
+}
+
+export function progressOf(card: CardState): OnboardingProgress {
+  const name = !!card.name?.trim();
+  const area = !!card.area?.trim();
+  const sports = card.sportsCount > 0;
+  return {
+    name,
+    area,
+    sports,
+    age: card.birthYear != null,
+    travel: card.travelKm != null,
+    availability: card.availabilityCount > 0,
+    gameTypes: card.gameTypesCount > 0,
+    essentialsComplete: name && area && sports,
+  };
+}
+
+const ONBOARDING_PROMPT = [
+  'RIGHT NOW your one and only job is the first-time setup of this player\'s card. Nothing else.',
+  'The essentials are: their name, their area (neighbourhood; the city is optional), and the sports they',
+  'play with one level (recreational, intermediate or competitive). NEVER choose a level for them and never',
+  'infer one from words like "open to competitions": only save a level they actually state. If they named',
+  'sports but no level, your one question is the level, and you do not call set_sports until you have it.',
+  'Players tell you things in any order and several at once. Read EVERY fact in each message and save all',
+  'of them in the same turn: update_profile for name, area, city, birthYear and travelKm; set_sports for',
+  'sports (pass the id from the list below, never the name; set_sports replaces the whole list and takes ONE level for all of them, so',
+  'if the levels differ, use the level of their main sport). Age: "I am 31" means birthYear = current year',
+  'minus 31. A game kind they mention (corporate, charitable, awareness, neighbourhood, skill_based, reunion,',
+  'routine) goes in set_game_types. Free times go in set_availability (day 0 is Sunday to 6 Saturday; timeBand',
+  'is morning, afternoon or evening). Never ask for gender and never guess it.',
+  'After saving, ask for exactly ONE thing: the most important essential still missing. Never ask for',
+  'something already on the card, and never ask two questions.',
+  'When all essentials are saved: confirm the card in one short line, then make ONE optional offer (how far they',
+  'will travel, their usual free times, the kinds of game they like) and say plainly they can stop here. Make that',
+  'offer once only. If they decline or say stop, skip or that is all, finish with one friendly closing line that',
+  'tells them to tap Go to Home.',
+  'Do not talk about games to join, schedules, venues, bookings, teams or anything beyond the card. If asked, say',
+  'that comes right after setup. Replies are one or two short sentences.',
+].join(' ');
+
+function cardStateBlock(card: CardState, year: number): string {
+  const known = (v: unknown) => (v === null || v === undefined || v === '' ? 'missing' : String(v));
+  const prog = progressOf(card);
+  const missing = [!prog.name && 'name', !prog.area && 'area', !prog.sports && 'sports with a level'].filter(Boolean);
+  const optional = [
+    !prog.age && 'age',
+    !prog.travel && 'travel distance',
+    !prog.availability && 'usual free times',
+    !prog.gameTypes && 'kinds of game',
+  ].filter(Boolean);
+  return [
+    'CARD STATE, read from the database just now. Trust it over the conversation.',
+    `name: ${known(card.name)}; area: ${known(card.area)}; city: ${known(card.city)};`,
+    `sports: ${card.sportsCount > 0 ? `${card.sportsCount} saved at level ${card.sportsLevel ?? 'unknown'}` : 'missing'};`,
+    `birth year: ${known(card.birthYear)}; travel distance: ${known(card.travelKm)};`,
+    `free times picked: ${card.availabilityCount}; game kinds picked: ${card.gameTypesCount}.`,
+    missing.length > 0
+      ? `Essentials still missing: ${missing.join(', ')}.`
+      : 'All essentials are saved: confirm the card and make the single optional offer (unless you already made it or they already declined).',
+    `Optional still empty: ${optional.join(', ') || 'none'}.`,
+    `The current year is ${year}.`,
+    `Sports you can save (id = name): ${card.sports.map((s) => `${s.id} = ${s.name}`).join('; ')}.`,
+  ].join(' ');
+}
+
+const ONBOARDING_ACTION_NAMES: ActionName[] = ['update_profile', 'set_sports', 'set_availability', 'set_game_types'];
+const ONBOARDING_ACTION_SET: ReadonlySet<string> = new Set(ONBOARDING_ACTION_NAMES);
+const ONBOARDING_TOOLS: OpenAI.Chat.ChatCompletionTool[] = ONBOARDING_ACTION_NAMES.map(actionTool);
+
+
 type ChatFn = typeof chatOnce;
+type StreamFn = typeof chatStream;
+
+// Streaming and tameReaction together: the first few characters are held back until
+// there is enough to tell whether the reply opens with a reaction that must be
+// dropped, then everything flows straight through. `emitted` says whether anything
+// has reached the player yet (so a round that turns out to be tool calls can be retracted).
+const GATE_CHARS = 16;
+export function createReactionGate(recentGafferReplies: string[], playerMessage: string, out: (text: string) => void) {
+  let held = '';
+  let open = false;
+  let emitted = false;
+  const release = (text: string) => {
+    if (!text) return;
+    emitted = true;
+    out(text);
+  };
+  const openGate = () => {
+    open = true;
+    const text = tameReaction(held, recentGafferReplies, playerMessage);
+    held = '';
+    release(text);
+  };
+  return {
+    push(text: string) {
+      if (open) return release(text);
+      held += text;
+      if (held.length >= GATE_CHARS || held.includes('\n')) openGate();
+    },
+    flush() {
+      if (!open) openGate();
+    },
+    get emitted() {
+      return emitted;
+    },
+  };
+}
 type ExecuteFn = (name: string, body: unknown) => Promise<unknown>;
 type ReadToolFn = (name: string, args: Record<string, unknown>) => Promise<unknown>;
 
@@ -758,7 +950,7 @@ function parseToolArguments(raw: string): unknown {
   try {
     return raw ? (JSON.parse(raw) as unknown) : {};
   } catch {
-    throw new ActionError(400, 'The Gaffer sent malformed action arguments.');
+    throw new ActionError(400, 'Gaffer sent malformed action arguments.');
   }
 }
 
@@ -769,9 +961,23 @@ export async function runHelperTurn(
     message: string;
     history?: ModelMessage[];
     images?: string[];
+    mode?: HelperMode;
+    // Streaming: finished text is pushed here as the model writes it. A round that turns
+    // out to be tool calls after text was already pushed is taken back with onRetract.
+    onDelta?: (text: string) => void;
+    onRetract?: () => void;
   },
-  deps?: { chat?: ChatFn; execute?: ExecuteFn; read?: ReadToolFn },
+  deps?: { chat?: ChatFn; stream?: StreamFn; execute?: ExecuteFn; read?: ReadToolFn; cardState?: (db: SupabaseClient, userId: string) => Promise<CardState> },
 ): Promise<HelperTurn> {
+  const mode: HelperMode = params.mode ?? 'general';
+  const loadCard = deps?.cardState ?? readCardState;
+  // Onboarding: read the card now, so the prompt says exactly what is missing.
+  const cardBefore = mode === 'onboarding' ? await loadCard(params.db, params.userId) : null;
+  const systemPrompt =
+    mode === 'onboarding' && cardBefore
+      ? `${STYLE_PROMPT} ${ONBOARDING_PROMPT} ${cardStateBlock(cardBefore, new Date().getFullYear())}`
+      : HELPER_SYSTEM_PROMPT;
+  const toolset = mode === 'onboarding' ? ONBOARDING_TOOLS : HELPER_TOOLS;
   const chat: ChatFn = deps?.chat ?? chatOnce;
   const execute: ExecuteFn = deps?.execute ?? ((name, body) => runAction(params.db, params.userId, name, body));
   const read: ReadToolFn =
@@ -781,6 +987,10 @@ export async function runHelperTurn(
   // system message must never reach the model.
   const recent = (params.history ?? []).filter((m) => m.role !== 'system').slice(-HISTORY_LIMIT);
   const deadline = Date.now() + TURN_BUDGET_MS;
+  const recentGaffer = recent
+    .filter((m) => m.role === 'assistant')
+    .map((m) => (typeof m.content === 'string' ? m.content : ''));
+  const tame = (r: string) => tameReaction(r, recentGaffer, params.message);
   const userAgreed = AFFIRMATIVE.test(params.message);
   // The model endpoint only accepts system/user roles: past Gaffer replies
   // ride along as labelled user messages so multi-turn context survives.
@@ -804,7 +1014,7 @@ export async function runHelperTurn(
         }
       : { role: 'user', content: params.message };
   const messages: ModelMessage[] = [
-    { role: 'system', content: HELPER_SYSTEM_PROMPT },
+    { role: 'system', content: systemPrompt },
     ...contextMessages,
     userMessage,
   ];
@@ -816,10 +1026,17 @@ export async function runHelperTurn(
     if (Date.now() > deadline) break;
     let result: ModelResult;
     try {
-      result = await chat({ messages, tools: HELPER_TOOLS });
+      if (params.onDelta) {
+        const gate = createReactionGate(recentGaffer, params.message, params.onDelta);
+        result = await (deps?.stream ?? chatStream)({ messages, tools: toolset }, gate.push);
+        if (result.toolCalls.length === 0) gate.flush();
+        else if (gate.emitted) params.onRetract?.();
+      } else {
+        result = await chat({ messages, tools: toolset });
+      }
     } catch (err) {
       if (err instanceof Error && err.message.includes('BASETEN_API_KEY')) {
-        throw new ActionError(503, 'The Gaffer is not set up yet. The server is missing its model key.');
+        throw new ActionError(503, 'Gaffer is not set up yet. The server is missing its model key.');
       }
       throw err;
     }
@@ -837,9 +1054,13 @@ export async function runHelperTurn(
       const isRead = READ_TOOLS.some((t) => t.name === call.name);
       try {
         const parsedArgs = parseToolArguments(call.arguments);
+        if (mode === 'onboarding' && !ONBOARDING_ACTION_SET.has(call.name)) {
+          // Setup only writes the card; everything else waits until it is done.
+          throw new ActionError(403, 'That is not part of setting up the card. Finish the card first.');
+        }
         if (!isRead && !GAFFER_ACTION_SET.has(call.name)) {
           // Not on the allowlist: refused in code, whatever the prompt said.
-          throw new ActionError(403, 'The Gaffer cannot do that. It has to be done by the person in the app.');
+          throw new ActionError(403, 'Gaffer cannot do that. It has to be done by the person in the app.');
         }
         let args = parsedArgs;
         if (!isRead && CONFIRM_REQUIRED.has(call.name)) {
@@ -895,5 +1116,11 @@ export async function runHelperTurn(
         ? `Done: ${done.join(', ')}. What next?`
         : 'I could not finish that. Try again.';
   }
-  return { reply, actionsTaken, provider };
+  if (mode === 'onboarding') {
+    // Re-read only if something was written: a turn that saved nothing leaves the card as it was.
+    const wrote = actionsTaken.some((a) => a.ok);
+    const cardAfter = wrote || !cardBefore ? await loadCard(params.db, params.userId) : cardBefore;
+    return { reply: tame(reply), actionsTaken, provider, progress: progressOf(cardAfter) };
+  }
+  return { reply: tame(reply), actionsTaken, provider };
 }

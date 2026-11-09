@@ -353,7 +353,7 @@ export default function LandingPage() {
         <section className="card landing-cta landing-cta-photo" aria-label="Get started">
           <img className="brand-mark brand-mark-lg" src="/brand/logo-mark.png" alt="" width={56} height={56} />
           <h2>Your next game is already on</h2>
-          <p className="muted">Sign in to join a side, book a court, or ask the Gaffer to sort it.</p>
+          <p className="muted">Sign in to join a side, book a court, or ask Gaffer to sort it.</p>
           <button className="btn btn-primary" type="button" onClick={() => setAuthMode('signup')}>
             Sign up free
           </button>
@@ -376,17 +376,14 @@ export default function LandingPage() {
           onClick={() => setAuthMode(null)}
         >
           <div className="modal-card" onClick={(e) => e.stopPropagation()}>
-            <div className="row">
-              <strong>{authMode === 'signin' ? 'Log in' : 'Sign up'}</strong>
-              <button
-                className="btn btn-ghost"
-                type="button"
-                onClick={() => setAuthMode(null)}
-                aria-label="Close"
-              >
-                ✕
-              </button>
-            </div>
+            <button
+              className="modal-close"
+              type="button"
+              onClick={() => setAuthMode(null)}
+              aria-label="Close"
+            >
+              &times;
+            </button>
             <AuthForm
               key={authMode}
               initialMode={authMode}

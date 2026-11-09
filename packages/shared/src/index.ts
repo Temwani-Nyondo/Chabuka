@@ -867,6 +867,20 @@ export function forYouScore(input: { sportMatch: boolean; slotMatch: boolean; ar
   return (input.sportMatch ? 2 : 0) + (input.slotMatch ? 2 : 0) + (input.areaMatch ? 1 : 0);
 }
 
+// What the onboarding chat has saved so far. The server computes it from the
+// database after every turn so the page can show a checklist and enable
+// "Go to Home" the moment the essentials are in.
+export interface OnboardingProgress {
+  name: boolean;
+  area: boolean;
+  sports: boolean;
+  age: boolean;
+  travel: boolean;
+  availability: boolean;
+  gameTypes: boolean;
+  essentialsComplete: boolean;
+}
+
 export const updateProfileSchema = z.object({
   name: z.string().trim().min(1).max(80).optional(),
   area: z.string().trim().min(1).max(80).optional(),
@@ -880,7 +894,7 @@ export const updateProfileSchema = z.object({
 });
 export type UpdateProfileInput = z.infer<typeof updateProfileSchema>;
 
-// Chat-led setup: the Gaffer collects sports conversationally and writes
+// Chat-led setup: Gaffer collects sports conversationally and writes
 // them with one level, same as the wizard's sports step.
 export const setSportsSchema = z.object({
   sportIds: z.array(z.string().uuid()).min(1).max(12),
@@ -1054,4 +1068,114 @@ export function availableActions(input: {
 // count it saw before joining and the count the server returned after.
 export function didFillMatch(before: number, after: number, capacity: number): boolean {
   return before < capacity && after >= capacity;
+}
+
+// --- Speaking Gaffer's reactions ---------------------------------------------
+// A reply may open with a short human reaction ("Hmm,", "Ohhh,", "Wow,",
+// "Haha,"). Browser voices read those flat, so the reaction is spoken as its
+// own short utterance with its own pitch, speed and a small pause, then the
+// rest of the reply follows. The text on screen is never changed.
+export interface SpeechSegment {
+  text: string;
+  pitch: number;
+  rate: number;
+  pauseAfterMs: number;
+}
+
+const REACTIONS: { pattern: RegExp; speak: (match: string) => string; pitch: number; rate: number; pauseAfterMs: number }[] = [
+  { pattern: /^(h+m+)\b/i, speak: () => 'Hmm', pitch: 0.85, rate: 0.7, pauseAfterMs: 380 },
+  { pattern: /^(o+h+)\b/i, speak: () => 'Ohhh', pitch: 1.3, rate: 0.75, pauseAfterMs: 220 },
+  { pattern: /^(a+h+)\b/i, speak: () => 'Ahh', pitch: 1.25, rate: 0.8, pauseAfterMs: 200 },
+  { pattern: /^(w+o+w+)\b/i, speak: () => 'Wow', pitch: 1.35, rate: 0.95, pauseAfterMs: 180 },
+  { pattern: /^(w+o+a+h+|w+h+o+a+)\b/i, speak: () => 'Whoa', pitch: 1.35, rate: 0.95, pauseAfterMs: 180 },
+  { pattern: /^((?:ha){2,}h?|(?:ha ){1,}ha)\b/i, speak: () => 'Ha ha ha', pitch: 1.3, rate: 1.15, pauseAfterMs: 180 },
+];
+
+/** Splits a reply into a leading reaction (if any) and the rest. */
+export function speechSegments(reply: string, base: { pitch: number; rate: number }): SpeechSegment[] {
+  const text = reply.trim();
+  if (!text) return [];
+  for (const r of REACTIONS) {
+    const m = r.pattern.exec(text);
+    if (!m) continue;
+    const rest = text.slice(m[0].length).replace(/^[\s,.!?…\-—]+/, '').trim();
+    const out: SpeechSegment[] = [
+      { text: r.speak(m[0]), pitch: r.pitch, rate: r.rate, pauseAfterMs: rest ? r.pauseAfterMs : 0 },
+    ];
+    if (rest) out.push({ text: rest, pitch: base.pitch, rate: base.rate, pauseAfterMs: 0 });
+    return out;
+  }
+  return [{ text, pitch: base.pitch, rate: base.rate, pauseAfterMs: 0 }];
+}
+
+// --- Streaming speech: cut a growing reply into sentences ----------------------
+// While Gaffer's reply streams in, each finished sentence can be spoken at once
+// instead of waiting for the whole reply. A sentence is finished when
+// punctuation is followed by whitespace (so "3.5" and "e.g.x" do not split), or
+// at a line break. Whatever is left over is still being written.
+export function splitSentences(buffer: string): { complete: string[]; rest: string } {
+  const complete: string[] = [];
+  const boundary = /([.!?\u2026]+["')\]]*)(\s+)|(\n+)/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = boundary.exec(buffer)) !== null) {
+    const end = m.index + (m[1]?.length ?? 0);
+    const sentence = buffer.slice(last, end).trim();
+    if (sentence) complete.push(sentence);
+    last = m.index + m[0].length;
+  }
+  return { complete, rest: buffer.slice(last) };
+}
+
+// --- Knowing when the player has finished speaking ---------------------------------
+// A fixed pause (the old 1.4 seconds) is wrong both ways: too slow after "competitive",
+// too quick after "and then...". The browser's live transcript tells us which one we
+// are in, so the silence we wait for is chosen from what was just said.
+export const ENDPOINT_MS = { complete: 600, answer: 800, unknown: 1200, trailing: 2000 } as const;
+
+const TRAILING_WORDS = new Set([
+  'and', 'but', 'so', 'because', 'cause', 'or', 'then', 'um', 'uh', 'umm', 'er', 'erm', 'like', 'well',
+  'the', 'a', 'an', 'to', 'of', 'with', 'for', 'in', 'on', 'at', 'my', 'is', 'are', 'was', 'if', 'that',
+  'which', 'who', 'when', 'as', 'also', 'plus', 'about', 'from', 'by', 'i', 'its', 'im', 'ill', 'maybe',
+]);
+
+/** How long a silence to wait for before treating the player's turn as finished. */
+export function endpointDelay(liveTranscript: string): number {
+  const text = liveTranscript.trim();
+  // No live transcript (browser without speech recognition): a middle-of-the-road pause.
+  if (!text) return ENDPOINT_MS.unknown;
+  // Trailing off: a comma, dash or ellipsis, or a word that cannot end a thought.
+  if (/[,\u2026\-\u2014]$/.test(text)) return ENDPOINT_MS.trailing;
+  const words = text.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').split(/\s+/).filter(Boolean);
+  const last = (words[words.length - 1] ?? '').replace(/'/g, '');
+  if (TRAILING_WORDS.has(last)) return ENDPOINT_MS.trailing;
+  if (/[.?!]$/.test(text)) return ENDPOINT_MS.complete;
+  // A short answer ("competitive", "Kabulonga") or a full statement ending on a real word.
+  return ENDPOINT_MS.answer;
+}
+
+// --- Ending the conversation -------------------------------------------------------
+// "hard": clearly goodbye ("bye", "see you later"): end at once, no need to ask the model.
+// "soft": "that's all" and friends: let Gaffer answer in context, then close the session.
+// The whole utterance has to be the ender, so "I gotta go play football" does not count.
+export type ConversationEnder = 'hard' | 'soft' | null;
+
+const FILLERS = '(?:ok|okay|alright|right|cool|great|thanks|thank you|cheers|well|so|yeah|yes|no|nah|nope|cool|alrighty)';
+const POLITE = '(?:thanks|thank you|cheers|mate|man|please|gaffer|now|then)';
+const HARD = '(?:bye+|goodbye|good bye|see (?:you|ya)(?: later| soon| tomorrow| around)?|talk (?:to you )?(?:later|soon)|catch (?:you|ya) later|ttyl|gotta go|got to go|have to go|hang up|end (?:the )?(?:call|chat|conversation)|stop listening|speak soon|later gaffer)';
+const SOFT = '(?:thats all|thats it|thats everything|im good|im done|im all set|im finished|were done|were good|were all set|nothing else|nothing more|all good|no thats all|no thats it)';
+const HARD_RE = new RegExp(`^(?:${FILLERS} )*${HARD}(?: (?:${HARD}|${POLITE}))*$`);
+const SOFT_RE = new RegExp(`^(?:${FILLERS} )*${SOFT}(?: (?:${SOFT}|${POLITE}))*$`);
+
+export function classifyEnder(utterance: string): ConversationEnder {
+  const text = utterance
+    .toLowerCase()
+    .replace(/['\u2019]/g, '')
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!text || text.split(' ').length > 9) return null;
+  if (HARD_RE.test(text)) return 'hard';
+  if (SOFT_RE.test(text)) return 'soft';
+  return null;
 }

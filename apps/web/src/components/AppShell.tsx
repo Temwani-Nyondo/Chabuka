@@ -186,7 +186,7 @@ export default function AppShell() {
                     setGafferOpen(true);
                   }}
                 >
-                  <span>Ask the Gaffer</span>
+                  <span>Ask Gaffer</span>
                   <span className="tag">AI helper</span>
                 </button>
                 <button
@@ -212,7 +212,7 @@ export default function AppShell() {
         <button
           className="fab-gaffer"
           type="button"
-          aria-label="Ask the Gaffer"
+          aria-label="Ask Gaffer"
           onClick={() => setGafferOpen(true)}
         >
           <span className="fab-gaffer-ball" aria-hidden="true">G</span>
@@ -224,7 +224,7 @@ export default function AppShell() {
           className="gaffer-overlay"
           role="dialog"
           aria-modal="true"
-          aria-label="Ask the Gaffer"
+          aria-label="Ask Gaffer"
           onClick={() => setGafferOpen(false)}
         >
           <div className="gaffer-panel" onClick={(e) => e.stopPropagation()}>

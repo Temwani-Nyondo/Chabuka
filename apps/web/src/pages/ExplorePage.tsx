@@ -35,7 +35,7 @@ export default function ExplorePage() {
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<ExploreTab>('play');
   const [mode, setMode] = useState<'list' | 'map'>('list');
-  // Deep link from the Gaffer ("View your game"): jump to the Play tab in
+  // Deep link from Gaffer ("View your game"): jump to the Play tab in
   // list mode and flash the created card.
   const [searchParams] = useSearchParams();
   const highlightId = searchParams.get('highlight');

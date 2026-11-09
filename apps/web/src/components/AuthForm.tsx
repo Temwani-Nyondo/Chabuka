@@ -244,31 +244,27 @@ export default function AuthForm({
 
   const captchaWidget = <Turnstile ref={captchaRef} onToken={setCaptcha} />;
 
+  const heading =
+    mode === 'signup' ? 'Create your account' : mode === 'forgot' ? 'Reset your password' : 'Welcome back';
+  const subheading =
+    mode === 'signup'
+      ? 'Find a game, a team and a place to play.'
+      : mode === 'forgot'
+        ? 'We will email you a link to choose a new one.'
+        : 'Log in to see your games and teams.';
+
   return (
-    <div className="card">
-      {SOCIAL_LOGIN_ENABLED ? (
-      <>
+    <div className="card auth-card">
+      <div className="auth-head">
+        <h2 className="auth-title">{heading}</h2>
+        <p className="muted">{subheading}</p>
+      </div>
+      {SOCIAL_LOGIN_ENABLED && mode !== 'forgot' ? (
+      <div className="social-row">
       <button
-        className="btn btn-brand"
+        className="btn btn-social"
         type="button"
-        disabled={busy !== null}
-        onClick={() => {
-          void oauth('facebook', 'meta');
-        }}
-      >
-        <span className="brand-icon brand-icon-meta" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path
-              fill="currentColor"
-              d="M13.5 21v-7h2.4l.4-3h-2.8V9.1c0-.9.3-1.5 1.6-1.5h1.3V4.9c-.3 0-1.1-.1-2.1-.1-2.1 0-3.6 1.3-3.6 3.7V11H8.2v3h2.5v7h2.8z"
-            />
-          </svg>
-        </span>
-        {busy === 'meta' ? 'Continuing…' : 'Continue with Facebook'}
-      </button>
-      <button
-        className="btn btn-brand"
-        type="button"
+        aria-label="Continue with Google"
         disabled={busy !== null}
         onClick={() => {
           void oauth('google', 'google');
@@ -294,37 +290,58 @@ export default function AuthForm({
             />
           </svg>
         </span>
-        {busy === 'google' ? 'Continuing…' : 'Continue with Google'}
+        {busy === 'google' ? 'Opening…' : 'Google'}
       </button>
-      </>
+      <button
+        className="btn btn-social"
+        type="button"
+        aria-label="Continue with Facebook"
+        disabled={busy !== null}
+        onClick={() => {
+          void oauth('facebook', 'meta');
+        }}
+      >
+        <span className="brand-icon brand-icon-meta" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24">
+            <path
+              fill="currentColor"
+              d="M13.5 21v-7h2.4l.4-3h-2.8V9.1c0-.9.3-1.5 1.6-1.5h1.3V4.9c-.3 0-1.1-.1-2.1-.1-2.1 0-3.6 1.3-3.6 3.7V11H8.2v3h2.5v7h2.8z"
+            />
+          </svg>
+        </span>
+        {busy === 'meta' ? 'Opening…' : 'Facebook'}
+      </button>
+      </div>
       ) : null}
-      {SOCIAL_LOGIN_ENABLED ? (
+      {SOCIAL_LOGIN_ENABLED && mode !== 'forgot' ? (
         <div className="divider" role="separator">
-          or
+          <span>or use email</span>
         </div>
       ) : null}
-      <div className="chips" role="tablist" aria-label="Sign in or create account">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode !== 'signup'}
-          className={mode !== 'signup' ? 'chip chip-active' : 'chip'}
-          onClick={() => switchMode('signin')}
-        >
-          Sign in
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={mode === 'signup'}
-          className={mode === 'signup' ? 'chip chip-active' : 'chip'}
-          onClick={() => switchMode('signup')}
-        >
-          Create account
-        </button>
-      </div>
+      {mode !== 'forgot' ? (
+        <div className="seg" role="tablist" aria-label="Log in or create account">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'signin'}
+            className={mode === 'signin' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => switchMode('signin')}
+          >
+            Log in
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={mode === 'signup'}
+            className={mode === 'signup' ? 'seg-btn seg-btn-active' : 'seg-btn'}
+            onClick={() => switchMode('signup')}
+          >
+            Create account
+          </button>
+        </div>
+      ) : null}
       {justConfirmed && mode === 'signin' && !user ? (
-        <p className="muted">Email confirmed. Sign in to continue.</p>
+        <p className="muted">Email confirmed. Log in to continue.</p>
       ) : null}
       {mode === 'forgot' ? (
         resetSent ? (
@@ -333,8 +350,8 @@ export default function AuthForm({
               <strong>Check your inbox.</strong> If {email.trim()} has an account, a reset link is on
               its way.
             </p>
-            <button className="btn" type="button" onClick={() => switchMode('signin')}>
-              Back to sign in
+            <button className="btn btn-ghost" type="button" onClick={() => switchMode('signin')}>
+              Back to log in
             </button>
           </div>
         ) : (
@@ -360,8 +377,8 @@ export default function AuthForm({
             <button className="btn btn-primary" type="submit" disabled={busy !== null || captchaMissing}>
               {busy === 'password' ? 'Sending…' : 'Send reset link'}
             </button>
-            <button className="btn" type="button" onClick={() => switchMode('signin')}>
-              Back to sign in
+            <button className="btn btn-ghost" type="button" onClick={() => switchMode('signin')}>
+              Back to log in
             </button>
           </form>
         )
@@ -383,9 +400,15 @@ export default function AuthForm({
               autoComplete="email"
             />
           </label>
-          <label className="field">
-            Password
+          <div className="field">
+            <div className="field-row">
+              <label htmlFor="auth-password">Password</label>
+              <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
+                Forgot password?
+              </button>
+            </div>
             <input
+              id="auth-password"
               className="input"
               type="password"
               required
@@ -394,12 +417,12 @@ export default function AuthForm({
               placeholder="Your password"
               autoComplete="current-password"
             />
-          </label>
+          </div>
           {captchaWidget}
           {error ? <p className="error">{error}</p> : null}
           {info ? <p className="muted">{info}</p> : null}
           <button className="btn btn-primary" type="submit" disabled={busy !== null || captchaMissing}>
-            {busy === 'password' ? 'Signing in…' : 'Sign in'}
+            {busy === 'password' ? 'Logging in…' : 'Log in'}
           </button>
           {needsConfirm ? (
             <button
@@ -413,11 +436,7 @@ export default function AuthForm({
               {cooldown > 0 ? `Resend confirmation (${cooldown}s)` : 'Resend confirmation email'}
             </button>
           ) : null}
-          <p className="muted">
-            <button type="button" className="link-btn" onClick={() => switchMode('forgot')}>
-              Forgot password?
-            </button>
-          </p>
+
         </form>
       ) : sent ? (
         <div>

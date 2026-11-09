@@ -19,7 +19,7 @@ Password: `Chabuka demo 2026!`
 - `player1@demo.chabuka` (also `player2` … `player60`) — regular player.
   Join the 9/10 tonight game to trigger the Match Found reveal live.
 - `captain@demo.chabuka` — team owner and captain. Create teams and
-  challenges, send invites, talk or chat to the Gaffer.
+  challenges, send invites, talk or chat to Gaffer.
 - `organiser@demo.chabuka` — tournament organiser and venue-side flows.
   Post results, confirm venue bookings.
 
@@ -29,7 +29,7 @@ These are public demo accounts on seeded data — reset any mischief with
 
 ## What is built
 
-One server action layer. The web app, the Gaffer, and the MCP tools all call
+One server action layer. The web app, Gaffer, and the MCP tools all call
 the same actions, so each behavior is built once. The API contract returns the
 new state plus the actions now available, and the web renders its buttons
 from that list.
@@ -54,12 +54,12 @@ from that list.
 - Calendar: every match exposes an ICS download
   (`GET /api/calendar/:matchId.ics`) plus a Google Calendar add link. No
   OAuth sync, by decision.
-- Gaffer ("Ask the Gaffer" in the nav, `/gaffer`): game plans, rules and
+- Gaffer ("Ask Gaffer" in the nav, `/gaffer`): game plans, rules and
   trivia insight, briefs and recaps, venue booking help, match creation.
   Reads through Gaffer-only context tools; writes go through the action layer
   as the signed-in user, so RLS applies exactly as in the app. Photos (up to
   3, downscaled in the browser) and voice notes (WAV, under 3 minutes) are
-  supported. The Gaffer never invents scores or stats and always says
+  supported. Gaffer never invents scores or stats and always says
   bookings are free.
 - Registration: name, area, sports plus level, optional town, optional birth
   year (shown only as an age band), optional gender. Eight sports, including

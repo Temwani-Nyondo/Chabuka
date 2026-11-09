@@ -3,6 +3,7 @@ import type {
   ActionResult,
   CreateInviteLinkInput,
   CreateMatchInput,
+  OnboardingProgress,
   CreateTeamInput,
   PostChallengeInput,
   RemoveMemberInput,
@@ -51,6 +52,8 @@ export interface GafferTurn {
   reply: string;
   actionsTaken: { name: string; ok: boolean; detail?: string }[];
   provider: string;
+  // Onboarding mode only: what the card holds after this turn.
+  progress?: OnboardingProgress;
 }
 
 export interface AgentTokenRow {
@@ -131,8 +134,8 @@ export async function downloadMatchIcs(matchId: string, accessToken: string): Pr
   URL.revokeObjectURL(url);
 }
 
-// The Gaffer chats through the internal helper endpoint (path kept);
-// only the external name is the Gaffer.
+// Gaffer chats through the internal helper endpoint (path kept);
+// only the external name is Gaffer.
 const GAFFER_TIMEOUT_MS = 120_000;
 
 export async function askGaffer(
@@ -141,6 +144,7 @@ export async function askGaffer(
   accessToken: string,
   images: string[] = [],
   signal?: AbortSignal,
+  opts?: { mode?: 'general' | 'onboarding' },
 ): Promise<GafferTurn> {
   // The caller's cancel signal and a hard timeout both stop the request.
   const timeout = AbortSignal.timeout(GAFFER_TIMEOUT_MS);
@@ -153,12 +157,12 @@ export async function askGaffer(
         'content-type': 'application/json',
         authorization: `Bearer ${accessToken}`,
       },
-      body: JSON.stringify({ message, history, images }),
+      body: JSON.stringify({ message, history, images, ...(opts?.mode ? { mode: opts.mode } : {}) }),
       signal: combined,
     });
   } catch (err) {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
-    if (timeout.aborted) throw new Error('The Gaffer took too long. Try again.');
+    if (timeout.aborted) throw new Error('Gaffer took too long. Try again.');
     throw new Error('Could not reach the Chabuka server. Is the API running?');
   }
   const data = (await res.json().catch(() => null)) as (GafferTurn & { error?: string }) | null;
@@ -166,6 +170,87 @@ export async function askGaffer(
     throw new Error(data?.error ?? 'Something went wrong. Try again.');
   }
   return data as GafferTurn;
+}
+
+// Same turn as askGaffer, but the reply arrives as it is written: onDelta gets each
+// piece of text, onRetract says the text so far became actions and should be
+// removed. Resolves with the whole turn. An older server without the stream route
+// (404) is answered through askGaffer, with the reply delivered in one piece.
+export async function askGafferStream(
+  message: string,
+  history: { role: 'user' | 'assistant'; content: string }[],
+  accessToken: string,
+  images: string[],
+  signal: AbortSignal | undefined,
+  opts: { mode?: 'general' | 'onboarding'; onDelta: (text: string) => void; onRetract: () => void },
+): Promise<GafferTurn> {
+  const timeout = AbortSignal.timeout(GAFFER_TIMEOUT_MS);
+  const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/api/helper/stream`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
+      body: JSON.stringify({ message, history, images, ...(opts.mode ? { mode: opts.mode } : {}) }),
+      signal: combined,
+    });
+  } catch {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (timeout.aborted) throw new Error('Gaffer took too long. Try again.');
+    throw new Error('Could not reach the Chabuka server. Is the API running?');
+  }
+  if (res.status === 404 || !res.body) {
+    const turn = await askGaffer(message, history, accessToken, images, signal, opts.mode ? { mode: opts.mode } : undefined);
+    opts.onDelta(turn.reply);
+    return turn;
+  }
+  if (!res.ok) {
+    const data = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(data?.error ?? 'Something went wrong. Try again.');
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let turn: GafferTurn | null = null;
+  const handle = (block: string) => {
+    let event = 'message';
+    let data = '';
+    for (const line of block.split('\n')) {
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data += line.slice(5).trim();
+    }
+    if (!data) return;
+    let payload: unknown;
+    try {
+      payload = JSON.parse(data);
+    } catch {
+      return;
+    }
+    const body = (payload ?? {}) as { text?: string; error?: string } & Partial<GafferTurn>;
+    if (event === 'delta' && typeof body.text === 'string') opts.onDelta(body.text);
+    else if (event === 'retract') opts.onRetract();
+    else if (event === 'done') turn = body as GafferTurn;
+    else if (event === 'error') throw new Error(body.error ?? 'Something went wrong. Try again.');
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut = buffer.indexOf('\n\n');
+      while (cut !== -1) {
+        handle(buffer.slice(0, cut));
+        buffer = buffer.slice(cut + 2);
+        cut = buffer.indexOf('\n\n');
+      }
+    }
+  } catch (err) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    if (timeout.aborted) throw new Error('Gaffer took too long. Try again.');
+    throw err instanceof Error ? err : new Error('Gaffer was cut off. Try again.');
+  }
+  if (!turn) throw new Error('Gaffer was cut off. Try again.');
+  return turn;
 }
 
 export function createMatchAction(

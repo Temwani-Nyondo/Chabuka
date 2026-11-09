@@ -1,125 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import type { FormEvent, KeyboardEvent } from 'react';
-import { Link } from 'react-router-dom';
-import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
-import { askGaffer, transcribeVoiceNote } from '../lib/api';
+import { askGafferStream, transcribeVoiceNote } from '../lib/api';
+import { useLiveConversation } from '../lib/liveVoice';
 import { blobToDataUrl, recordingToWav } from '../lib/voice';
-
-interface ChatMessage {
-  from: 'user' | 'gaffer';
-  text: string;
-  actionsTaken?: { name: string; ok: boolean; detail?: string }[];
-}
-
-// Spoken step labels: what the Gaffer did, in the user's words. Only
-// actions that change something are listed; lookups stay out of the card.
-const STEP_LABELS: Record<string, string> = {
-  create_match: 'Created game',
-  join_match: 'Joined game',
-  withdraw_match: 'Left game',
-  request_booking: 'Requested venue booking',
-  cancel_booking: 'Cancelled booking',
-  create_team: 'Created team',
-  post_challenge: 'Posted challenge',
-  accept_challenge: 'Accepted challenge',
-  decline_challenge: 'Declined challenge',
-  propose_time: 'Proposed a time',
-  create_poll: 'Started poll',
-  answer_poll: 'Answered poll',
-  post_result: 'Posted result',
-  report_score: 'Reported score',
-  post_announcement: 'Posted announcement',
-  join_circle: 'Joined circle',
-  leave_circle: 'Left circle',
-  create_circle: 'Created circle',
-  update_profile: 'Updated profile',
-  set_sports: 'Updated sports',
-  set_availability: 'Updated availability',
-  set_position: 'Updated position',
-  set_game_types: 'Updated game types',
-  add_place: 'Added place',
-  remove_place: 'Removed place',
-  save_memory: 'Remembered that',
-  forget_memory: 'Forgot that',
-};
-
-function stepLabel(name: string): string | null {
-  const known = STEP_LABELS[name];
-  if (known) return known;
-  // Lookups (get_*, search_*, venue_slots, poll_status) are not shown.
-  if (/^(get_|search_)/.test(name) || name === 'venue_slots' || name === 'poll_status') return null;
-  const words = name.replace(/_/g, ' ');
-  return words.charAt(0).toUpperCase() + words.slice(1);
-}
-
-function stepLink(detail: string | undefined): { href: string; label: string } | null {
-  if (!detail) return null;
-  if (detail.startsWith('match:')) {
-    return { href: `/explore?highlight=${encodeURIComponent(detail.slice('match:'.length))}`, label: 'View your game' };
-  }
-  if (detail.startsWith('booking:')) {
-    return { href: '/venues/dashboard', label: 'Track your booking' };
-  }
-  return null;
-}
+import { ChatComposer, ChatThread, GafferAvatar, GafferHeader, VoiceOrb, streamSink } from '../components/gaffer/gaffer';
+import type { GafferMessage } from '../components/gaffer/gaffer';
 
 const HISTORY_LIMIT = 10;
 
-// Tappable starters so every turn leaves something to tap, per the UI
-// vision: the Gaffer suggests and shows what it did, never dumps paragraphs.
-const STARTERS = [
-  'Find me a game this weekend',
-  'Book us a court for Thursday',
-  'Explain the 5v5 basketball rules',
-  'Recap my week',
-];
-
-// Browser speech recognition runs alongside the mic capture purely as a
-// live display: words appear as you speak so you can see he is listening.
-// The server transcription stays the authority for what he answers.
-interface InterimRecognizer {
-  interimResults: boolean;
-  continuous: boolean;
-  lang: string;
-  onresult: ((e: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: (() => void) | null;
-  start: () => void;
-  stop: () => void;
-}
-
-function startInterimListen(onText: (text: string) => void): (() => void) | null {
-  const w = window as unknown as {
-    SpeechRecognition?: new () => InterimRecognizer;
-    webkitSpeechRecognition?: new () => InterimRecognizer;
-  };
-  const Ctor = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-  if (!Ctor) return null;
-  try {
-    const recog = new Ctor();
-    recog.interimResults = true;
-    recog.continuous = true;
-    recog.lang = navigator.language || 'en-US';
-    recog.onresult = (e) => {
-      let text = '';
-      for (let i = 0; i < e.results.length; i += 1) {
-        text += (e.results[i]?.[0]?.transcript ?? '') + ' ';
-      }
-      onText(text.trim());
-    };
-    recog.onerror = () => undefined;
-    recog.start();
-    return () => {
-      try {
-        recog.stop();
-      } catch {
-        // Already stopped; the capture governs the turn, not this display.
-      }
-    };
-  } catch {
-    return null;
-  }
-}
+const toHistory = (messages: GafferMessage[]) =>
+  messages.slice(-HISTORY_LIMIT).map((m) => ({
+    role: m.from === 'user' ? ('user' as const) : ('assistant' as const),
+    content: m.text,
+  }));
 
 // Phone photos are megabytes; downscale to ~1024px JPEG before upload so
 // vision turns stay fast and cheap. Resolves null when anything fails, and
@@ -168,255 +61,78 @@ function downscalePhoto(file: File): Promise<string | null> {
   });
 }
 
-// Live voice chat runs fully in the browser: the mic stays open, an
-// energy-based voice activity detector ends your turn on ~1.4s of silence,
-// and while the Gaffer speaks the same detector lets you talk over him
-// (barge-in). Transcription and answers reuse the normal voice-note and
-// helper endpoints; speech output uses the device's own voices.
-const VAD_SPEECH_RMS = 0.025;
-const VAD_SILENCE_MS = 1400;
-const VAD_MIN_SPEECH_MS = 500;
-const VAD_MAX_UTTERANCE_MS = 45000;
-// Barge-in calibrates itself: the first moments of his own speech measure
-// how loud the speaker output sounds through this mic, then only clearly
-// louder, sustained sound counts as the user talking back. Falls back to a
-// fixed floor (headphones: near-silence) when nothing leaks through.
-const VAD_BARGE_FLOOR = 0.035;
-const VAD_BARGE_CEILING = 0.12;
-const VAD_BARGE_MS = 400;
-const VAD_BARGE_GRACE_MS = 900;
-
-interface MicMeter {
-  rms: () => number;
-  stop: () => void;
-}
-
-function micLevel(stream: MediaStream): MicMeter {
-  const Ctor =
-    window.AudioContext ??
-    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctor) throw new Error('Voice notes are not supported in this browser.');
-  const ctx = new Ctor();
-  const analyser = ctx.createAnalyser();
-  analyser.fftSize = 512;
-  ctx.createMediaStreamSource(stream).connect(analyser);
-  const buf = new Uint8Array(analyser.fftSize);
-  return {
-    rms() {
-      analyser.getByteTimeDomainData(buf);
-      let sum = 0;
-      for (let i = 0; i < buf.length; i += 1) {
-        const v = ((buf[i] ?? 128) - 128) / 128;
-        sum += v * v;
-      }
-      return Math.sqrt(sum / buf.length);
-    },
-    stop() {
-      void ctx.close().catch(() => undefined);
-    },
-  };
-}
-
-function captureUtterance(
-  stream: MediaStream,
-  onManualStop: (stop: () => void) => void,
-  opts?: { minSpeechMs?: number; silenceMs?: number },
-): Promise<Blob> {
-  const minSpeechMs = opts?.minSpeechMs ?? VAD_MIN_SPEECH_MS;
-  const silenceMs = opts?.silenceMs ?? VAD_SILENCE_MS;
-  return new Promise((resolve, reject) => {
-    let recorder: MediaRecorder;
-    try {
-      recorder = new MediaRecorder(stream);
-    } catch {
-      reject(new Error('Voice notes are not supported in this browser.'));
-      return;
-    }
-    const chunks: BlobPart[] = [];
-    const meter = micLevel(stream);
-    let done = false;
-    let heardAt = 0;
-    const startedAt = Date.now();
-    const finish = () => {
-      if (done) return;
-      done = true;
-      window.clearInterval(timer);
-      meter.stop();
-      if (recorder.state !== 'inactive') {
-        try {
-          recorder.stop();
-        } catch {
-          // Already stopped; onstop below still resolves.
-        }
-      }
-    };
-    onManualStop(finish);
-    recorder.ondataavailable = (e) => {
-      if (e.data.size > 0) chunks.push(e.data);
-    };
-    recorder.onstop = () => {
-      finish();
-      resolve(new Blob(chunks, { type: recorder.mimeType || 'audio/webm' }));
-    };
-    recorder.onerror = () => {
-      finish();
-      reject(new Error('Recording failed. Try again.'));
-    };
-    const timer = window.setInterval(() => {
-      const now = Date.now();
-      if (meter.rms() > VAD_SPEECH_RMS) heardAt = now;
-      const spoken = heardAt > 0;
-      const silentFor = spoken ? now - heardAt : 0;
-      if (spoken && now - startedAt > minSpeechMs && silentFor > silenceMs) finish();
-      else if (now - startedAt > VAD_MAX_UTTERANCE_MS) finish();
-    }, 100);
-    recorder.start();
-  });
-}
-
-// Long replies are spoken in sentence-sized chunks so the voice never
-// stops halfway: previously only the first 600 characters played, which
-// read as the Gaffer "going quiet" after doing the work.
-function speechChunks(text: string): string[] {
-  const sentences = text.match(/[^.!?]+[.!?]+["']?\s*|[^.!?]+$/g) ?? [text];
-  const chunks: string[] = [];
-  let current = '';
-  for (const sentence of sentences) {
-    const part = sentence.trim();
-    if (!part) continue;
-    if (current && `${current} ${part}`.length > 400) {
-      chunks.push(current);
-      current = part;
-    } else {
-      current = current ? `${current} ${part}` : part;
-    }
-  }
-  if (current) chunks.push(current);
-  return chunks.length > 0 ? chunks : [text];
-}
-
-function speakText(text: string, stream: MediaStream | null): Promise<'done' | 'barged'> {
-  return new Promise((resolve) => {
-    const synth = window.speechSynthesis;
-    if (!synth) {
-      resolve('done');
-      return;
-    }
-    const queue = speechChunks(text);
-    if (queue.length === 0 || !queue[0]?.trim()) {
-      resolve('done');
-      return;
-    }
-    let settled = false;
-    let bargeTimer: number | undefined;
-    let meter: MicMeter | null = null;
-    const finish = (outcome: 'done' | 'barged') => {
-      if (settled) return;
-      settled = true;
-      if (bargeTimer !== undefined) window.clearInterval(bargeTimer);
-      meter?.stop();
-      resolve(outcome);
-    };
-    // Barge-in: during the grace window measure how loud his own voice
-    // sounds through this mic, then cut him off only for clearly louder,
-    // sustained sound — a real interruption, not speaker leakage.
-    if (stream) {
-      try {
-        meter = micLevel(stream);
-        const active = meter;
-        const startedAt = Date.now();
-        let loudFor = 0;
-        let graceSum = 0;
-        let graceSamples = 0;
-        let threshold = VAD_BARGE_FLOOR;
-        bargeTimer = window.setInterval(() => {
-          const level = active.rms();
-          if (Date.now() - startedAt < VAD_BARGE_GRACE_MS) {
-            graceSum += level;
-            graceSamples += 1;
-            return;
-          }
-          if (graceSamples > 0) {
-            const baseline = graceSum / graceSamples;
-            threshold = Math.min(VAD_BARGE_CEILING, Math.max(VAD_BARGE_FLOOR, baseline * 3));
-            graceSamples = 0;
-          }
-          loudFor = level > threshold ? loudFor + 100 : 0;
-          if (loudFor > VAD_BARGE_MS) {
-            synth.cancel();
-            finish('barged');
-          }
-        }, 100);
-      } catch {
-        meter = null;
-      }
-    }
-    synth.cancel();
-    // Prefer a natural/online voice over the flat default; fall back to any
-    // English voice. Slightly slower and warmer than the defaults.
-    const voices = synth.getVoices();
-    const preferred =
-      voices.find((v) => v.lang.toLowerCase().startsWith('en') && /natural|online|google/i.test(v.name)) ??
-      voices.find((v) => v.lang.toLowerCase().startsWith('en')) ??
-      null;
-    const speakNext = () => {
-      if (settled) return;
-      const chunk = queue.shift();
-      if (!chunk) {
-        finish('done');
-        return;
-      }
-      const utter = new SpeechSynthesisUtterance(chunk);
-      if (preferred) utter.voice = preferred;
-      utter.rate = 0.95;
-      utter.pitch = 1.1;
-      utter.onend = () => speakNext();
-      utter.onerror = () => speakNext();
-      synth.speak(utter);
-    };
-    speakNext();
-  });
+function friendlyError(err: unknown): string {
+  const text = err instanceof Error ? err.message : '';
+  if (/sign-in|signed in/i.test(text)) return 'Your session expired. Sign in again.';
+  if (/too many|slow down/i.test(text)) return 'Give me a moment, then ask again.';
+  return "Sorry, I couldn't get that done. Say that again?";
 }
 
 export default function GafferPage({ onClose }: { onClose?: () => void }) {
   const { session, user } = useAuth();
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const token = session?.access_token;
+  const [messages, setMessages] = useState<GafferMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [photos, setPhotos] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
-  const abortRef = useRef<AbortController | null>(null);
-  const bottomRef = useRef<HTMLDivElement | null>(null);
-  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   const [recording, setRecording] = useState(false);
-  const [convo, setConvo] = useState<'off' | 'listening' | 'thinking' | 'speaking'>('off');
-  const [hearing, setHearing] = useState('');
   const [error, setError] = useState<string | null>(null);
   const recorderRef = useRef<MediaRecorder | null>(null);
-  const convoActiveRef = useRef(false);
-  const convoStopCaptureRef = useRef<(() => void) | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  // The hands-free loop runs outside React's render, so it reads the latest
+  // conversation and token through refs.
+  const messagesRef = useRef<GafferMessage[]>([]);
+  messagesRef.current = messages;
+  const tokenRef = useRef<string | undefined>(token);
+  tokenRef.current = token;
+
+  const live = useLiveConversation({
+    transcribe: (dataUrl) => transcribeVoiceNote(dataUrl, tokenRef.current ?? ''),
+    respond: async (heard, handlers) => {
+      const t = tokenRef.current;
+      const history = toHistory(messagesRef.current);
+      setMessages((prev) => [...prev, { from: 'user', text: heard }]);
+      if (!t) return 'Your session expired. Sign in again.';
+      const sink = streamSink(setMessages);
+      try {
+        const turn = await askGafferStream(heard, history, t, [], handlers.signal, {
+          onDelta: (text) => {
+            sink.onDelta(text);
+            handlers.onDelta(text);
+          },
+          onRetract: () => {
+            sink.onRetract();
+            handlers.onRetract();
+          },
+        });
+        sink.finish(turn.reply, turn.actionsTaken);
+        return turn.reply;
+      } catch (err) {
+        // Talked over: keep what was written so far and let the loop move on.
+        if (err instanceof DOMException && err.name === 'AbortError') {
+          sink.abandon();
+          return '';
+        }
+        const reply = friendlyError(err);
+        sink.finish(reply);
+        return reply;
+      }
+    },
+    onScripted: (heard, say) =>
+      setMessages((prev) => [
+        ...prev,
+        ...(heard ? [{ from: 'user' as const, text: heard }] : []),
+        { from: 'gaffer' as const, text: say },
+      ]),
+    onError: (message) => setError(message),
+  });
 
   useEffect(
     () => () => {
-      convoActiveRef.current = false;
-      convoStopCaptureRef.current?.();
       abortRef.current?.abort();
-      window.speechSynthesis?.cancel();
     },
     [],
   );
-
-  // Always show the newest message.
-  useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' });
-  }, [messages.length, busy, convo]);
-
-  // Composer grows with the text (up to a cap), like a standard chat box.
-  useEffect(() => {
-    const el = inputRef.current;
-    if (!el) return;
-    el.style.height = 'auto';
-    el.style.height = `${Math.min(el.scrollHeight, 140)}px`;
-  }, [draft]);
 
   // Keep the conversation across navigation: one stored thread per user.
   useEffect(() => {
@@ -429,7 +145,7 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
       if (!raw) return;
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) return;
-      const kept: ChatMessage[] = [];
+      const kept: GafferMessage[] = [];
       for (const item of parsed) {
         if (typeof item !== 'object' || item === null) continue;
         const row = item as { from?: unknown; text?: unknown; actionsTaken?: unknown };
@@ -463,59 +179,43 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
   const send = async (raw: string, attached: string[] = photos) => {
     const message = raw.trim();
     if ((!message && attached.length === 0) || busy) return;
-    const token = session?.access_token;
     if (!token) {
       setError('Not signed in.');
       return;
     }
     setError(null);
     setBusy(true);
-    const history = messages
-      .slice(-HISTORY_LIMIT)
-      .map((m) =>
-        m.from === 'user'
-          ? { role: 'user' as const, content: m.text }
-          : { role: 'assistant' as const, content: m.text },
-      );
-    setMessages((prev) => [
-      ...prev,
-      { from: 'user', text: message || '(photo)' },
-    ]);
+    const history = toHistory(messages);
+    setMessages((prev) => [...prev, { from: 'user', text: message || '(photo)' }]);
     setDraft('');
     setPhotos([]);
     const controller = new AbortController();
     abortRef.current = controller;
+    const sink = streamSink(setMessages);
     try {
-      const turn = await askGaffer(
+      const turn = await askGafferStream(
         message || 'What do you see in these photos?',
         history,
         token,
         attached,
         controller.signal,
+        { onDelta: sink.onDelta, onRetract: sink.onRetract },
       );
-      setMessages((prev) => [
-        ...prev,
-        { from: 'gaffer', text: turn.reply, actionsTaken: turn.actionsTaken },
-      ]);
+      sink.finish(turn.reply, turn.actionsTaken);
     } catch (err) {
-      // Nothing was answered: take the message back out of the thread and
-      // put it in the composer so it can be sent again, not retyped.
+      // Nothing was answered: take the message back out of the thread and put
+      // it in the composer so it can be sent again, not retyped. If Gaffer had
+      // started writing, that partial reply goes too.
+      sink.onRetract();
       setMessages((prev) => prev.slice(0, -1));
       setDraft(message);
       setPhotos(attached);
       if (!(err instanceof DOMException && err.name === 'AbortError')) {
-        setError(err instanceof Error ? err.message : 'The Gaffer could not answer. Try again.');
+        setError(err instanceof Error ? err.message : 'Gaffer could not answer. Try again.');
       }
     } finally {
       abortRef.current = null;
       setBusy(false);
-    }
-  };
-
-  const onComposerKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      void send(draft);
     }
   };
 
@@ -546,12 +246,12 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
     });
   };
 
+  // One-shot voice note: record, stop, and the words land in the message box.
   const toggleRecording = () => {
     if (recording) {
       recorderRef.current?.stop();
       return;
     }
-    const token = session?.access_token;
     if (!token) {
       setError('Not signed in.');
       return;
@@ -590,361 +290,62 @@ export default function GafferPage({ onClose }: { onClose?: () => void }) {
       .catch(() => setError('Microphone access was denied.'));
   };
 
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    void send(draft);
-  };
-
-  const stopConvo = () => {
-    convoActiveRef.current = false;
+  const clearChat = () => {
+    abortRef.current?.abort();
+    if (live.active) live.stop();
     window.speechSynthesis?.cancel();
-    convoStopCaptureRef.current?.();
-    setHearing('');
-    setConvo('off');
+    if (recorderRef.current && recorderRef.current.state !== 'inactive') recorderRef.current.stop();
+    setMessages([]);
+    setError(null);
+    try {
+      if (user) window.localStorage.removeItem(`gaffer:chat:${user.id}`);
+    } catch {
+      // Private mode: nothing stored, nothing to clear.
+    }
   };
 
-  const startConvo = () => {
-    const token = session?.access_token;
-    if (!token) {
-      setError('Not signed in.');
-      return;
-    }
-    if (typeof MediaRecorder === 'undefined' || !window.speechSynthesis) {
-      setError('Live chat is not supported in this browser. Try Chrome or Edge.');
-      return;
-    }
-    if (recording) recorderRef.current?.stop();
-    setError(null);
-    void (async () => {
-      let stream: MediaStream;
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          audio: { echoCancellation: true, noiseSuppression: true },
-        });
-      } catch {
-        setError('Microphone access was denied.');
-        return;
-      }
-      convoActiveRef.current = true;
-      const transcript = messages
-        .slice(-HISTORY_LIMIT)
-        .map((m) =>
-          m.from === 'user'
-            ? { role: 'user' as const, content: m.text }
-            : { role: 'assistant' as const, content: m.text },
-        );
-      let turns = 0;
-      // Set when the user talks over the Gaffer: the interruption itself is
-      // mid-sentence, so the next capture listens with a shorter fuse.
-      let interrupted = false;
-      try {
-        while (convoActiveRef.current && turns < 30) {
-          turns += 1;
-          setConvo('listening');
-          // Live word-by-word display while he listens; collapses below
-          // when he starts thinking — the server transcript decides.
-          const stopInterim = startInterimListen((text) => setHearing(text));
-          const blob = await captureUtterance(
-            stream,
-            (stop) => {
-              convoStopCaptureRef.current = stop;
-            },
-            interrupted ? { minSpeechMs: 200, silenceMs: 800 } : undefined,
-          ).catch(() => null);
-          stopInterim?.();
-          setHearing('');
-          interrupted = false;
-          convoStopCaptureRef.current = null;
-          if (!convoActiveRef.current || !blob) break;
-          setConvo('thinking');
-          let heard = '';
-          let heardError: string | null = null;
-          try {
-            heard = (await transcribeVoiceNote(await blobToDataUrl(await recordingToWav(blob)), token)).trim();
-          } catch (err) {
-            heard = '';
-            heardError = err instanceof Error ? err.message : null;
-          }
-          if (!convoActiveRef.current) break;
-          if (!heard) {
-            // A server problem (keys missing, API down) is not a hearing
-            // problem: say so instead of blaming the user's voice.
-            const setupProblem =
-              heardError && /not set up|transcription key|model key|could not reach/i.test(heardError);
-            await speakText(
-              setupProblem && heardError ? heardError : "Sorry, I didn't catch that. Say that again?",
-              stream,
-            );
-            continue;
-          }
-          setMessages((prev) => [...prev, { from: 'user', text: heard }]);
-          transcript.push({ role: 'user', content: heard });
-          let reply = 'The Gaffer could not answer. Try again.';
-          let actionsTaken: { name: string; ok: boolean }[] | undefined;
-          try {
-            const turn = await askGaffer(heard, transcript.slice(-HISTORY_LIMIT), token, []);
-            reply = turn.reply;
-            actionsTaken = turn.actionsTaken;
-          } catch (err) {
-            const text = err instanceof Error ? err.message : '';
-            reply = /sign-in|signed in/i.test(text)
-              ? 'Your session expired. Sign in again.'
-              : /too many|slow down/i.test(text)
-                ? 'Give me a moment, then ask again.'
-                : "Sorry, I couldn't get that done. Say that again?";
-          }
-          if (!reply.trim()) reply = "I couldn't get that done. Say that again?";
-          if (!convoActiveRef.current) break;
-          setMessages((prev) => [...prev, { from: 'gaffer', text: reply, actionsTaken }]);
-          transcript.push({ role: 'assistant', content: reply });
-          setConvo('speaking');
-          interrupted = (await speakText(reply, stream)) === 'barged';
-        }
-      } finally {
-        convoActiveRef.current = false;
-        convoStopCaptureRef.current = null;
-        stream.getTracks().forEach((t) => t.stop());
-        window.speechSynthesis?.cancel();
-        setConvo('off');
-      }
-    })();
-  };
+  const status = live.active ? live.state : busy ? 'thinking' : 'ready';
 
   return (
-    <div className="page floodlight">
-      <div className="row">
-        <h1>Ask the Gaffer</h1>
-        <div className="actions-row">
-          {messages.length > 0 ? (
-            <button
-              className="btn btn-ghost"
-              type="button"
-              onClick={() => {
-                abortRef.current?.abort();
-                if (convoActiveRef.current) stopConvo();
-                window.speechSynthesis?.cancel();
-                if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-                  recorderRef.current.stop();
-                }
-                setMessages([]);
-                setError(null);
-                try {
-                  if (user) window.localStorage.removeItem(`gaffer:chat:${user.id}`);
-                } catch {
-                  // Private mode: nothing stored, nothing to clear.
-                }
-              }}
-              aria-label="Clear chat"
-            >
-              Clear chat
-            </button>
-          ) : null}
-          {onClose ? (
-            <button className="btn btn-ghost" type="button" onClick={onClose} aria-label="Close Gaffer">
-              ✕
-            </button>
-          ) : null}
-        </div>
-      </div>
-      <p className="muted">Game plans, rules, briefs, bookings — the Gaffer sorts it.</p>
-      {messages.length === 0 ? (
-        <EmptyState title="No messages yet" hint="Pick one to get going." />
-      ) : null}
-      {messages.length === 0 ? (
-        <div className="chips">
-          {STARTERS.map((s) => (
-            <button
-              key={s}
-              className="chip"
-              type="button"
-              disabled={busy}
-              onClick={() => {
-                void send(s);
-              }}
-            >
-              {s}
-            </button>
-          ))}
-        </div>
-      ) : null}
-      <div className="chat-thread" role="log" aria-live="polite" aria-relevant="additions" aria-label="Conversation with the Gaffer">
-        {messages.map((m, i) =>
-          m.from === 'user' ? (
-            <div className="bubble-row bubble-row-user" key={i}>
-              <p className="bubble bubble-user">{m.text}</p>
-            </div>
-          ) : (
-            <div className="card" key={i}>
-              <div className="row">
-                <strong>Gaffer</strong>
-              </div>
-              <p>{m.text}</p>
-              {(() => {
-                const steps = (m.actionsTaken ?? []).flatMap((a) => {
-                  const label = stepLabel(a.name);
-                  return label ? [{ a, label }] : [];
-                });
-                return steps.length > 0 ? (
-                  <ul className="steps">
-                    {steps.map(({ a, label }, j) => {
-                      const link = stepLink(a.detail);
-                      return (
-                        <li key={j} className={a.ok ? 'step-ok' : 'step-bad'}>
-                          <span>
-                            {a.ok ? label : `Could not complete: ${label.toLowerCase()}`}
-                          </span>
-                          {link ? <Link to={link.href}>{link.label}</Link> : null}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                ) : null;
-              })()}
-            </div>
-          ),
-        )}
-        {busy && convo === 'off' && !recording ? (
-          <div className="bubble-row" role="status">
-            <p className="bubble bubble-gaffer typing" aria-label="Gaffer is thinking">
-              <span className="dot" />
-              <span className="dot" />
-              <span className="dot" />
-            </p>
-            <button
-              className="btn btn-ghost"
-              type="button"
-              onClick={() => abortRef.current?.abort()}
-            >
-              Stop
-            </button>
+    <div className={onClose ? 'gaffer-chat' : 'gaffer-page'}>
+      <GafferHeader status={status} onClear={messages.length > 0 ? clearChat : undefined} onClose={onClose} />
+      <ChatThread
+        messages={messages}
+        thinking={busy || live.state === 'thinking'}
+        onStop={busy ? () => abortRef.current?.abort() : undefined}
+        empty={
+          <div className="gaffer-empty">
+            <GafferAvatar size={56} />
+            <strong>Gaffer</strong>
+            <span>Type a message, or tap the sound-wave to talk.</span>
           </div>
-        ) : null}
-        <div ref={bottomRef} />
-      </div>
-      {error ? <p className="error">{error}</p> : null}
-      {convo !== 'off' ? (
-        <p className="muted" role="status">
-          {convo === 'listening'
-            ? hearing
-              ? `You: ${hearing}`
-              : 'Listening… speak, then pause and the Gaffer answers.'
-            : convo === 'thinking'
-              ? 'Gaffer is thinking…'
-              : 'Gaffer speaking… talk to interrupt.'}
+        }
+      />
+      {error ? (
+        <p className="error" style={{ padding: '0 16px' }}>
+          {error}
         </p>
       ) : null}
-      <form onSubmit={submit}>
-        {photos.length > 0 ? (
-          <div className="photo-strip">
-            {photos.map((src, i) => (
-              <div className="photo-thumb" key={i}>
-                <img src={src} alt={`Attached photo ${i + 1}`} />
-                <button
-                  type="button"
-                  className="photo-remove"
-                  aria-label={`Remove photo ${i + 1}`}
-                  onClick={() => setPhotos((prev) => prev.filter((_, k) => k !== i))}
-                >
-                  &times;
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : null}
-        <div className="composer">
-          <textarea
-            ref={inputRef}
-            className="composer-input"
-            rows={1}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={onComposerKey}
-            placeholder="Ask the Gaffer…"
-            maxLength={2000}
-            aria-label="Message the Gaffer"
-          />
-          <div className="composer-row">
-            <label className="iconbtn" aria-label="Attach photos" title="Attach photos">
-              <svg width="20" height="20" viewBox="0 0 20 20" aria-hidden="true">
-                <rect x="9" y="4" width="2" height="12" rx="1" fill="currentColor" />
-                <rect x="4" y="9" width="12" height="2" rx="1" fill="currentColor" />
-              </svg>
-              <input
-                type="file"
-                accept="image/*"
-                multiple
-                hidden
-                onChange={(e) => {
-                  attachPhotos(e.target.files);
-                  e.target.value = '';
-                }}
-              />
-            </label>
-            <span className="composer-spacer" />
-            <button
-              className={recording ? 'iconbtn iconbtn-recording' : 'iconbtn'}
-              type="button"
-              disabled={busy || convo !== 'off'}
-              onClick={toggleRecording}
-              aria-label={recording ? 'Stop recording' : 'Record a voice note'}
-              title={recording ? 'Stop recording' : 'Record a voice note'}
-            >
-              {recording ? (
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
-                  <rect x="6" y="1" width="4" height="8" rx="2" fill="currentColor" />
-                  <path d="M3 7a5 5 0 0 0 10 0h-1.5a3.5 3.5 0 0 1-7 0H3z" fill="currentColor" />
-                  <rect x="7.25" y="12" width="1.5" height="3" fill="currentColor" />
-                </svg>
-              )}
-            </button>
-            <button
-              className={convo !== 'off' ? 'iconbtn iconbtn-recording' : 'iconbtn'}
-              type="button"
-              disabled={busy || recording}
-              onClick={() => {
-                if (convo !== 'off') stopConvo();
-                else startConvo();
-              }}
-              aria-label={convo !== 'off' ? 'End live chat' : 'Start live voice chat'}
-              title={convo !== 'off' ? 'End live chat' : 'Live voice chat'}
-            >
-              {convo !== 'off' ? (
-                <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-                  <rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor" />
-                </svg>
-              ) : (
-                <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true">
-                  <path
-                    d="M2 3.5A1.5 1.5 0 0 1 3.5 2h9A1.5 1.5 0 0 1 14 3.5v6a1.5 1.5 0 0 1-1.5 1.5H7l-3.5 3v-3H3.5A1.5 1.5 0 0 1 2 9.5v-6z"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinejoin="round"
-                  />
-                  <circle cx="5.5" cy="7" r="1" fill="currentColor" />
-                  <circle cx="8" cy="7" r="1" fill="currentColor" />
-                  <circle cx="10.5" cy="7" r="1" fill="currentColor" />
-                </svg>
-              )}
-            </button>
-            <button
-              className="iconbtn iconbtn-send"
-              type="submit"
-              disabled={busy || convo !== 'off' || (draft.trim() === '' && photos.length === 0)}
-              aria-label={busy ? 'Gaffer is sorting' : 'Send message'}
-              title="Send"
-            >
-              <svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true">
-                <path d="M9 2.5 15.5 9 9 15.5 7.6 14.1 11.7 10H2.5V8h9.2L7.6 3.9 9 2.5z" fill="currentColor" />
-              </svg>
-            </button>
-          </div>
-        </div>
-      </form>
+      <VoiceOrb state={live.state} hearing={live.hearing} onEnd={live.stop} />
+      <ChatComposer
+        value={draft}
+        onChange={setDraft}
+        onSend={() => void send(draft)}
+        busy={busy}
+        placeholder="Ask Gaffer…"
+        photos={photos}
+        onAttach={attachPhotos}
+        onRemovePhoto={(i) => setPhotos((prev) => prev.filter((_, k) => k !== i))}
+        onToggleRecord={toggleRecording}
+        recording={recording}
+        live={{
+          active: live.active,
+          onToggle: () => {
+            if (live.active) live.stop();
+            else void live.start();
+          },
+        }}
+      />
     </div>
   );
 }

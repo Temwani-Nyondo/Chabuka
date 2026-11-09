@@ -120,7 +120,7 @@ app.post('/api/helper/transcribe', express.json({ limit: '15mb' }), async (req, 
     const mimeType = (match[1] ?? 'audio/webm').split(';')[0] ?? 'audio/webm';
     const audioBytes = Buffer.from(payload, 'base64');
     // Meta's transcribe endpoint only takes RIFF/WAVE (mono 16-bit PCM).
-    // The Gaffer page converts recordings to WAV before sending; anything
+    // Gaffer page converts recordings to WAV before sending; anything
     // else is rejected here instead of failing obscurely upstream.
     const isWav =
       audioBytes.length > 12 &&
@@ -160,7 +160,7 @@ app.post('/api/webhooks/waitapp', express.raw({ type: '*/*', limit: '100kb' }), 
   }
 });
 
-// The Gaffer takes up to 3 attached photos (data URLs), well past the 100 KB
+// Gaffer takes up to 3 attached photos (data URLs), well past the 100 KB
 // default, so it parses its own larger body before the default parser runs.
 app.use('/api/helper', express.json({ limit: '16mb' }));
 app.use(express.json());
@@ -169,7 +169,7 @@ app.get('/health', (_req, res) => {
   res.json({ ok: true, service: 'chabuka-api' });
 });
 
-// One action layer: the web app, the Gaffer and the MCP tools all land
+// One action layer: the web app, Gaffer and the MCP tools all land
 // here. Writes run as the signed-in user so RLS enforces permissions.
 app.post('/api/actions/:name', async (req, res) => {
   const parsedName = actionNameSchema.safeParse(req.params['name']);
@@ -208,9 +208,11 @@ const helperBodySchema = z.object({
     .optional(),
   // Optional attached photos as data URLs (jpeg/png/webp, max 3).
   images: z.array(z.string().max(5_000_000)).max(3).optional(),
+  // 'onboarding' runs the first-time setup agent instead of the general Gaffer.
+  mode: z.enum(['general', 'onboarding']).optional(),
 });
 
-// "Ask the Gaffer" in the web nav lands here. Same auth shape as the
+// "Ask Gaffer" in the web nav lands here. Same auth shape as the
 // action layer; the model acts as the signed-in user via runAction.
 app.post('/api/helper', async (req, res) => {
   const auth = req.header('authorization') ?? '';
@@ -238,12 +240,83 @@ app.post('/api/helper', async (req, res) => {
       message: parsed.data.message,
       history: parsed.data.history,
       images: parsed.data.images,
+      mode: parsed.data.mode,
     });
     res.json(turn);
   } catch (err) {
     const { status, message } = toHttpError(err);
     if (status >= 500) console.error(err);
     res.status(status).json({ error: message });
+  }
+});
+
+// Same turn as /api/helper, delivered as server-sent events so the reply can be
+// shown and spoken while it is still being written. Events: `delta` {text},
+// `retract` (take back the text of this round: it turned into actions), `done`
+// {the whole turn}, `error` {error}. Validation and sign-in failures happen before
+// the stream opens and are ordinary JSON errors.
+app.post('/api/helper/stream', async (req, res) => {
+  const auth = req.header('authorization') ?? '';
+  const token = /^Bearer\s+(.+)$/.exec(auth)?.[1];
+  if (!token) {
+    res.status(401).json({ error: 'Missing sign-in token.' });
+    return;
+  }
+  const parsed = helperBodySchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the input and try again.' });
+    return;
+  }
+  let opened = false;
+  let gone = false;
+  res.on('close', () => {
+    gone = true;
+  });
+  const send = (event: string, data: unknown) => {
+    if (gone) return;
+    res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+  };
+  const open = () => {
+    if (opened) return;
+    opened = true;
+    res.status(200).set({
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache, no-transform',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+    res.flushHeaders();
+  };
+  try {
+    const db = createUserClient(token);
+    const { data, error } = await db.auth.getUser(token);
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Invalid or expired sign-in.' });
+      return;
+    }
+    if (modelRateLimited(data.user.id, res)) return;
+    open();
+    const turn = await runHelperTurn({
+      db,
+      userId: data.user.id,
+      message: parsed.data.message,
+      history: parsed.data.history,
+      images: parsed.data.images,
+      mode: parsed.data.mode,
+      onDelta: (text) => send('delta', { text }),
+      onRetract: () => send('retract', {}),
+    });
+    send('done', turn);
+    res.end();
+  } catch (err) {
+    const { status, message } = toHttpError(err);
+    if (status >= 500) console.error(err);
+    if (!opened) {
+      res.status(status).json({ error: message });
+      return;
+    }
+    send('error', { error: message });
+    res.end();
   }
 });
 

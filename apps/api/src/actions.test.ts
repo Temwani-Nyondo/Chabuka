@@ -251,11 +251,14 @@ const PLAYER_A = '22222222-2222-4222-8222-222222222222';
 const PLAYER_B = '33333333-3333-4333-8333-333333333333';
 const SPORT_ID = '123e4567-e89b-12d3-a456-426614174000';
 
-function matchInput(capacity = 2) {
+// A week from now, so these games stay joinable whenever the suite runs.
+const nextWeek = () => new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+function matchInput(capacity = 2, startsAt: string = nextWeek()) {
   return {
     sportId: SPORT_ID,
     title: 'Saturday football',
-    startsAt: '2026-10-31T13:00:00.000Z',
+    startsAt,
     area: 'Woodlands',
     capacity,
     level: 'intermediate' as const,
@@ -275,6 +278,18 @@ describe('createMatch', () => {
 });
 
 describe('joinMatch', () => {
+  it('refuses a game that has already started, even if it is still marked open', async () => {
+    const { client, matches } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(2));
+    // The game's time passes while its status stays "open".
+    const past = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    for (const row of matches.values()) row['starts_at'] = past;
+    await expect(joinMatch(client, PLAYER_A, created.matchId)).rejects.toMatchObject({
+      status: 409,
+      message: expect.stringContaining('already started'),
+    });
+  });
+
   it('fills to capacity then refuses the next join', async () => {
     const { client } = fakeDb();
     const created = await createMatch(client, ORGANISER, matchInput(2));

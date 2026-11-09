@@ -153,62 +153,132 @@ export async function transcribeVoice(
   return text;
 }
 
-export async function chatOnce(
-  params: {
-    messages: ModelMessage[];
-    tools?: OpenAI.Chat.ChatCompletionTool[];
-    toolChoice?: OpenAI.Chat.ChatCompletionToolChoiceOption;
-  },
-  deps?: { fetch?: typeof fetch },
-): Promise<ModelResult> {
-  const fetchImpl = deps?.fetch ?? fetch;
-  const basetenKey = readEnv('BASETEN_API_KEY');
-  if (!basetenKey) {
-    throw new Error('BASETEN_API_KEY is not set (API server environment only).');
-  }
-  const baseten = new OpenAI({
-    baseURL: BASETEN_BASE_URL,
-    apiKey: basetenKey,
-    fetch: fetchImpl,
-    timeout: 60_000,
-    maxRetries: 0,
-  });
-  const basetenModel = readEnv('BASETEN_MODEL_ID') ?? BASETEN_MODEL_ID;
-  const body = {
-    model: basetenModel,
+interface ChatParams {
+  messages: ModelMessage[];
+  tools?: OpenAI.Chat.ChatCompletionTool[];
+  toolChoice?: OpenAI.Chat.ChatCompletionToolChoiceOption;
+}
+
+function chatBody(params: ChatParams, model: string) {
+  return {
+    model,
     messages: params.messages as unknown as OpenAI.Chat.ChatCompletionMessageParam[],
     ...(params.tools !== undefined ? { tools: params.tools } : {}),
     ...(params.toolChoice !== undefined ? { tool_choice: params.toolChoice } : {}),
   };
+}
+
+function basetenClient(fetchImpl: typeof fetch): { client: OpenAI; model: string } {
+  const basetenKey = readEnv('BASETEN_API_KEY');
+  if (!basetenKey) {
+    throw new Error('BASETEN_API_KEY is not set (API server environment only).');
+  }
+  return {
+    client: new OpenAI({ baseURL: BASETEN_BASE_URL, apiKey: basetenKey, fetch: fetchImpl, timeout: 60_000, maxRetries: 0 }),
+    model: readEnv('BASETEN_MODEL_ID') ?? BASETEN_MODEL_ID,
+  };
+}
+
+// Fallback: Muse Spark on the Meta Model API, used only if Baseten fails or is
+// down. Null when Meta is not configured, so the caller rethrows the Baseten error.
+function metaClient(fetchImpl: typeof fetch): { client: OpenAI; model: string } | null {
+  const metaKey = readEnv('META_API_KEY');
+  const metaModel = readEnv('META_MODEL_ID');
+  const metaBaseUrl = readEnv('META_BASE_URL');
+  if (!metaKey || !metaModel || !metaBaseUrl) return null;
+  return {
+    client: new OpenAI({ baseURL: metaBaseUrl, apiKey: metaKey, fetch: fetchImpl, timeout: 60_000, maxRetries: 0 }),
+    model: metaModel,
+  };
+}
+
+// Log the shape that failed (roles + tool count only, never content or keys) so a
+// provider-side rejection is diagnosable from the terminal.
+function logBasetenFailure(error: unknown, params: ChatParams): void {
   try {
-    const res = await baseten.chat.completions.create(body);
+    const roles = params.messages.map((m) => m.role).join(',');
+    const toolCount = params.tools?.length ?? 0;
+    console.error(
+      `Baseten chat failed: ${error instanceof Error ? error.message : 'unknown'} (roles=${roles} tools=${toolCount})`,
+    );
+  } catch {
+    // Logging must never break the fallback path.
+  }
+}
+
+export async function chatOnce(params: ChatParams, deps?: { fetch?: typeof fetch }): Promise<ModelResult> {
+  const fetchImpl = deps?.fetch ?? fetch;
+  const baseten = basetenClient(fetchImpl);
+  const body = chatBody(params, baseten.model);
+  try {
+    const res = await baseten.client.chat.completions.create(body);
     return extractResult(res.choices[0]?.message, 'baseten');
   } catch (basetenError) {
-    // Log the shape that failed (roles + tool count only, never content or
-    // keys) so a provider-side rejection is diagnosable from the terminal.
-    try {
-      const roles = params.messages.map((m) => m.role).join(',');
-      const toolCount = params.tools?.length ?? 0;
-      console.error(
-        `Baseten chat failed: ${basetenError instanceof Error ? basetenError.message : 'unknown'} (roles=${roles} tools=${toolCount})`,
-      );
-    } catch {
-      // Logging must never break the fallback path.
-    }
-    // Fallback: Muse Spark on the Meta Model API, used only if Baseten
-    // fails or is down. The Meta credit is mainly a backup now.
-    const metaKey = readEnv('META_API_KEY');
-    const metaModel = readEnv('META_MODEL_ID');
-    const metaBaseUrl = readEnv('META_BASE_URL');
-    if (!metaKey || !metaModel || !metaBaseUrl) throw basetenError;
-    const meta = new OpenAI({
-      baseURL: metaBaseUrl,
-      apiKey: metaKey,
-      fetch: fetchImpl,
-      timeout: 60_000,
-      maxRetries: 0,
-    });
-    const res = await meta.chat.completions.create({ ...body, model: metaModel });
+    logBasetenFailure(basetenError, params);
+    const meta = metaClient(fetchImpl);
+    if (!meta) throw basetenError;
+    const res = await meta.client.chat.completions.create({ ...body, model: meta.model });
     return extractResult(res.choices[0]?.message, 'meta');
   }
+}
+
+// Same call as chatOnce, but the answer text is handed to onDelta as it is written,
+// so a caller can show it (and start speaking it) before the model has finished.
+// Reasoning rides in other fields and is ignored, as in chatOnce. Tool calls arrive
+// in pieces and are assembled by index. The Meta fallback is used only when the
+// first provider failed before it produced any text: once something has been
+// delivered, switching providers would repeat or contradict it, so the error is thrown.
+export async function chatStream(
+  params: ChatParams,
+  onDelta: (text: string) => void,
+  deps?: { fetch?: typeof fetch },
+): Promise<ModelResult> {
+  const fetchImpl = deps?.fetch ?? fetch;
+  const baseten = basetenClient(fetchImpl);
+  const body = chatBody(params, baseten.model);
+  let delivered = false;
+  const emit = (text: string) => {
+    delivered = true;
+    onDelta(text);
+  };
+  try {
+    return await readStream(baseten.client, body, 'baseten', emit);
+  } catch (basetenError) {
+    logBasetenFailure(basetenError, params);
+    const meta = metaClient(fetchImpl);
+    if (!meta || delivered) throw basetenError;
+    return await readStream(meta.client, { ...body, model: meta.model }, 'meta', emit);
+  }
+}
+
+async function readStream(
+  client: OpenAI,
+  body: ReturnType<typeof chatBody>,
+  provider: ModelProvider,
+  emit: (text: string) => void,
+): Promise<ModelResult> {
+  const stream = await client.chat.completions.create({ ...body, stream: true });
+  let content = '';
+  const calls = new Map<number, { id: string; name: string; arguments: string }>();
+  for await (const chunk of stream) {
+    const delta = chunk.choices[0]?.delta;
+    if (!delta) continue;
+    if (typeof delta.content === 'string' && delta.content.length > 0) {
+      content += delta.content;
+      emit(delta.content);
+    }
+    for (const piece of delta.tool_calls ?? []) {
+      const entry = calls.get(piece.index) ?? { id: '', name: '', arguments: '' };
+      if (piece.id) entry.id = piece.id;
+      if (piece.function?.name) entry.name += piece.function.name;
+      if (piece.function?.arguments) entry.arguments += piece.function.arguments;
+      calls.set(piece.index, entry);
+    }
+  }
+  const toolCalls: ModelToolCall[] = [...calls.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([, c]) => c)
+    .filter((c) => c.id && c.name)
+    .map((c) => ({ id: c.id, name: c.name, arguments: c.arguments || '{}' }));
+  return { provider, content: content.length > 0 ? content : null, toolCalls };
 }

@@ -36,6 +36,7 @@ async function searchMatches(db: SupabaseClient, input: { sportId?: string; leve
     .from('matches')
     .select('*')
     .eq('status', 'open')
+    .gte('starts_at', new Date().toISOString())
     .order('starts_at')
     .limit(SEARCH_LIMIT);
   if (input.sportId) query = query.eq('sport_id', input.sportId);

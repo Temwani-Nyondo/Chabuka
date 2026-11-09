@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ActionError } from './actions.js';
-import { runHelperTurn } from './helper.js';
+import { createReactionGate, runHelperTurn, tameReaction } from './helper.js';
 import type { ModelResult } from './model.js';
 
 const db = {} as SupabaseClient;
@@ -263,7 +263,7 @@ describe('runHelperTurn', () => {
     expect(turn.reply).toBe('You play for one team.');
   });
 
-  it('refuses actions that are not on the Gaffer allowlist', async () => {
+  it('refuses actions that are not on Gaffer allowlist', async () => {
     const chat = vi
       .fn()
       .mockResolvedValueOnce(
@@ -336,5 +336,256 @@ describe('runHelperTurn', () => {
     const tool = sent[sent.length - 1]?.content ?? '';
     expect(tool).toContain('<data>');
     expect(tool.match(/<\/data>/g)).toHaveLength(1);
+  });
+});
+
+describe('onboarding mode', () => {
+  const emptyCard = {
+    name: null,
+    area: null,
+    city: null,
+    birthYear: null,
+    travelKm: null,
+    sportsCount: 0,
+    sportsLevel: null,
+    availabilityCount: 0,
+    gameTypesCount: 0,
+    sports: [
+      { id: 'sport-basketball', name: 'basketball' },
+      { id: 'sport-football', name: 'Football' },
+    ],
+  };
+  const doneCard = { ...emptyCard, name: 'Temwani', area: 'Avondale', city: 'Lusaka', birthYear: 1995, sportsCount: 1, sportsLevel: 'recreational' };
+
+  it('offers only the four card-writing tools, and no schedule or booking tools', async () => {
+    const chat = vi.fn().mockResolvedValue(result({ content: 'What should I call you?' }));
+    await runHelperTurn(
+      { db, userId: 'u1', message: 'hi', mode: 'onboarding' },
+      { chat, cardState: async () => emptyCard },
+    );
+    const tools = (chat.mock.calls[0]?.[0]?.tools ?? []) as { function: { name: string } }[];
+    expect(tools.map((t) => t.function.name).sort()).toEqual(
+      ['set_availability', 'set_game_types', 'set_sports', 'update_profile'].sort(),
+    );
+  });
+
+  it('tells the model exactly what is missing and which sport ids exist', async () => {
+    const chat = vi.fn().mockResolvedValue(result({ content: 'Ok.' }));
+    await runHelperTurn(
+      { db, userId: 'u1', message: 'hi', mode: 'onboarding' },
+      { chat, cardState: async () => ({ ...emptyCard, name: 'Temwani' }) },
+    );
+    const system = (chat.mock.calls[0]?.[0]?.messages as { role: string; content: string }[])[0]?.content ?? '';
+    expect(system).toContain('CARD STATE');
+    expect(system).toContain('name: Temwani');
+    expect(system).toContain('Essentials still missing: area, sports with a level');
+    expect(system).toContain('sport-basketball = basketball');
+    // Same character as the general Gaffer.
+    expect(system).toContain('Human reactions');
+    // And none of the general rules that pulled it off track.
+    expect(system).not.toContain('get_my_brief');
+    expect(system).not.toContain('Be suggestive');
+  });
+
+  it('saves several facts from one message in one turn and reports progress', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({
+          toolCalls: [
+            { id: 'c1', name: 'update_profile', arguments: '{"name":"Temwani","area":"Avondale","city":"Lusaka","birthYear":1995}' },
+            { id: 'c2', name: 'set_sports', arguments: '{"sportIds":["sport-basketball"],"level":"recreational"}' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(result({ content: 'Wow, thirty-one and already sorted. Card is done, anything else or shall we stop here?' }));
+    const execute = vi.fn(async () => ({ state: 'saved' }));
+    const cards = [emptyCard, doneCard];
+    const cardState = vi.fn(async () => cards.shift() ?? doneCard);
+    const turn = await runHelperTurn(
+      { db, userId: 'u1', message: 'I am thirty one, in Avondale Lusaka, I play basketball', mode: 'onboarding' },
+      { chat, execute, cardState },
+    );
+    expect(execute).toHaveBeenCalledTimes(2);
+    expect(turn.actionsTaken.map((a) => a.name)).toEqual(['update_profile', 'set_sports']);
+    expect(turn.progress).toMatchObject({ name: true, area: true, sports: true, age: true, essentialsComplete: true });
+    expect(turn.progress?.travel).toBe(false);
+  });
+
+  it('a turn that saves nothing does not re-read the card', async () => {
+    const chat = vi.fn().mockResolvedValue(result({ content: 'What level do you play at?' }));
+    const cardState = vi.fn(async () => emptyCard);
+    const turn = await runHelperTurn(
+      { db, userId: 'u1', message: 'hello', mode: 'onboarding' },
+      { chat, cardState },
+    );
+    expect(cardState).toHaveBeenCalledTimes(1);
+    expect(turn.progress?.essentialsComplete).toBe(false);
+  });
+
+  it('the general Gaffer still gets a second model call after its tools run', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({ content: 'Let me look.', toolCalls: [{ id: 'c1', name: 'search_matches', arguments: '{}' }] }),
+      )
+      .mockResolvedValueOnce(result({ content: 'Found one on Saturday.' }));
+    const read = vi.fn(async () => []);
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'any games?' }, { chat, read });
+    expect(chat).toHaveBeenCalledTimes(2);
+    expect(turn.reply).toBe('Found one on Saturday.');
+  });
+
+  it('refuses anything that is not part of the card, even a real action', async () => {
+    const chat = vi
+      .fn()
+      .mockResolvedValueOnce(
+        result({
+          toolCalls: [
+            { id: 'c1', name: 'search_matches', arguments: '{}' },
+            { id: 'c2', name: 'create_match', arguments: '{"title":"x"}' },
+            { id: 'c3', name: 'request_booking', arguments: '{"venueId":"v1","confirmed":true}' },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(result({ content: 'That comes right after setup.' }));
+    const execute = vi.fn();
+    const read = vi.fn();
+    const turn = await runHelperTurn(
+      { db, userId: 'u1', message: 'yes, find me a game and book it', mode: 'onboarding' },
+      { chat, execute, read, cardState: async () => emptyCard },
+    );
+    expect(execute).not.toHaveBeenCalled();
+    expect(read).not.toHaveBeenCalled();
+    expect(turn.actionsTaken.every((a) => a.ok === false)).toBe(true);
+  });
+
+  it('the general Gaffer keeps its full toolset and reports no progress', async () => {
+    const chat = vi.fn().mockResolvedValue(result({ content: 'Sure.' }));
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'any games?' }, { chat });
+    const tools = (chat.mock.calls[0]?.[0]?.tools ?? []) as { function: { name: string } }[];
+    expect(tools.some((t) => t.function.name === 'search_matches')).toBe(true);
+    expect(turn.progress).toBeUndefined();
+    const system = (chat.mock.calls[0]?.[0]?.messages as { content: string }[])[0]?.content ?? '';
+    expect(system).not.toContain('CARD STATE');
+    expect(system).toContain('Human reactions');
+  });
+});
+
+describe('tameReaction', () => {
+  it('keeps a reaction when it is fresh and the player is fine', () => {
+    expect(tameReaction('Wow, five sports. What level?', ['What is your name?'], 'I play five sports')).toBe('Wow, five sports. What level?');
+  });
+
+  it('drops a reaction right after one of his last two replies had one', () => {
+    expect(tameReaction('Haha, nice. Which area?', ['Wow, five sports.', 'What level?'], 'competitive')).toBe('Nice. Which area?');
+    expect(tameReaction('Ohhh, Avondale. Anything else?', ['Hmm, ok.', 'Haha, fair.'], 'Avondale')).toBe('Avondale. Anything else?');
+  });
+
+  it('allows one again after two plain replies', () => {
+    expect(tameReaction('Wow, thirty one. Which area?', ['Hmm, ok.', 'What level?', 'Which area?'], 'thirty one')).toContain('Wow');
+  });
+
+  it('never reacts to an impatient or annoyed player', () => {
+    expect(tameReaction('Haha, five sports is brilliant. What level?', [], 'Kabulonga. Honestly this is taking forever, just hurry up')).toBe(
+      'Five sports is brilliant. What level?',
+    );
+    expect(tameReaction('Wow, ok. Which area?', [], 'this is so annoying')).toBe('Ok. Which area?');
+  });
+
+  it('leaves replies without a reaction alone, and does not mistake ordinary words for one', () => {
+    expect(tameReaction('Which neighbourhood are you in?', [], 'hurry up')).toBe('Which neighbourhood are you in?');
+    expect(tameReaction('Ohio is far from here. Which area?', ['Wow.', 'Hmm.'], 'ohio')).toBe('Ohio is far from here. Which area?');
+    expect(tameReaction('Hampton is lovely. Which area?', ['Wow.', 'Hmm.'], 'hampton')).toBe('Hampton is lovely. Which area?');
+  });
+});
+
+describe('streaming', () => {
+  const emptyCard = {
+    name: null, ageBand: null, area: null, city: null, sports: [], availability: [], gameTypes: [], maxTravelKm: null, level: null,
+  } as never;
+
+  it('pushes the reply as it is written and finishes with the same reply', async () => {
+    const seen: string[] = [];
+    const stream = vi.fn(async (_p: unknown, onDelta: (t: string) => void) => {
+      onDelta('Which area ');
+      onDelta('are you in? Hurry ');
+      onDelta('up if you like.');
+      return result({ content: 'Which area are you in? Hurry up if you like.' });
+    });
+    const turn = await runHelperTurn(
+      { db, userId: 'u1', message: 'hello', onDelta: (t) => seen.push(t) },
+      { stream: stream as never },
+    );
+    expect(seen.join('')).toBe('Which area are you in? Hurry up if you like.');
+    expect(turn.reply).toBe('Which area are you in? Hurry up if you like.');
+  });
+
+  it('retracts text that came before tool calls, then streams the real reply', async () => {
+    const events: string[] = [];
+    let call = 0;
+    const stream = vi.fn(async (_p: unknown, onDelta: (t: string) => void) => {
+      call += 1;
+      if (call === 1) {
+        onDelta('Let me save that for you right now.');
+        return result({ content: 'Let me save that for you right now.', toolCalls: [{ id: 't1', name: 'update_profile', arguments: '{"name":"Sam"}' }] });
+      }
+      onDelta('Saved. Which area are you in?');
+      return result({ content: 'Saved. Which area are you in?' });
+    });
+    const execute = vi.fn(async () => ({ ok: true }));
+    const turn = await runHelperTurn(
+      { db, userId: 'u1', message: 'I am Sam', mode: 'onboarding', onDelta: (t) => events.push(`+${t}`), onRetract: () => events.push('RETRACT') },
+      { stream: stream as never, execute, cardState: async () => emptyCard },
+    );
+    expect(events).toEqual(['+Let me save that for you right now.', 'RETRACT', '+Saved. Which area are you in?']);
+    expect(turn.reply).toBe('Saved. Which area are you in?');
+  });
+
+  it('does not retract when nothing had been shown yet', async () => {
+    const onRetract = vi.fn();
+    let call = 0;
+    const stream = vi.fn(async (_p: unknown, onDelta: (t: string) => void) => {
+      call += 1;
+      if (call === 1) {
+        onDelta('Ok.');
+        return result({ content: 'Ok.', toolCalls: [{ id: 't1', name: 'update_profile', arguments: '{}' }] });
+      }
+      onDelta('Done.');
+      return result({ content: 'Done.' });
+    });
+    await runHelperTurn(
+      { db, userId: 'u1', message: 'hi', mode: 'onboarding', onDelta: () => undefined, onRetract },
+      { stream: stream as never, execute: vi.fn(async () => ({})), cardState: async () => emptyCard },
+    );
+    expect(onRetract).not.toHaveBeenCalled();
+  });
+});
+
+describe('createReactionGate', () => {
+  it('drops a repeated reaction opener from the stream, keeping the rest', () => {
+    const out: string[] = [];
+    const gate = createReactionGate(['Wow, five sports.'], 'competitive', (t) => out.push(t));
+    for (const piece of ['Ha', 'ha, ni', 'ce. Which', ' area are you in?']) gate.push(piece);
+    gate.flush();
+    expect(out.join('')).toBe('Nice. Which area are you in?');
+  });
+
+  it('lets a fresh reaction through untouched', () => {
+    const out: string[] = [];
+    const gate = createReactionGate(['What is your name?'], 'Sam', (t) => out.push(t));
+    for (const piece of ['Wo', 'w, thirty one. ', 'Which area?']) gate.push(piece);
+    gate.flush();
+    expect(out.join('')).toBe('Wow, thirty one. Which area?');
+  });
+
+  it('flushes a very short reply and reports whether anything was emitted', () => {
+    const out: string[] = [];
+    const gate = createReactionGate([], 'hi', (t) => out.push(t));
+    gate.push('Ok.');
+    expect(gate.emitted).toBe(false);
+    gate.flush();
+    expect(out).toEqual(['Ok.']);
+    expect(gate.emitted).toBe(true);
   });
 });
