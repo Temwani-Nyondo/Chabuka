@@ -290,26 +290,7 @@ export default function AuthForm({
             />
           </svg>
         </span>
-        {busy === 'google' ? 'Opening…' : 'Google'}
-      </button>
-      <button
-        className="btn btn-social"
-        type="button"
-        aria-label="Continue with Facebook"
-        disabled={busy !== null}
-        onClick={() => {
-          void oauth('facebook', 'meta');
-        }}
-      >
-        <span className="brand-icon brand-icon-meta" aria-hidden="true">
-          <svg width="18" height="18" viewBox="0 0 24 24">
-            <path
-              fill="currentColor"
-              d="M13.5 21v-7h2.4l.4-3h-2.8V9.1c0-.9.3-1.5 1.6-1.5h1.3V4.9c-.3 0-1.1-.1-2.1-.1-2.1 0-3.6 1.3-3.6 3.7V11H8.2v3h2.5v7h2.8z"
-            />
-          </svg>
-        </span>
-        {busy === 'meta' ? 'Opening…' : 'Facebook'}
+        {busy === 'google' ? <span className="sr-only">Opening…</span> : null}
       </button>
       </div>
       ) : null}
