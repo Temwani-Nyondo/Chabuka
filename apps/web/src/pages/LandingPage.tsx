@@ -4,81 +4,36 @@ import { MapContainer, CircleMarker, Popup, TileLayer } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import AuthForm from '../components/AuthForm';
 import { useTheme } from '../lib/theme';
+import { API_BASE } from '../lib/api';
 
-// Static first cut: every game and venue below is SAMPLE content, clearly
-// labelled, until the public-read RLS change is approved and real data is
-// wired in. No network calls here on purpose.
+// Live data: upcoming open games and approved venues from the public landing
+// endpoint. A signed-out visitor sees no personal data, only game and venue
+// details. Joining needs an account, so Join opens sign-up.
 
-interface SampleGame {
+interface LiveGame {
   id: string;
   sport: string;
   title: string;
-  area: string;
-  day: string;
-  spots: string;
-  lat: number;
-  lng: number;
+  area: string | null;
+  venueName: string | null;
+  startsAt: string;
+  spotsTaken: number;
+  capacity: number;
+  lat: number | null;
+  lng: number | null;
 }
 
-interface SampleVenue {
+interface LiveVenue {
   id: string;
   name: string;
-  area: string;
-  sports: string;
-  note: string;
+  area: string | null;
+  sports: string[];
+  priceNote: string | null;
 }
 
-const SAMPLE_GAMES: SampleGame[] = [
-  {
-    id: 'sample-1',
-    sport: 'Basketball',
-    title: 'Tuesday evening 5v5 run',
-    area: 'Avondale',
-    day: 'Tue 6:00 PM',
-    spots: '7/10 in',
-    lat: -15.405,
-    lng: 28.355,
-  },
-  {
-    id: 'sample-2',
-    sport: 'Football',
-    title: 'Saturday morning 7-a-side',
-    area: 'Woodlands',
-    day: 'Sat 9:00 AM',
-    spots: '9/14 in',
-    lat: -15.4395,
-    lng: 28.3512,
-  },
-  {
-    id: 'sample-3',
-    sport: 'Netball',
-    title: 'Sunday social netball',
-    area: 'Kabulonga',
-    day: 'Sun 3:00 PM',
-    spots: '5/12 in',
-    lat: -15.4189,
-    lng: 28.3489,
-  },
-];
-
-const SAMPLE_VENUES: SampleVenue[] = [
-  {
-    id: 'sample-v1',
-    name: 'Avondale Community Court',
-    area: 'Avondale',
-    sports: 'Basketball · Netball',
-    note: 'Evenings · Free',
-  },
-  {
-    id: 'sample-v2',
-    name: 'Woodlands Sports Field',
-    area: 'Woodlands',
-    sports: 'Football · Rugby',
-    note: 'Weekends · Free',
-  },
-];
-
-const SPORTS = ['All', 'Basketball', 'Football', 'Netball'];
+function whenLabel(iso: string): string {
+  return new Date(iso).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+}
 
 const STEPS = [
   {
@@ -95,7 +50,7 @@ const STEPS = [
   },
 ];
 
-function GameMiniMap({ game }: { game: SampleGame }) {
+function GameMiniMap({ game }: { game: LiveGame & { lat: number; lng: number } }) {
   return (
     <div className="map-box game-map" aria-label={`Map for ${game.title}`}>
       <MapContainer
@@ -116,7 +71,7 @@ function GameMiniMap({ game }: { game: SampleGame }) {
           <Popup>
             <strong>{game.title}</strong>
             <br />
-            {game.area} · {game.day}
+            {game.area ?? game.venueName ?? ''} · {whenLabel(game.startsAt)}
           </Popup>
         </CircleMarker>
       </MapContainer>
@@ -126,12 +81,35 @@ function GameMiniMap({ game }: { game: SampleGame }) {
 
 export default function LandingPage() {
   const [sport, setSport] = useState('All');
+  const [games, setGames] = useState<LiveGame[]>([]);
+  const [venues, setVenues] = useState<LiveVenue[]>([]);
+  const [loaded, setLoaded] = useState(false);
   const [query, setQuery] = useState('');
   const [activeStep, setActiveStep] = useState(0);
   const [mapId, setMapId] = useState<string | null>(null);
   const [authMode, setAuthMode] = useState<'signin' | 'signup' | null>(null);
   const stepsRef = useRef<HTMLDivElement>(null);
   const { theme, toggle } = useTheme();
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch(`${API_BASE}/api/public/landing`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error('landing'))))
+      .then((d: { games: LiveGame[]; venues: LiveVenue[] }) => {
+        if (cancelled) return;
+        setGames(d.games);
+        setVenues(d.venues);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const sportChips = useMemo(() => ['All', ...new Set(games.map((g) => g.sport))], [games]);
 
   // Floating auth modal: visitors sign in or up without leaving the page.
   // After auth the landing gate sends them home on its own.
@@ -144,19 +122,19 @@ export default function LandingPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [authMode]);
 
-  // Hero search plus chips filter the same sample list of games.
+  // Hero search plus chips filter the live list of games.
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return SAMPLE_GAMES.filter((g) => {
+    return games.filter((g) => {
       if (sport !== 'All' && g.sport !== sport) return false;
       if (!q) return true;
       return (
         g.title.toLowerCase().includes(q) ||
-        g.area.toLowerCase().includes(q) ||
+        (g.area ?? '').toLowerCase().includes(q) ||
         g.sport.toLowerCase().includes(q)
       );
     });
-  }, [sport, query]);
+  }, [games, sport, query]);
 
   // Highlight the how-it-works step currently in view.
   useEffect(() => {
@@ -179,7 +157,7 @@ export default function LandingPage() {
   }, []);
 
   const join = (_id: string) => {
-    // Sample games are not joinable yet: signing up is the next step.
+    // Joining needs an account: signing up is the next step.
     setAuthMode('signup');
   };
 
@@ -235,7 +213,7 @@ export default function LandingPage() {
                   onChange={(e) => setSport(e.target.value)}
                   aria-label="Filter by sport"
                 >
-                  {SPORTS.map((s) => (
+                  {sportChips.map((s) => (
                     <option key={s} value={s}>
                       {s}
                     </option>
@@ -260,10 +238,9 @@ export default function LandingPage() {
         <section id="games" aria-label="Open games near you">
           <div className="row">
             <h2>Upcoming games</h2>
-            <span className="tag">Sample data</span>
           </div>
           <div className="chips" role="group" aria-label="Filter by sport">
-            {SPORTS.map((s) => (
+            {sportChips.map((s) => (
               <button
                 key={s}
                 type="button"
@@ -276,41 +253,51 @@ export default function LandingPage() {
             ))}
           </div>
           {visible.length === 0 ? (
-            <p className="muted">No sample games match that search. Try another sport or area.</p>
+            <p className="muted">
+              {!loaded
+                ? 'Loading games…'
+                : games.length === 0
+                  ? 'No games are on yet. Be the first: sign up and start one.'
+                  : 'No games match that search. Try another sport or area.'}
+            </p>
           ) : null}
           {visible.map((g) => (
             <div className="card" key={g.id}>
               <div className="row">
                 <strong>
-                  {g.sport} · {g.day}
+                  {g.sport} · {whenLabel(g.startsAt)}
                 </strong>
-                <span className="tag">{g.spots}</span>
+                <span className="tag">{g.spotsTaken}/{g.capacity} in</span>
               </div>
               <p className="muted">
-                {g.title} · {g.area}
+                {g.title} · {g.area ?? g.venueName ?? 'Lusaka'}
               </p>
               <div className="actions-row">
                 <button className="btn btn-primary" type="button" onClick={() => join(g.id)}>
                   Join
                 </button>
-                <button
-                  className="btn btn-ghost"
-                  type="button"
-                  aria-expanded={mapId === g.id}
-                  onClick={() => setMapId(mapId === g.id ? null : g.id)}
-                >
-                  {mapId === g.id ? 'Hide map' : 'View on map'}
-                </button>
-                <a
-                  className="btn btn-ghost"
-                  href={`https://www.google.com/maps/dir/?api=1&destination=${g.lat},${g.lng}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  Directions
-                </a>
+                {g.lat != null && g.lng != null ? (
+                  <>
+                    <button
+                      className="btn btn-ghost"
+                      type="button"
+                      aria-expanded={mapId === g.id}
+                      onClick={() => setMapId(mapId === g.id ? null : g.id)}
+                    >
+                      {mapId === g.id ? 'Hide map' : 'View on map'}
+                    </button>
+                    <a
+                      className="btn btn-ghost"
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${g.lat},${g.lng}`}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      Directions
+                    </a>
+                  </>
+                ) : null}
               </div>
-              {mapId === g.id ? <GameMiniMap game={g} /> : null}
+              {mapId === g.id && g.lat != null && g.lng != null ? <GameMiniMap game={{ ...g, lat: g.lat, lng: g.lng }} /> : null}
             </div>
           ))}
         </section>
@@ -337,14 +324,19 @@ export default function LandingPage() {
 
         <section id="venues" aria-label="Venues you can book">
           <h2>Venues you can book</h2>
-          {SAMPLE_VENUES.map((v) => (
+          {venues.length === 0 ? (
+            <p className="muted">
+              {loaded ? 'No venues are listed yet. Own a pitch or court? Sign up and register it.' : 'Loading venues…'}
+            </p>
+          ) : null}
+          {venues.map((v) => (
             <div className="card" key={v.id}>
               <div className="row">
                 <strong>{v.name}</strong>
-                <span className="tag">{v.area}</span>
+                {v.area ? <span className="tag">{v.area}</span> : null}
               </div>
               <p className="muted">
-                {v.sports} · {v.note}
+                {[v.sports.join(' · '), v.priceNote].filter(Boolean).join(' · ')}
               </p>
             </div>
           ))}

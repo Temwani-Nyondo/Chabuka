@@ -3,6 +3,10 @@ import type { FormEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
 import GooglePlacePicker from '../components/GooglePlacePicker';
+import SlotRow from '../components/SlotRow';
+import LinkedVenueOwnerPanel from '../components/LinkedVenueOwnerPanel';
+import { setVenueCalendarLink } from '../lib/spaces';
+import VenueEditor from '../components/VenueEditor';
 import type { GooglePlacePick } from '../components/GooglePlacePicker';
 import { googleMapsKey } from '../lib/googleMaps';
 import {
@@ -48,6 +52,7 @@ export default function VenueDashboardPage() {
   const [sports, setSports] = useState('Football');
   const [facilities, setFacilities] = useState('');
   const [contact, setContact] = useState('');
+  const [priceNote, setPriceNote] = useState('');
 
   const onPlacePick = (pick: GooglePlacePick) => {
     if (pick.areaText) setArea(pick.areaText);
@@ -61,6 +66,7 @@ export default function VenueDashboardPage() {
   const [slotEnd, setSlotEnd] = useState<Record<string, string>>({});
   const [slotPrice, setSlotPrice] = useState<Record<string, string>>({});
   const [slotWeeks, setSlotWeeks] = useState<Record<string, number>>({});
+  const [slotCapacity, setSlotCapacity] = useState<Record<string, string>>({});
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -114,7 +120,7 @@ export default function VenueDashboardPage() {
             sports: sports.split(',').map((s) => s.trim()).filter(Boolean),
             facilityTypes: facilities.split(',').map((s) => s.trim()).filter(Boolean),
             contact: contact.trim() || undefined,
-            priceNote: 'Free — MVP demo',
+            priceNote: priceNote.trim() || undefined,
           },
           token,
         ),
@@ -127,6 +133,7 @@ export default function VenueDashboardPage() {
     setPlaceId(null);
     setFacilities('');
     setContact('');
+    setPriceNote('');
   };
 
   const venueName = (id: string) => venues.find((v) => v.id === id)?.name ?? 'Venue';
@@ -141,7 +148,7 @@ export default function VenueDashboardPage() {
       <div className="page-head">
         <span className="eyebrow">Run the venue</span>
         <h1>Venue dashboard</h1>
-        <p>Bookings and tickets are free in this MVP — no payment step.</p>
+        <p>Publish slots, confirm booking requests and check people in. Free bookings are confirmed here; paid ones are sold through WaitApp.</p>
       </div>
 
       {myBookings.length > 0 ? (
@@ -194,6 +201,7 @@ export default function VenueDashboardPage() {
         <label className="field">Sports (comma separated)<input className="input" value={sports} onChange={(e) => setSports(e.target.value)} /></label>
         <label className="field">Facilities (comma separated)<input className="input" value={facilities} onChange={(e) => setFacilities(e.target.value)} placeholder="grass pitch, floodlights" /></label>
         <label className="field">Contact (optional)<input className="input" value={contact} onChange={(e) => setContact(e.target.value)} maxLength={120} /></label>
+        <label className="field">Prices (optional)<input className="input" value={priceNote} onChange={(e) => setPriceNote(e.target.value)} maxLength={120} placeholder="K150 per hour, K50 per session" /></label>
         <button className="btn btn-primary" type="submit" disabled={busy || !token}>Register venue</button>
       </form>
 
@@ -202,13 +210,64 @@ export default function VenueDashboardPage() {
       {venues.map((venue) => (
         <section key={venue.id}>
           <h2>{venue.name}</h2>
-          <p className="muted">{venue.area} · <Link to={`/venues/${venue.id}`}>View profile</Link></p>
+          <p className="muted">
+            {venue.area} · <Link to={`/venues/${venue.id}`}>View profile</Link>
+            {bookings.filter((b) => b.venue_id === venue.id && b.status === 'requested').length > 0 ? (
+              <span className="tag">
+                {bookings.filter((b) => b.venue_id === venue.id && b.status === 'requested').length} waiting for you
+              </span>
+            ) : null}
+          </p>
+          <div className="card">
+            <strong>Bookings and payments on WaitApp</strong>
+            {venue.waitapp_restaurant_id ? (
+              <>
+                <p className="muted">Players book your spaces here and pay on WaitApp. Your calendar and money live on WaitApp.</p>
+                <button
+                  className="btn btn-ghost"
+                  type="button"
+                  disabled={busy || !token}
+                  onClick={() => token && void act(() => setVenueCalendarLink(token, venue.id, false), 'Unlinked. Players see the free request flow again.')}
+                >
+                  Stop using WaitApp for bookings
+                </button>
+              </>
+            ) : (
+              <>
+                <p className="muted">
+                  Have a WaitApp Bookable Venue account? Connect it from a game&apos;s ticket panel first, then link it here. Players then see your spaces and real free times, and pay through WaitApp.
+                </p>
+                <button
+                  className="btn"
+                  type="button"
+                  disabled={busy || !token}
+                  onClick={() => token && void act(() => setVenueCalendarLink(token, venue.id, true), 'Linked. Players now book your WaitApp spaces from your venue page.')}
+                >
+                  Use my WaitApp spaces for bookings
+                </button>
+              </>
+            )}
+          </div>
+          <VenueEditor
+            key={`${venue.id}-${venue.name}-${venue.price_note ?? ''}-${venue.hours ?? ''}-${venue.photos.length}`}
+            venue={venue}
+            token={token}
+            onSaved={(msg) => {
+              setNotice(msg);
+              setError(null);
+              void reload();
+            }}
+          />
           {venue.status === 'pending' ? (
             <p className="hint"><span className="tag">Waiting for approval</span> Only you can see this venue until an admin approves it.</p>
           ) : null}
           {venue.status === 'rejected' ? (
             <p className="error"><span className="tag">Not approved</span> {venue.review_note ?? 'Contact support to find out why.'}</p>
           ) : null}
+          {venue.waitapp_restaurant_id ? (
+            <LinkedVenueOwnerPanel venueId={venue.id} />
+          ) : (
+            <>
           <div className="card">
             <strong>Add schedule slots</strong>
             <label className="field">Starts<input className="input" type="datetime-local" value={slotStart[venue.id] ?? ''} onChange={(e) => setSlotStart({ ...slotStart, [venue.id]: e.target.value })} /></label>
@@ -224,6 +283,15 @@ export default function VenueDashboardPage() {
               />
             </label>
             <label className="field">
+              Capacity (how many bookings the slot takes)
+              <input
+                className="input"
+                inputMode="numeric"
+                value={slotCapacity[venue.id] ?? '1'}
+                onChange={(e) => setSlotCapacity({ ...slotCapacity, [venue.id]: e.target.value })}
+              />
+            </label>
+            <label className="field">
               Repeat weekly for
               <select
                 className="input"
@@ -236,7 +304,7 @@ export default function VenueDashboardPage() {
               </select>
             </label>
             {slotPrice[venue.id] ? (
-              <p className="hint">Paid slots show their price, but paid booking opens with WaitApp payments. Until then players cannot book them.</p>
+              <p className="hint">Paid slots show their price. Paid booking opens with WaitApp checkout; until then players cannot book them.</p>
             ) : null}
             <button
               className="btn"
@@ -251,7 +319,7 @@ export default function VenueDashboardPage() {
                         venueId: venue.id,
                         startsAt: new Date(slotStart[venue.id] as string).toISOString(),
                         endsAt: new Date(slotEnd[venue.id] as string).toISOString(),
-                        capacity: 1,
+                        capacity: Math.min(50, Math.max(1, Number(slotCapacity[venue.id]) || 1)),
                         repeatWeeks: slotWeeks[venue.id] ?? 1,
                         ...(slotPrice[venue.id]?.trim() && Number.isFinite(Number(slotPrice[venue.id]))
                           ? { price: Number(slotPrice[venue.id]), currency: 'ZMW' }
@@ -266,10 +334,21 @@ export default function VenueDashboardPage() {
               Publish slot
             </button>
             {(slotsByVenue[venue.id] ?? []).map((slot) => (
-              <p className="muted" key={slot.id}>
-                {fmt.format(new Date(slot.starts_at))} – {fmt.format(new Date(slot.ends_at))} · capacity {slot.capacity}
-                {slot.price != null && slot.price > 0 ? ` · ${slot.currency ?? ''} ${slot.price}` : ' · free'}
-              </p>
+              <SlotRow
+                key={`${slot.id}-${slot.starts_at}-${slot.ends_at}-${slot.capacity}-${slot.price ?? ''}`}
+                slot={slot}
+                confirmed={bookings.filter((b) => b.slot_id === slot.id && b.status === 'confirmed').length}
+                token={token}
+                onChanged={(msg) => {
+                  setNotice(msg);
+                  setError(null);
+                  void reload();
+                }}
+                onError={(msg) => {
+                  setError(msg);
+                  setNotice(null);
+                }}
+              />
             ))}
           </div>
 
@@ -297,6 +376,8 @@ export default function VenueDashboardPage() {
               </article>
             );
           })}
+            </>
+          )}
         </section>
       ))}
       {notice ? <p>{notice}</p> : null}

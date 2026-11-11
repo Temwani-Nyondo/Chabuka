@@ -52,6 +52,33 @@ export async function reviewVenueAction(
   await adminCall(`/api/admin/venues/${venueId}/review`, 'POST', token, { decision, ...(note ? { note } : {}) });
 }
 
+export interface ClaimRow {
+  id: string;
+  venue_id: string;
+  venue_name: string;
+  user_name: string | null;
+  message: string;
+  status: 'pending' | 'approved' | 'rejected';
+  created_at: string;
+}
+
+export async function fetchClaims(token: string, status: 'pending' | 'approved' | 'rejected'): Promise<ClaimRow[]> {
+  return (await adminCall<{ claims: ClaimRow[] }>(`/api/admin/claims?status=${status}`, 'GET', token)).claims;
+}
+
+export async function reviewClaimAction(
+  token: string,
+  claimId: string,
+  decision: 'approve' | 'reject',
+  note?: string,
+): Promise<void> {
+  await adminCall(`/api/admin/claims/${claimId}/review`, 'POST', token, { decision, ...(note ? { note } : {}) });
+}
+
+export async function addVenueAction(token: string, input: unknown): Promise<{ venueId: string; ownerId: string | null }> {
+  return adminCall('/api/admin/venues', 'POST', token, input);
+}
+
 export function useIsAdmin(): boolean {
   const { session } = useAuth();
   const token = session?.access_token;

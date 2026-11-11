@@ -7,6 +7,8 @@ import { useAuth } from '../auth/AuthContext';
 import { createMatchAction } from '../lib/api';
 import { fetchSports } from '../lib/matches';
 import { fetchCircles } from '../lib/circles';
+import { fetchSlotLoad, fetchVenueSlots } from '../lib/venues';
+import type { VenueSlot } from '../lib/venues';
 import type { CircleListing } from '../lib/circles';
 import VenuePicker from './VenuePicker';
 import type { VenuePick } from './VenuePicker';
@@ -27,6 +29,8 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const [venuePick, setVenuePick] = useState<VenuePick>({});
   const [circles, setCircles] = useState<CircleListing[]>([]);
   const [circleId, setCircleId] = useState('');
+  const [slots, setSlots] = useState<VenueSlot[]>([]);
+  const [slotId, setSlotId] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -45,6 +49,37 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
         .catch(() => undefined);
     }
   }, [user]);
+
+  // Offer the venue's open free slots, so the game and its booking request go together.
+  useEffect(() => {
+    setSlotId('');
+    setSlots([]);
+    const venueId = venuePick.venueId;
+    if (!venueId) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const [all, load] = await Promise.all([fetchVenueSlots(venueId), fetchSlotLoad(venueId)]);
+        if (cancelled) return;
+        setSlots(
+          all.filter(
+            (sl) => !(sl.price != null && sl.price > 0) && (load.get(sl.id) ?? 0) < sl.capacity,
+          ),
+        );
+      } catch {
+        // No slots to offer: the game can still be created without one.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [venuePick.venueId]);
+
+  const toLocalInput = (iso: string) => {
+    const d = new Date(iso);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
 
   const sport = sports.find((s) => s.id === sportId);
 
@@ -72,6 +107,7 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
       visibility,
       notes: notes.trim() || undefined,
       circleId: circleId || undefined,
+      slotId: slotId || undefined,
     });
     if (!parsed.success) {
       setError(parsed.error.issues[0]?.message ?? 'Check the form and try again.');
@@ -154,6 +190,30 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
         onAreaChange={setArea}
         onPick={setVenuePick}
       />
+      {slots.length > 0 ? (
+        <label className="field">
+          Book a slot at this venue (optional)
+          <select
+            className="input"
+            value={slotId}
+            onChange={(e) => {
+              setSlotId(e.target.value);
+              const picked = slots.find((sl) => sl.id === e.target.value);
+              if (picked) setStartsAt(toLocalInput(picked.starts_at));
+            }}
+          >
+            <option value="">No slot, I will arrange it</option>
+            {slots.map((sl) => (
+              <option key={sl.id} value={sl.id}>
+                {new Date(sl.starts_at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                {' - '}
+                {new Date(sl.ends_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+              </option>
+            ))}
+          </select>
+          {slotId ? <span className="hint">The venue gets a booking request tied to this game and confirms it.</span> : null}
+        </label>
+      ) : null}
       <label className="field">
         Players needed (including you)
         <input

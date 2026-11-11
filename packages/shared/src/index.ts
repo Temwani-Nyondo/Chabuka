@@ -141,6 +141,8 @@ export const createMatchSchema = z.object({
   visibility: visibilitySchema.default('public'),
   notes: z.string().trim().max(500).optional(),
   circleId: z.string().uuid().optional(),
+  // Book this venue slot for the game: the venue sees the request tied to the game.
+  slotId: z.string().uuid().optional(),
 });
 export type CreateMatchInput = z.infer<typeof createMatchSchema>;
 
@@ -163,6 +165,9 @@ export const venueSchema = z.object({
   facility_types: z.array(z.string()).default([]),
   price_note: z.string().nullable().optional(),
   contact: z.string().nullable().optional(),
+  hours: z.string().nullable().optional(),
+  // The WaitApp bookable-venue account that holds this venue's spaces and calendar (null: not linked, free request flow).
+  waitapp_restaurant_id: z.string().nullable().optional(),
   photos: z.array(z.string()).default([]),
   // Approval state. Defaults to approved so rows read before the column existed still parse.
   status: z.enum(['pending', 'approved', 'rejected']).default('approved'),
@@ -187,7 +192,7 @@ export const createVenueSchema = z.object({
   googlePlaceId: z.string().trim().max(300).optional(),
   sports: z.array(z.string().trim().min(1).max(40)).default([]),
   facilityTypes: z.array(z.string().trim().min(1).max(60)).default([]),
-  priceNote: z.string().trim().max(120).default('Free — MVP demo'),
+  priceNote: z.string().trim().max(120).optional(),
   contact: z.string().trim().max(120).optional(),
 });
 export type CreateVenueInput = z.infer<typeof createVenueSchema>;
@@ -215,6 +220,52 @@ export const createVenueSlotSchema = z.object({
   repeatWeeks: z.number().int().min(1).max(12).default(1),
 });
 export type CreateVenueSlotInput = z.infer<typeof createVenueSlotSchema>;
+
+// Owner edits. Changing the name or the pin sends an approved venue back to review.
+export const updateVenueSchema = z.object({
+  venueId: z.string().uuid(),
+  name: z.string().trim().min(1).max(80).optional(),
+  area: z.string().trim().min(1).max(80).optional(),
+  sports: z.array(z.string().trim().min(1).max(40)).optional(),
+  facilityTypes: z.array(z.string().trim().min(1).max(60)).optional(),
+  priceNote: z.string().trim().max(120).optional(),
+  contact: z.string().trim().max(120).optional(),
+  hours: z.string().trim().max(200).optional(),
+  photos: z.array(z.string().url().max(500)).max(8).optional(),
+});
+export type UpdateVenueInput = z.infer<typeof updateVenueSchema>;
+
+export const updateVenueSlotSchema = z.object({
+  slotId: z.string().uuid(),
+  startsAt: z.iso.datetime({ offset: true }).optional(),
+  endsAt: z.iso.datetime({ offset: true }).optional(),
+  capacity: z.number().int().min(1).max(50).optional(),
+  price: z.number().min(0).max(1_000_000).nullable().optional(),
+  currency: z.string().trim().length(3).optional(),
+});
+export type UpdateVenueSlotInput = z.infer<typeof updateVenueSlotSchema>;
+
+export const deleteVenueSlotSchema = z.object({ slotId: z.string().uuid() });
+export type DeleteVenueSlotInput = z.infer<typeof deleteVenueSlotSchema>;
+
+// A person says "this venue is mine"; a platform admin decides.
+export const claimVenueSchema = z.object({
+  venueId: z.string().uuid(),
+  message: z.string().trim().min(5, 'Tell us how you are connected to this venue').max(500),
+});
+export type ClaimVenueInput = z.infer<typeof claimVenueSchema>;
+
+export const reviewClaimSchema = z.object({
+  decision: z.enum(['approve', 'reject']),
+  note: z.string().trim().max(300).optional(),
+});
+export type ReviewClaimInput = z.infer<typeof reviewClaimSchema>;
+
+// Admin pre-lists a real venue so its owner can claim it.
+export const adminAddVenueSchema = createVenueSchema.extend({
+  ownerEmail: z.string().trim().email().optional(),
+});
+export type AdminAddVenueInput = z.infer<typeof adminAddVenueSchema>;
 
 export const reviewVenueSchema = z.object({
   decision: z.enum(['approve', 'reject']),
@@ -784,6 +835,10 @@ export const ACTION_NAMES = [
   'propose_time',
   'create_venue',
   'create_venue_slot',
+  'update_venue',
+  'update_venue_slot',
+  'delete_venue_slot',
+  'claim_venue',
   'request_booking',
   'respond_booking',
   'cancel_booking',
@@ -1179,3 +1234,5 @@ export function classifyEnder(utterance: string): ConversationEnder {
   if (SOFT_RE.test(text)) return 'soft';
   return null;
 }
+
+export * from './scoreboard.js';

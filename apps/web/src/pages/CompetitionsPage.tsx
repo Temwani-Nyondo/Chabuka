@@ -1,3 +1,4 @@
+import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import EmptyState from '../components/EmptyState';
@@ -352,6 +353,7 @@ export default function CompetitionsPage() {
                       </strong>
                       <span className="tag">Scheduled</span>
                     </div>
+                    <ScoreboardButton target={{ fixtureId: f.id }} />
                     {isOrganiser ? (
                       <div className="actions-row">
                         <input
@@ -422,6 +424,7 @@ export default function CompetitionsPage() {
                       </strong>
                       <span className="tag">Full time</span>
                     </div>
+                    <ScoreboardButton target={{ fixtureId: f.id }} watchOnly />
                   </div>
                 ))}
             </div>

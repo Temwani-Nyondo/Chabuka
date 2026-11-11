@@ -54,7 +54,7 @@ async function buildListings(rows: unknown[], userId: string): Promise<MatchList
   if (venueIds.length > 0) {
     const { data: venueRows } = await supabase
       .from('venues')
-      .select('id,name,area,lat,lng,sports,facility_types,price_note,contact,photos')
+      .select('id,name,area,lat,lng,sports,facility_types,price_note,contact,hours,waitapp_restaurant_id,photos')
       .in('id', venueIds);
     const venues = venueListSchema.safeParse(venueRows ?? []);
     if (venues.success) for (const v of venues.data) venueById.set(v.id, v);

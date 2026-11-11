@@ -300,18 +300,18 @@ export default function ExplorePage() {
                   <VenuePhoto photos={venue.photos} name={venue.name} />
                   <div className="row">
                     <strong>{venue.name}</strong>
-                    <span className="tag">Free booking</span>
+                    <span className="tag">Request to book</span>
                   </div>
                   <p className="muted">
                     {[venue.area, venue.sports.join(', '), venue.facility_types.join(', '), venue.price_note]
                       .filter(Boolean)
                       .join(' · ')}
                   </p>
-                  <Link className="btn" to={`/venues/${venue.id}`}>View venue &amp; book free</Link>
+                  <Link className="btn" to={`/venues/${venue.id}`}>View venue &amp; book</Link>
                 </article>
               ))}
             {venues.length === 0 ? (
-              <p className="hint">No listed venues yet — venues appear here once registered or seeded.</p>
+              <p className="hint">No venues listed yet. Own a pitch or court? Register it from the Create menu.</p>
             ) : null}
           </>
         ) : null}

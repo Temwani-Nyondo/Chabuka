@@ -24,6 +24,10 @@ import {
   createTeamSchema,
   createVenueSchema,
   createVenueSlotSchema,
+  claimVenueSchema,
+  deleteVenueSlotSchema,
+  updateVenueSchema,
+  updateVenueSlotSchema,
   fixtureSchema,
   inviteCodeSchema,
   matchIdSchema,
@@ -77,6 +81,10 @@ import type {
   CreateTeamInput,
   CreateVenueInput,
   CreateVenueSlotInput,
+  ClaimVenueInput,
+  DeleteVenueSlotInput,
+  UpdateVenueInput,
+  UpdateVenueSlotInput,
   Fixture,
   Match,
   Poll,
@@ -224,6 +232,16 @@ export async function createMatch(
     .insert({ match_id: matchId, user_id: userId, status: 'joined' });
   if (joinErr) throw dbError(joinErr);
 
+  // Asking the venue for the slot ties the game to its booking. A refused request
+  // never blocks the game itself: the organiser can retry from the venue page.
+  let booking: unknown = null;
+  if (input.slotId && input.venueId) {
+    try {
+      booking = await requestBooking(db, userId, { venueId: input.venueId, slotId: input.slotId, matchId });
+    } catch (err) {
+      booking = { error: err instanceof ActionError ? err.message : 'Could not request the slot.' };
+    }
+  }
   const match = await loadMatch(db, matchId);
   const count = await joinedCount(db, matchId);
   if (input.circleId) {
@@ -236,7 +254,7 @@ export async function createMatch(
       .filter((id) => id !== userId);
     await notifyUsers(memberIds, 'circle_event', { matchId, title: input.title });
   }
-  return { matchId, ...resultFor(match, userId, true, count, 'organiser') };
+  return { matchId, ...resultFor(match, userId, true, count, 'organiser'), ...(booking ? { booking } : {}) };
 }
 
 // A game that sells tickets is joined by buying one and left by refunding it,
@@ -679,7 +697,7 @@ export async function createVenue(
       lng: input.lng ?? null,
       sports: input.sports,
       facility_types: input.facilityTypes,
-      price_note: input.priceNote,
+      price_note: input.priceNote || null,
       contact: input.contact ?? null,
       photos: [],
       // Always starts pending: a platform admin approves it before anyone else sees it.
@@ -718,6 +736,28 @@ export async function createVenueSlot(
     throw new ActionError(400, 'Give the currency for a priced slot.');
   }
   const weekMs = 7 * 24 * 60 * 60 * 1000;
+  // Block publishing a window that overlaps an existing slot: the usual mistake with
+  // weekly repeats, and the calendar would otherwise show two slots for one time.
+  const firstStart = new Date(input.startsAt).getTime();
+  const lastEnd = new Date(input.endsAt).getTime() + (input.repeatWeeks - 1) * weekMs;
+  const { data: existing, error: existingErr } = await db
+    .from('venue_slots')
+    .select('starts_at,ends_at')
+    .eq('venue_id', input.venueId)
+    .lt('starts_at', new Date(lastEnd).toISOString())
+    .gt('ends_at', new Date(firstStart).toISOString());
+  if (existingErr) throw dbError(existingErr);
+  const taken = ((existing ?? []) as { starts_at: string; ends_at: string }[]).map((r) => [
+    new Date(r.starts_at).getTime(),
+    new Date(r.ends_at).getTime(),
+  ]);
+  for (let i = 0; i < input.repeatWeeks; i++) {
+    const a = firstStart + i * weekMs;
+    const b = new Date(input.endsAt).getTime() + i * weekMs;
+    if (taken.some(([ts, te]) => ts! < b && te! > a)) {
+      throw new ActionError(409, 'You already have a slot that overlaps these times. Edit or delete it first.');
+    }
+  }
   const rows = Array.from({ length: input.repeatWeeks }, (_, i) => ({
     venue_id: input.venueId,
     starts_at: new Date(new Date(input.startsAt).getTime() + i * weekMs).toISOString(),
@@ -782,6 +822,15 @@ export async function requestBooking(
     .single();
   if (error) throw dbError(error);
   const booking = await loadBooking(db, (data as { id: string }).id);
+  if (venue.owner_id && venue.owner_id !== userId) {
+    await notifyUsers([venue.owner_id], 'booking_requested', {
+      bookingId: booking.id,
+      venueId: venue.id,
+      title: venue.name,
+      startsAt,
+      matchId: input.matchId ?? null,
+    });
+  }
   return { state: booking.status, actions: ['cancel_booking'], booking };
 }
 
@@ -879,6 +928,144 @@ export async function checkInTicket(
   if (updErr) throw dbError(updErr);
   const { data: updated } = await db.from('tickets').select('*').eq('id', ticket.id).maybeSingle();
   return { state: 'used', actions: [], ticket: updated ? ticketSchema.parse(updated) : null };
+}
+
+export async function updateVenue(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateVenueInput,
+): Promise<unknown> {
+  const venue = await requireVenueOwner(db, input.venueId, userId);
+  const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch['name'] = input.name;
+  if (input.area !== undefined) patch['area'] = input.area;
+  if (input.sports !== undefined) patch['sports'] = input.sports;
+  if (input.facilityTypes !== undefined) patch['facility_types'] = input.facilityTypes;
+  if (input.priceNote !== undefined) patch['price_note'] = input.priceNote || null;
+  if (input.contact !== undefined) patch['contact'] = input.contact || null;
+  if (input.hours !== undefined) patch['hours'] = input.hours || null;
+  if (input.photos !== undefined) patch['photos'] = input.photos;
+  if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to change.');
+  const { error } = await db.from('venues').update(patch).eq('id', venue.id);
+  if (error) throw dbError(error);
+  const updated = await loadVenue(db, venue.id);
+  // A new name sends an approved venue back to review (database trigger): say so.
+  return {
+    state: updated.status === 'pending' && venue.status === 'approved' ? 'pending_review' : 'saved',
+    actions: [],
+    venue: updated,
+  };
+}
+
+async function loadSlotForOwner(db: SupabaseClient, slotId: string, userId: string): Promise<VenueSlot> {
+  const slot = await loadSlot(db, slotId);
+  await requireVenueOwner(db, slot.venue_id, userId);
+  return slot;
+}
+
+export async function updateVenueSlot(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateVenueSlotInput,
+): Promise<unknown> {
+  const slot = await loadSlotForOwner(db, input.slotId, userId);
+  const startsAt = input.startsAt ?? slot.starts_at;
+  const endsAt = input.endsAt ?? slot.ends_at;
+  if (new Date(endsAt).getTime() <= new Date(startsAt).getTime()) {
+    throw new ActionError(400, 'The slot must end after it starts.');
+  }
+  const confirmed = await confirmedForSlot(db, slot.id);
+  if (input.capacity !== undefined && input.capacity < confirmed) {
+    throw new ActionError(409, `${confirmed} bookings are already confirmed. Capacity cannot go below that.`);
+  }
+  const timeChanged =
+    new Date(startsAt).getTime() !== new Date(slot.starts_at).getTime() ||
+    new Date(endsAt).getTime() !== new Date(slot.ends_at).getTime();
+  if (timeChanged && confirmed > 0) {
+    throw new ActionError(
+      409,
+      'People already hold confirmed bookings for this time. Cancel them first, or add a new slot.',
+    );
+  }
+  const patch: Record<string, unknown> = { starts_at: startsAt, ends_at: endsAt };
+  if (input.capacity !== undefined) patch['capacity'] = input.capacity;
+  if (input.price !== undefined) {
+    patch['price'] = input.price;
+    patch['currency'] = input.price === null ? null : (input.currency ?? slot.currency ?? 'ZMW');
+  }
+  const { error } = await db.from('venue_slots').update(patch).eq('id', slot.id);
+  if (error) throw dbError(error);
+  return { state: 'saved', actions: [], slot: await loadSlot(db, slot.id) };
+}
+
+export async function deleteVenueSlot(
+  db: SupabaseClient,
+  userId: string,
+  input: DeleteVenueSlotInput,
+): Promise<unknown> {
+  const slot = await loadSlotForOwner(db, input.slotId, userId);
+  if ((await confirmedForSlot(db, slot.id)) > 0) {
+    throw new ActionError(409, 'People hold confirmed bookings for this slot. Decline or cancel them first.');
+  }
+  // Pending requests for a deleted slot are declined, and their requesters told.
+  const { data: pending } = await db
+    .from('bookings')
+    .select('id,requester_id')
+    .eq('slot_id', slot.id)
+    .eq('status', 'requested');
+  const open = (pending ?? []) as { id: string; requester_id: string }[];
+  if (open.length > 0) {
+    const { error: declineErr } = await db
+      .from('bookings')
+      .update({ status: 'declined' })
+      .in(
+        'id',
+        open.map((b) => b.id),
+      );
+    if (declineErr) throw dbError(declineErr);
+    await notifyUsers(
+      open.map((b) => b.requester_id),
+      'booking_answered',
+      { venueId: slot.venue_id, decision: 'decline' },
+    );
+  }
+  const { error } = await db.from('venue_slots').delete().eq('id', slot.id);
+  if (error) throw dbError(error);
+  return { state: 'deleted', actions: [], declined: open.length };
+}
+
+export async function claimVenue(
+  db: SupabaseClient,
+  userId: string,
+  input: ClaimVenueInput,
+): Promise<unknown> {
+  const venue = await loadVenue(db, input.venueId);
+  if (venue.owner_id) {
+    throw new ActionError(
+      409,
+      venue.owner_id === userId ? 'You already own this venue.' : 'This venue already has an owner.',
+    );
+  }
+  const { error } = await db
+    .from('venue_claims')
+    .insert({ venue_id: venue.id, user_id: userId, message: input.message, status: 'pending' });
+  if (error) {
+    if ((error as { code?: string }).code === '23505') {
+      throw new ActionError(409, 'You already asked to claim this venue. An admin will review it.');
+    }
+    throw dbError(error);
+  }
+  try {
+    const { data: admins } = await createServiceClient().from('platform_admins').select('user_id');
+    await notifyUsers(
+      ((admins ?? []) as { user_id: string }[]).map((a) => a.user_id),
+      'venue_claim_pending',
+      { venueId: venue.id, title: venue.name },
+    );
+  } catch {
+    // The admin screen lists pending claims anyway.
+  }
+  return { state: 'claim_pending', actions: [], venueId: venue.id };
 }
 
 // --- Tournaments (Day 5 board, brief sections 6-7) ---
@@ -1010,6 +1197,58 @@ export async function closeRegistration(
   return { state: 'live', actions: ['post_result'], competition: { ...competition, status: 'live' as const }, fixtures };
 }
 
+// Writes a fixture's final score, tells followers, and finishes the tournament when
+// every fixture is in. Shared by the organiser typing a result and by a finished
+// scoreboard, so both land in the standings the same way.
+export async function recordFixtureResult(
+  db: SupabaseClient,
+  fixtureId: string,
+  homeScore: number,
+  awayScore: number,
+  actorId: string,
+): Promise<{ competition: Competition; fixtures: Fixture[]; standings: unknown; finished: boolean }> {
+  const fixture = await loadFixture(db, fixtureId);
+  const competition = await loadCompetition(db, fixture.competition_id);
+  const { error } = await db
+    .from('fixtures')
+    .update({ status: 'finished', home_score: homeScore, away_score: awayScore })
+    .eq('id', fixture.id);
+  if (error) throw dbError(error);
+  const entries = await loadEntries(db, competition.id);
+  const fixtures = await loadFixtures(db, competition.id);
+  const standings = computeStandings(entries, fixtures);
+  const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
+  await notifyUsers(
+    ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== actorId),
+    'result_posted',
+    { competitionId: competition.id, fixtureId: fixture.id },
+  );
+  const finished = fixtures.every((f) => f.status === 'finished');
+  if (finished) {
+    const { error: finishErr } = await db.from('competitions').update({ status: 'finished' }).eq('id', competition.id);
+    if (finishErr) throw dbError(finishErr);
+    return { competition: { ...competition, status: 'finished' as const }, fixtures, standings, finished };
+  }
+  return { competition, fixtures, standings, finished };
+}
+
+// Undo of a posted result (a scoreboard reopened after full time): the fixture goes
+// back to scheduled, and a finished tournament is live again.
+export async function clearFixtureResult(db: SupabaseClient, fixtureId: string): Promise<void> {
+  const fixture = await loadFixture(db, fixtureId);
+  const { error } = await db
+    .from('fixtures')
+    .update({ status: 'scheduled', home_score: null, away_score: null })
+    .eq('id', fixture.id);
+  if (error) throw dbError(error);
+  const { error: compErr } = await db
+    .from('competitions')
+    .update({ status: 'live' })
+    .eq('id', fixture.competition_id)
+    .eq('status', 'finished');
+  if (compErr) throw dbError(compErr);
+}
+
 export async function postResult(
   db: SupabaseClient,
   userId: string,
@@ -1026,30 +1265,11 @@ export async function postResult(
   if (fixture.status !== 'scheduled') {
     throw new ActionError(409, 'This result is already in.');
   }
-  const { error } = await db
-    .from('fixtures')
-    .update({ status: 'finished', home_score: input.homeScore, away_score: input.awayScore })
-    .eq('id', fixture.id);
-  if (error) throw dbError(error);
-  const entries = await loadEntries(db, competition.id);
-  const fixtures = await loadFixtures(db, competition.id);
-  const standings = computeStandings(entries, fixtures);
-  const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
-  await notifyUsers(
-    ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== userId),
-    'result_posted',
-    { competitionId: competition.id, fixtureId: fixture.id },
-  );
-  const allFinished = fixtures.every((f) => f.status === 'finished');
-  if (allFinished) {
-    const { error: finishErr } = await db
-      .from('competitions')
-      .update({ status: 'finished' })
-      .eq('id', competition.id);
-    if (finishErr) throw dbError(finishErr);
-    return { state: 'finished', actions: [], competition: { ...competition, status: 'finished' as const }, fixtures, standings };
+  const result = await recordFixtureResult(db, fixture.id, input.homeScore, input.awayScore, userId);
+  if (result.finished) {
+    return { state: 'finished', actions: [], competition: result.competition, fixtures: result.fixtures, standings: result.standings };
   }
-  return { state: competition.status, actions: ['post_result'], competition, fixtures, standings };
+  return { state: competition.status, actions: ['post_result'], competition, fixtures: result.fixtures, standings: result.standings };
 }
 
 export async function postAnnouncement(
@@ -1702,6 +1922,14 @@ export async function runAction(
       return createVenue(db, userId, createVenueSchema.parse(body));
     case 'create_venue_slot':
       return createVenueSlot(db, userId, createVenueSlotSchema.parse(body));
+    case 'update_venue':
+      return updateVenue(db, userId, updateVenueSchema.parse(body));
+    case 'update_venue_slot':
+      return updateVenueSlot(db, userId, updateVenueSlotSchema.parse(body));
+    case 'delete_venue_slot':
+      return deleteVenueSlot(db, userId, deleteVenueSlotSchema.parse(body));
+    case 'claim_venue':
+      return claimVenue(db, userId, claimVenueSchema.parse(body));
     case 'request_booking':
       return requestBooking(db, userId, requestBookingSchema.parse(body));
     case 'respond_booking': {

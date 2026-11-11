@@ -74,6 +74,56 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     }
+    case 'scoreboard_appointed':
+      return {
+        title: 'You are running a scoreboard',
+        body: text(p.title),
+        href: text(p.boardId) ? `/scoreboard/${text(p.boardId)}/control` : null,
+      };
+    case 'scoreboard_replaced':
+      return { title: 'Someone else is now running the scoreboard', body: text(p.title), href: null };
+    case 'game_result':
+      return {
+        title: 'Final score',
+        body: `${text(p.homeName)} ${text(p.home)} - ${text(p.away)} ${text(p.awayName)}`,
+        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    case 'game_venue_booked':
+      return {
+        title: 'The venue is booked for your game',
+        body: [text(p.title), text(p.venue), text(p.spaceName)].filter(Boolean).join(' - '),
+        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    case 'space_booking_requested':
+      return {
+        title: p.instant ? 'New booking, waiting for payment' : 'New booking request',
+        body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        href: '/venues/dashboard',
+      };
+    case 'space_booking_accepted':
+      return { title: 'The venue accepted your booking', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+    case 'space_booking_paid':
+      return { title: 'Your booking is confirmed', body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+    case 'space_booking_cancelled':
+      return { title: 'Your booking was cancelled', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+    case 'space_booking_paid_owner':
+      return { title: 'A booking was paid', body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+    case 'booking_requested':
+      return {
+        title: 'New booking request',
+        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        href: '/venues/dashboard',
+      };
+    case 'venue_claim_pending':
+      return { title: 'Someone claimed a venue', body: text(p.title), href: '/admin/venues' };
+    case 'venue_claim_approved':
+      return { title: 'Your venue claim was approved', body: text(p.title), href: '/venues/dashboard' };
+    case 'venue_claim_rejected':
+      return {
+        title: 'Your venue claim was not approved',
+        body: [text(p.title), text(p.note)].filter(Boolean).join(' - '),
+        href: null,
+      };
     case 'venue_pending':
       return { title: 'A venue is waiting for approval', body: text(p.title), href: '/admin/venues' };
     case 'venue_approved':

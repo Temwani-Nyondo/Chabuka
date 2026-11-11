@@ -7,8 +7,16 @@ import { transcribeVoice } from './model.js';
 import { handleMcpRequest } from './mcp.js';
 import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
 import { createServiceClient, createUserClient } from './supabase.js';
-import { isPlatformAdmin, listVenuesForReview, requireAdmin, reviewVenue } from './venues.js';
-import { reviewVenueSchema } from '@chabuka/shared';
+import {
+  adminAddVenue,
+  isPlatformAdmin,
+  listClaims,
+  listVenuesForReview,
+  requireAdmin,
+  reviewClaim,
+  reviewVenue,
+} from './venues.js';
+import { adminAddVenueSchema, reviewClaimSchema, reviewVenueSchema } from '@chabuka/shared';
 import {
   buildConnectUrl,
   claimTickets,
@@ -22,6 +30,24 @@ import {
 } from './waitapp.js';
 import { buildIcs, formatEventLocation, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 import { loadServerEnv } from './env.js';
+import { readLanding } from './landing.js';
+import { bookSpace, bookSpaceSchema, getVenueAvailability, getVenueSpaces, listMySpaceBookings, setVenueCalendarLink } from './spaces.js';
+import {
+  addPlayerSchema,
+  addScoreboardEvents,
+  addScoreboardPlayer,
+  appointOfficial,
+  createScoreboard,
+  createScoreboardSchema,
+  finishScoreboard,
+  getControlScoreboard,
+  getPublicScoreboard,
+  lineupSchema,
+  scoreboardForTarget,
+  setLineup,
+  setPlayerSide,
+  undoLastEvent,
+} from './scoreboard.js';
 
 // Load the repo-root .env when present (local dev); deployed hosts set real
 // environment variables and this is a no-op there.
@@ -39,7 +65,7 @@ app.use((req, res, next) => {
   if (origin && (origin === appUrl || localhostOrigin.test(origin))) {
     res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Headers', 'authorization, content-type');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
   }
   if (req.method === 'OPTIONS') {
     res.status(204).end();
@@ -214,6 +240,27 @@ const helperBodySchema = z.object({
 
 // "Ask Gaffer" in the web nav lands here. Same auth shape as the
 // action layer; the model acts as the signed-in user via runAction.
+// Public, read-only: upcoming open games and approved venues for the landing page.
+app.get('/api/public/landing', async (_req, res) => {
+  try {
+    res.set('Cache-Control', 'public, max-age=60');
+    res.json(await readLanding(createServiceClient()));
+  } catch (err) {
+    console.error('landing read failed:', err);
+    res.status(500).json({ error: 'Could not load games right now.' });
+  }
+});
+
+// The name a person gave when they signed up lives in their login account, not in their profile.
+function signupNameOf(user: { user_metadata?: Record<string, unknown> | null }): string | undefined {
+  const m = user.user_metadata ?? {};
+  for (const k of ['name', 'full_name', 'display_name']) {
+    const v = m[k];
+    if (typeof v === 'string' && v.trim()) return v.trim();
+  }
+  return undefined;
+}
+
 app.post('/api/helper', async (req, res) => {
   const auth = req.header('authorization') ?? '';
   const token = /^Bearer\s+(.+)$/.exec(auth)?.[1];
@@ -241,6 +288,7 @@ app.post('/api/helper', async (req, res) => {
       history: parsed.data.history,
       images: parsed.data.images,
       mode: parsed.data.mode,
+      signupName: signupNameOf(data.user),
     });
     res.json(turn);
   } catch (err) {
@@ -303,6 +351,7 @@ app.post('/api/helper/stream', async (req, res) => {
       history: parsed.data.history,
       images: parsed.data.images,
       mode: parsed.data.mode,
+      signupName: signupNameOf(data.user),
       onDelta: (text) => send('delta', { text }),
       onRetract: () => send('retract', {}),
     });
@@ -424,6 +473,310 @@ app.post('/api/admin/venues/:id/review', async (req, res) => {
     const { status, message } = toHttpError(err);
     if (status >= 500) console.error('venue review failed:', err);
     res.status(status).json({ error: message });
+  }
+});
+
+// --- Venue claims and admin listings (platform admins only) -----------------
+app.get('/api/admin/claims', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const status = z.enum(['pending', 'approved', 'rejected']).catch('pending').parse(req.query['status']);
+  try {
+    const service = createServiceClient();
+    await requireAdmin(service, userId);
+    res.json({ claims: await listClaims(service, status) });
+  } catch (err) {
+    sendError(res, err, 'admin claims');
+  }
+});
+
+app.post('/api/admin/claims/:id/review', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = reviewClaimSchema.safeParse(req.body ?? {});
+  const claimId = z.string().uuid().safeParse(req.params['id']);
+  if (!parsed.success || !claimId.success) {
+    res.status(400).json({ error: 'Choose approve or reject for a valid claim.' });
+    return;
+  }
+  try {
+    const service = createServiceClient();
+    await requireAdmin(service, userId);
+    res.json(await reviewClaim(service, userId, claimId.data, parsed.data));
+  } catch (err) {
+    sendError(res, err, 'admin claim review');
+  }
+});
+
+app.post('/api/admin/venues', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = adminAddVenueSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the venue details.' });
+    return;
+  }
+  try {
+    const service = createServiceClient();
+    await requireAdmin(service, userId);
+    res.json(await adminAddVenue(service, userId, parsed.data));
+  } catch (err) {
+    sendError(res, err, 'admin add venue');
+  }
+});
+
+// --- Scoreboard (live officiating) -------------------------------------------
+// Public read by share code; everything else needs a signed-in user and is
+// checked against the game's organiser, team captains and appointed official.
+app.get('/api/public/scoreboard/:code', async (req, res) => {
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await getPublicScoreboard(createServiceClient(), String(req.params['code'] ?? '')));
+  } catch (err) {
+    sendError(res, err, 'public scoreboard');
+  }
+});
+
+app.get('/api/scoreboards/by-target', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const target = z
+    .object({ fixtureId: z.string().uuid().optional(), matchId: z.string().uuid().optional() })
+    .safeParse({ fixtureId: req.query['fixtureId'], matchId: req.query['matchId'] });
+  if (!target.success) {
+    res.status(400).json({ error: 'Pick a fixture or a game.' });
+    return;
+  }
+  try {
+    res.json(await scoreboardForTarget(createServiceClient(), userId, target.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard by target');
+  }
+});
+
+app.post('/api/scoreboards', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = createScoreboardSchema.safeParse(req.body ?? {});
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the scoreboard details.' });
+    return;
+  }
+  try {
+    res.json(await createScoreboard(createServiceClient(), userId, parsed.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard create');
+  }
+});
+
+const boardId = z.string().uuid();
+
+app.get('/api/scoreboards/:id', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  if (!id.success) {
+    res.status(404).json({ error: 'Scoreboard not found.' });
+    return;
+  }
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await getControlScoreboard(createServiceClient(), userId, id.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard control');
+  }
+});
+
+app.post('/api/scoreboards/:id/appoint', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const body = z.object({ officialId: z.string().uuid() }).safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: 'Pick who will run the scoreboard.' });
+    return;
+  }
+  try {
+    await appointOfficial(createServiceClient(), userId, id.data, body.data.officialId);
+    res.json({ ok: true });
+  } catch (err) {
+    sendError(res, err, 'scoreboard appoint');
+  }
+});
+
+app.post('/api/scoreboards/:id/lineup', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const body = lineupSchema.safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: 'Check the line-up.' });
+    return;
+  }
+  try {
+    await setLineup(createServiceClient(), userId, id.data, body.data.starters);
+    res.json({ ok: true });
+  } catch (err) {
+    sendError(res, err, 'scoreboard lineup');
+  }
+});
+
+app.post('/api/scoreboards/:id/players/:playerId/side', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const playerId = z.string().uuid().safeParse(req.params['playerId']);
+  const body = z.object({ side: z.enum(['home', 'away']) }).safeParse(req.body ?? {});
+  if (!id.success || !playerId.success || !body.success) {
+    res.status(400).json({ error: 'Pick a side.' });
+    return;
+  }
+  try {
+    await setPlayerSide(createServiceClient(), userId, id.data, playerId.data, body.data.side);
+    res.json({ ok: true });
+  } catch (err) {
+    sendError(res, err, 'scoreboard move player');
+  }
+});
+
+app.post('/api/scoreboards/:id/players', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const body = addPlayerSchema.safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: body.success ? 'Scoreboard not found.' : (body.error.issues[0]?.message ?? 'Check the player.') });
+    return;
+  }
+  try {
+    res.json(await addScoreboardPlayer(createServiceClient(), userId, id.data, body.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard add player');
+  }
+});
+
+app.post('/api/scoreboards/:id/events', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const body = z.object({ events: z.array(z.unknown()).min(1).max(50) }).safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: 'Send between 1 and 50 events.' });
+    return;
+  }
+  try {
+    res.json(await addScoreboardEvents(createServiceClient(), userId, id.data, body.data.events));
+  } catch (err) {
+    sendError(res, err, 'scoreboard events');
+  }
+});
+
+app.post('/api/scoreboards/:id/undo', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  if (!id.success) {
+    res.status(404).json({ error: 'Scoreboard not found.' });
+    return;
+  }
+  try {
+    res.json(await undoLastEvent(createServiceClient(), userId, id.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard undo');
+  }
+});
+
+app.post('/api/scoreboards/:id/finish', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = boardId.safeParse(req.params['id']);
+  const body = z.object({ mvpPlayerId: z.string().uuid().optional() }).safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: 'Check the result.' });
+    return;
+  }
+  try {
+    res.json(await finishScoreboard(createServiceClient(), userId, id.data, body.data));
+  } catch (err) {
+    sendError(res, err, 'scoreboard finish');
+  }
+});
+
+// --- Linked venues: a WaitApp bookable venue's spaces, calendar and bookings -----------
+// Owner links or unlinks; any signed-in player reads spaces and availability and books. WaitApp holds the calendar
+// and the money, so every call here goes to WaitApp with the owner's own link token.
+app.post('/api/venues/:id/waitapp-calendar', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = z.string().uuid().safeParse(req.params['id']);
+  const body = z.object({ link: z.boolean() }).safeParse(req.body ?? {});
+  if (!id.success || !body.success) {
+    res.status(400).json({ error: 'Check the request.' });
+    return;
+  }
+  try {
+    res.json(await setVenueCalendarLink(createServiceClient(), userId, id.data, body.data.link));
+  } catch (err) {
+    sendError(res, err, 'venue calendar link');
+  }
+});
+
+app.get('/api/venues/:id/spaces', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = z.string().uuid().safeParse(req.params['id']);
+  if (!id.success) {
+    res.status(404).json({ error: 'Venue not found.' });
+    return;
+  }
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await getVenueSpaces(createServiceClient(), id.data));
+  } catch (err) {
+    sendError(res, err, 'venue spaces');
+  }
+});
+
+app.get('/api/venues/:id/spaces/:typeId/availability', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = z.string().uuid().safeParse(req.params['id']);
+  const date = z.string().regex(/^\d{4}-\d{2}-\d{2}$/).safeParse(req.query['date']);
+  if (!id.success || !date.success) {
+    res.status(400).json({ error: 'Choose a space and a date.' });
+    return;
+  }
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json(await getVenueAvailability(createServiceClient(), id.data, String(req.params['typeId'] ?? ''), date.data));
+  } catch (err) {
+    sendError(res, err, 'venue availability');
+  }
+});
+
+app.post('/api/venues/:id/book-space', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const parsed = bookSpaceSchema.safeParse({ ...(req.body ?? {}), venueId: req.params['id'] });
+  if (!parsed.success) {
+    res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check your booking details.' });
+    return;
+  }
+  try {
+    res.json({ booking: await bookSpace(createServiceClient(), userId, parsed.data) });
+  } catch (err) {
+    sendError(res, err, 'book space');
+  }
+});
+
+app.get('/api/my/space-bookings', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ bookings: await listMySpaceBookings(createServiceClient(), userId) });
+  } catch (err) {
+    sendError(res, err, 'my space bookings');
   }
 });
 

@@ -7,7 +7,7 @@ import OpenAI from 'openai';
 // environment only, never from the web app, the repo, or client code.
 
 export const BASETEN_BASE_URL = 'https://inference.baseten.co/v1';
-// Exact slug for the hackathon key. Baseten's docs name without the -1026
+// Exact slug for the provider key. Baseten's docs name without the -1026
 // suffix does NOT work with this key.
 export const BASETEN_MODEL_ID = 'meta-models/muse-spark-open-1026';
 
@@ -101,6 +101,18 @@ function extractResult(message: unknown, provider: ModelProvider): ModelResult {
 // part {mode, model, audioEncoding} and an `audio` part holding a
 // RIFF/WAVE file (mono 16-bit PCM, 16 or 24 kHz). Audio that is not WAV
 // must be converted to WAV before calling — the client records WAV.
+/** Some transcripts come back with the whole sentence twice ("hello hello"): keep one copy. */
+export function collapseRepeat(text: string): string {
+  const words = text.trim().split(/\s+/);
+  if (words.length < 2 || words.length % 2 !== 0) return text.trim();
+  const norm = (w: string) => w.toLowerCase().replace(/[^\p{L}\p{N}']/gu, '');
+  const half = words.length / 2;
+  for (let i = 0; i < half; i++) {
+    if (norm(words[i] ?? '') !== norm(words[i + half] ?? '')) return text.trim();
+  }
+  return words.slice(0, half).join(' ');
+}
+
 export async function transcribeVoice(
   params: { audio: Buffer; mimeType: string },
   deps?: { fetch?: typeof fetch; sessionId?: string },
@@ -150,7 +162,7 @@ export async function transcribeVoice(
   if (!text) {
     throw new Error('Transcription came back empty. Try again.');
   }
-  return text;
+  return collapseRepeat(text);
 }
 
 interface ChatParams {
@@ -206,8 +218,51 @@ function logBasetenFailure(error: unknown, params: ChatParams): void {
   }
 }
 
+// When Baseten refuses for a reason that will not fix itself in seconds (the deployment is
+// switched off, the key is wrong or out of credit), every message would otherwise pay for a
+// doomed call before reaching the fallback. Remember it for a few minutes and go straight to Meta.
+let basetenSkipUntil = 0;
+const BASETEN_SKIP_MS = 5 * 60_000;
+
+// BASETEN_DISABLED=true takes Baseten offline on purpose (for example while its deployment is
+// switched off): no call is made to it at all. Ignored when Meta is not configured, so Gaffer
+// is never left with no model.
+function basetenDisabled(): boolean {
+  return /^(1|true|yes)$/i.test(readEnv('BASETEN_DISABLED') ?? '');
+}
+
+function skipBaseten(): boolean {
+  return basetenDisabled() || Date.now() < basetenSkipUntil;
+}
+
+export function isBasetenUnavailable(error: unknown): boolean {
+  const status = (error as { status?: number } | null)?.status;
+  const message = error instanceof Error ? error.message : '';
+  if (status === 401 || status === 402 || status === 403 || status === 404) return true;
+  return status === 400 && /deactivat|not active|inactive|needs to be activated/i.test(message);
+}
+
+/** For tests: forget that Baseten was switched off. */
+export function resetBasetenSkip(): void {
+  basetenSkipUntil = 0;
+}
+
+function noteBasetenFailure(error: unknown): void {
+  if (isBasetenUnavailable(error) && Date.now() >= basetenSkipUntil) {
+    basetenSkipUntil = Date.now() + BASETEN_SKIP_MS;
+    console.error('Baseten is unavailable (switched off or refused). Using Meta for the next few minutes.');
+  }
+}
+
 export async function chatOnce(params: ChatParams, deps?: { fetch?: typeof fetch }): Promise<ModelResult> {
   const fetchImpl = deps?.fetch ?? fetch;
+  if (skipBaseten()) {
+    const meta = metaClient(fetchImpl);
+    if (meta) {
+      const res = await meta.client.chat.completions.create(chatBody(params, meta.model));
+      return extractResult(res.choices[0]?.message, 'meta');
+    }
+  }
   const baseten = basetenClient(fetchImpl);
   const body = chatBody(params, baseten.model);
   try {
@@ -215,6 +270,7 @@ export async function chatOnce(params: ChatParams, deps?: { fetch?: typeof fetch
     return extractResult(res.choices[0]?.message, 'baseten');
   } catch (basetenError) {
     logBasetenFailure(basetenError, params);
+    noteBasetenFailure(basetenError);
     const meta = metaClient(fetchImpl);
     if (!meta) throw basetenError;
     const res = await meta.client.chat.completions.create({ ...body, model: meta.model });
@@ -234,17 +290,22 @@ export async function chatStream(
   deps?: { fetch?: typeof fetch },
 ): Promise<ModelResult> {
   const fetchImpl = deps?.fetch ?? fetch;
-  const baseten = basetenClient(fetchImpl);
-  const body = chatBody(params, baseten.model);
   let delivered = false;
   const emit = (text: string) => {
     delivered = true;
     onDelta(text);
   };
+  if (skipBaseten()) {
+    const meta = metaClient(fetchImpl);
+    if (meta) return await readStream(meta.client, chatBody(params, meta.model), 'meta', emit);
+  }
+  const baseten = basetenClient(fetchImpl);
+  const body = chatBody(params, baseten.model);
   try {
     return await readStream(baseten.client, body, 'baseten', emit);
   } catch (basetenError) {
     logBasetenFailure(basetenError, params);
+    noteBasetenFailure(basetenError);
     const meta = metaClient(fetchImpl);
     if (!meta || delivered) throw basetenError;
     return await readStream(meta.client, { ...body, model: meta.model }, 'meta', emit);

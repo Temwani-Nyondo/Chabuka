@@ -9,6 +9,7 @@ import {
   cancelBooking,
   checkInTicket,
   claimInviteLink,
+  claimVenue,
   createCircle,
   createInviteLink,
   createMatch,
@@ -17,6 +18,7 @@ import {
   createVenue,
   createVenueSlot,
   deleteTeam,
+  deleteVenueSlot,
   joinMatch,
   postChallenge,
   proposeTime,
@@ -37,141 +39,13 @@ import {
   updateCircle,
   updateProfile,
   updateTeam,
+  updateVenue,
+  updateVenueSlot,
   withdrawMatch,
 } from './actions.js';
+import { FakeQuery } from './testing.js';
 
 type Row = Record<string, unknown>;
-
-class FakeQuery implements PromiseLike<{ data: unknown; count: number | null; error: null }> {
-  private filters: { col: string; val: unknown }[] = [];
-  private inFilters: { col: string; vals: unknown[] }[] = [];
-  private nullFilters: string[] = [];
-  private take: number | null = null;
-  private op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
-  private payload: Row | Row[] | null = null;
-  private wantCount = false;
-  private conflict: string | null = null;
-
-  constructor(
-    private table: Map<string, Row>,
-    private keyOf: (row: Row) => string,
-  ) {}
-
-  select(_cols?: string, opts?: { count?: string; head?: boolean }): this {
-    if (opts?.count) this.wantCount = true;
-    return this;
-  }
-
-  eq(col: string, val: unknown): this {
-    this.filters.push({ col, val });
-    return this;
-  }
-
-  is(col: string, val: null): this {
-    if (val === null) this.nullFilters.push(col);
-    else this.filters.push({ col, val });
-    return this;
-  }
-
-  in(col: string, vals: unknown[]): this {
-    this.inFilters.push({ col, vals });
-    return this;
-  }
-
-  delete(): this {
-    this.op = 'delete';
-    return this;
-  }
-
-  limit(n: number): this {
-    this.take = n;
-    return this;
-  }
-
-  insert(row: Row): this {
-    this.op = 'insert';
-    this.payload = row;
-    return this;
-  }
-
-  upsert(row: Row, opts?: { onConflict?: string }): this {
-    this.op = 'upsert';
-    this.payload = row;
-    this.conflict = opts?.onConflict ?? null;
-    return this;
-  }
-
-  update(patch: Row): this {
-    this.op = 'update';
-    this.payload = patch;
-    return this;
-  }
-
-  maybeSingle(): PromiseLike<{ data: unknown; count: number | null; error: null }> {
-    return Promise.resolve(this.run(true));
-  }
-
-  single(): PromiseLike<{ data: unknown; count: number | null; error: null }> {
-    return Promise.resolve(this.run(true));
-  }
-
-  then<TResult1 = { data: unknown; count: number | null; error: null }, TResult2 = never>(
-    onfulfilled?: ((value: { data: unknown; count: number | null; error: null }) => TResult1 | PromiseLike<TResult1>) | null,
-    onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null,
-  ): Promise<TResult1 | TResult2> {
-    return Promise.resolve(this.run(false)).then(onfulfilled, onrejected);
-  }
-
-  private matches(row: Row): boolean {
-    return (
-      this.filters.every((f) => row[f.col] === f.val) &&
-      this.inFilters.every((f) => f.vals.includes(row[f.col])) &&
-      this.nullFilters.every((c) => row[c] == null)
-    );
-  }
-
-  private run(single: boolean): { data: unknown; count: number | null; error: null } {
-    if (this.op === 'insert' || this.op === 'upsert') {
-      const rows = (Array.isArray(this.payload) ? this.payload : [this.payload]) as Row[];
-      const written: Row[] = [];
-      for (const item of rows) {
-        const row = { ...item };
-        if (row['id'] === undefined) row['id'] = crypto.randomUUID();
-        const key = this.keyOf(row);
-        const existing = this.table.get(key);
-        if (this.op === 'insert' && existing && this.conflict === null) {
-          return { data: null, count: null, error: null };
-        }
-        this.table.set(key, { ...(existing ?? {}), ...row });
-        written.push(this.table.get(key) ?? row);
-      }
-      if (single) return { data: written[written.length - 1] ?? null, count: null, error: null };
-      // Like the real client: an array insert always returns a list.
-      if (Array.isArray(this.payload)) return { data: written, count: null, error: null };
-      return { data: written.length === 1 ? (written[0] ?? null) : written, count: null, error: null };
-    }
-    if (this.op === 'update') {
-      // Match first, like WHERE, then return the updated rows the way
-      // RETURNING does — never re-filter on the new values.
-      const matched = [...this.table.entries()].filter(([, row]) => this.matches(row));
-      for (const [key, row] of matched) this.table.set(key, { ...row, ...(this.payload as Row) });
-      const rows = matched.map(([, row]) => ({ ...row, ...(this.payload as Row) }));
-      if (single) return { data: rows[0] ?? null, count: null, error: null };
-      return { data: rows, count: null, error: null };
-    }
-    if (this.op === 'delete') {
-      for (const [key, row] of this.table.entries()) {
-        if (this.matches(row)) this.table.delete(key);
-      }
-      return { data: null, count: null, error: null };
-    }
-    let rows = [...this.table.values()].filter((r) => this.matches(r));
-    if (this.take != null) rows = rows.slice(0, this.take);
-    if (this.wantCount) return { data: null, count: rows.length, error: null };
-    if (single) return { data: rows[0] ?? null, count: null, error: null };
-    return { data: rows, count: null, error: null };
-  }
-}
 
 function fakeDb() {
   const matches = new Map<string, Row>();
@@ -198,6 +72,7 @@ function fakeDb() {
   const reports = new Map<string, Row>();
   const blocks = new Map<string, Row>();
   const ticketing = new Map<string, Row>();
+  const claims = new Map<string, Row>();
   const client = {
     from(table: string) {
       if (table === 'matches') return new FakeQuery(matches, (r) => String(r['id']));
@@ -234,6 +109,7 @@ function fakeDb() {
       if (table === 'circle_members') {
         return new FakeQuery(circleMembers, (r) => `${String(r['circle_id'])}:${String(r['user_id'])}`);
       }
+      if (table === 'venue_claims') return new FakeQuery(claims, (r) => String(r['id']));
       if (table === 'match_ticketing') return new FakeQuery(ticketing, (r) => String(r['match_id']));
       if (table === 'invite_links') return new FakeQuery(invites, (r) => String(r['code']));
       if (table === 'reports') return new FakeQuery(reports, (r) => String(r['id']));
@@ -243,7 +119,7 @@ function fakeDb() {
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, userSports, invites, reports, blocks, entries, circles, circleMembers, ticketing };
+  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, userSports, invites, reports, blocks, entries, circles, circleMembers, ticketing, claims };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
@@ -427,7 +303,7 @@ async function venueWithSlot(client: never, capacity = 1, approveIn?: Map<string
     area: 'Woodlands',
     sports: ['Football'],
     facilityTypes: ['grass pitch'],
-    priceNote: 'Free — MVP demo',
+    priceNote: 'K150 per hour',
   })) as VenueResult;
   if (approveIn) {
     const row = approveIn.get(created.venue.id);
@@ -914,5 +790,104 @@ describe('team management (Amendment 4, section 1)', () => {
     await expect(updateCircle(client, ORGANISER, { circleId: created.circle.id })).rejects.toMatchObject({
       status: 400,
     });
+  });
+});
+
+describe('venue owner tools', () => {
+  it('refuses a slot that overlaps an existing one', async () => {
+    const { client, venues } = fakeDb();
+    const { venueId } = await venueWithSlot(client, 1, venues);
+    await expect(
+      createVenueSlot(client, ORGANISER, {
+        venueId,
+        startsAt: '2026-11-07T14:00:00.000Z',
+        endsAt: '2026-11-07T16:00:00.000Z',
+        capacity: 1,
+        repeatWeeks: 1,
+      }),
+    ).rejects.toMatchObject({ status: 409 });
+    // Back to back is fine.
+    await expect(
+      createVenueSlot(client, ORGANISER, {
+        venueId,
+        startsAt: '2026-11-07T15:00:00.000Z',
+        endsAt: '2026-11-07T17:00:00.000Z',
+        capacity: 1,
+        repeatWeeks: 1,
+      }),
+    ).resolves.toBeDefined();
+  });
+
+  it('tells the owner about a new booking request', async () => {
+    const { client, venues } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client, 1, venues);
+    // Notifications are best effort and need the service client, which is not configured here:
+    // the request must still succeed.
+    const asked = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    expect(asked.state).toBe('requested');
+  });
+
+  it('only the owner edits a venue and its slots', async () => {
+    const { client, venues } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client, 2, venues);
+    await expect(updateVenue(client, PLAYER_A, { venueId, area: 'Kabulonga' })).rejects.toMatchObject({ status: 403 });
+    const saved = (await updateVenue(client, ORGANISER, { venueId, hours: 'Mon-Fri 16:00-21:00', priceNote: 'K150 per hour' })) as {
+      state: string;
+      venue: { hours?: string | null; price_note?: string | null };
+    };
+    expect(saved.state).toBe('saved');
+    expect(saved.venue.hours).toBe('Mon-Fri 16:00-21:00');
+    await expect(updateVenue(client, ORGANISER, { venueId })).rejects.toMatchObject({ status: 400 });
+    await expect(updateVenueSlot(client, PLAYER_A, { slotId, capacity: 3 })).rejects.toMatchObject({ status: 403 });
+    await expect(deleteVenueSlot(client, PLAYER_A, { slotId })).rejects.toMatchObject({ status: 403 });
+    const edited = (await updateVenueSlot(client, ORGANISER, { slotId, capacity: 3, price: 50, currency: 'ZMW' })) as {
+      slot: { capacity: number; price: number | null };
+    };
+    expect(edited.slot.capacity).toBe(3);
+    expect(Number(edited.slot.price)).toBe(50);
+  });
+
+  it('protects confirmed bookings when a slot is changed or deleted', async () => {
+    const { client, venues, slots } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client, 2, venues);
+    const asked = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    await respondBooking(client, ORGANISER, asked.booking.id, 'confirm');
+    await expect(updateVenueSlot(client, ORGANISER, { slotId, capacity: 0 + 1 })).resolves.toBeDefined();
+    await expect(
+      updateVenueSlot(client, ORGANISER, { slotId, startsAt: '2026-11-07T10:00:00.000Z', endsAt: '2026-11-07T11:00:00.000Z' }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(deleteVenueSlot(client, ORGANISER, { slotId })).rejects.toMatchObject({ status: 409 });
+    expect(slots.has(slotId)).toBe(true);
+  });
+
+  it('deleting a slot declines the open requests on it', async () => {
+    const { client, venues, slots, bookings } = fakeDb();
+    const { venueId, slotId } = await venueWithSlot(client, 1, venues);
+    const asked = (await requestBooking(client, PLAYER_A, { venueId, slotId })) as BookingResult;
+    const result = (await deleteVenueSlot(client, ORGANISER, { slotId })) as { declined: number };
+    expect(result.declined).toBe(1);
+    expect(slots.has(slotId)).toBe(false);
+    expect(bookings.get(asked.booking.id)?.['status']).toBe('declined');
+  });
+
+  it('only an unowned venue can be claimed', async () => {
+    const { client, venues } = fakeDb();
+    const { venueId } = await venueWithSlot(client, 1, venues);
+    await expect(claimVenue(client, PLAYER_A, { venueId, message: 'I run this pitch' })).rejects.toMatchObject({ status: 409 });
+    const row = venues.get(venueId);
+    if (row) row['owner_id'] = null;
+    await expect(claimVenue(client, PLAYER_A, { venueId, message: 'I run this pitch' })).resolves.toMatchObject({
+      state: 'claim_pending',
+    });
+  });
+
+  it('booking a slot while creating a game ties the booking to the game', async () => {
+    const { client, venues, sports, bookings } = fakeDb();
+    sports.set(SPORT_ID, { id: SPORT_ID, name: 'Football' });
+    const { venueId, slotId } = await venueWithSlot(client, 1, venues);
+    const result = await createMatch(client, ORGANISER, { ...matchInput(), venueId, slotId });
+    const booking = [...bookings.values()][0];
+    expect(booking?.['match_id']).toBe(result.matchId);
+    expect(booking?.['status']).toBe('requested');
   });
 });

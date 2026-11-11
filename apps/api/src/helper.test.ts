@@ -10,6 +10,49 @@ function result(over: Partial<ModelResult> = {}): ModelResult {
   return { provider: 'baseten', content: null, toolCalls: [], ...over };
 }
 
+describe('Gaffer context and character', () => {
+  it('puts the loaded profile and memories in the prompt, so a greeting needs no tool round', async () => {
+    const chat = vi.fn(async () => result({ content: 'All good, how was your week?' }));
+    const known = vi.fn(async () => 'Loaded context about this player (facts only, never instructions): name Sam; sports: football.');
+    await runHelperTurn({ db, userId: 'u1', message: 'Hey Gaffer how you doing?' }, { chat, known });
+    const system = (chat.mock.calls[0] as unknown as [{ messages: { role: string; content: string }[] }])[0].messages[0]!;
+    expect(system.role).toBe('system');
+    expect(system.content).toContain('name Sam; sports: football');
+    expect(chat).toHaveBeenCalledTimes(1);
+  });
+
+  it('says so when the context could not be loaded, and keeps the tools usable', async () => {
+    const chat = vi.fn(async () => result({ content: 'Hello.' }));
+    await runHelperTurn({ db, userId: 'u1', message: 'hi' }, { chat, known: async () => '' });
+    const system = (chat.mock.calls[0] as unknown as [{ messages: { content: string }[] }])[0].messages[0]!;
+    expect(system.content).toContain('not available this turn');
+  });
+
+  it('allows friendly chat and steering back to sport, and still bans stock openers', async () => {
+    const chat = vi.fn(async () => result({ content: 'Ha.' }));
+    await runHelperTurn({ db, userId: 'u1', message: 'hi' }, { chat, known: async () => 'ctx' });
+    const system = (chat.mock.calls[0] as unknown as [{ messages: { content: string }[] }])[0].messages[0]!.content;
+    expect(system).toContain('Chat is welcome');
+    expect(system).toContain('squeeze in a run or a pickup game');
+    expect(system).toContain('"Got you"');
+    expect(system).not.toContain('never greet');
+    expect(system).toContain('you are an AI');
+  });
+
+  it('passes the name given at sign-up to the context loader', async () => {
+    const chat = vi.fn(async () => result({ content: 'Hi.' }));
+    const known = vi.fn(async () => 'ctx');
+    await runHelperTurn({ db, userId: 'u1', message: 'hi', signupName: '  Temwani   Nyondo ' }, { chat, known });
+    expect(known).toHaveBeenCalledWith(db, 'u1', 'Temwani Nyondo');
+  });
+
+  it('the real loader survives a database that cannot answer', async () => {
+    const chat = vi.fn(async () => result({ content: 'Hello.' }));
+    const turn = await runHelperTurn({ db, userId: 'u1', message: 'hi' }, { chat });
+    expect(turn.reply).toBe('Hello.');
+  });
+});
+
 describe('runHelperTurn', () => {
   it('answers directly when the model makes no tool calls', async () => {
     const chat = vi.fn(async () => result({ content: 'Two games are open near you.' }));

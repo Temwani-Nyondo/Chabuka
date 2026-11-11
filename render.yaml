@@ -22,6 +22,8 @@ services:
         sync: false
       - key: BASETEN_API_KEY
         sync: false
+      - key: BASETEN_DISABLED
+        value: "true" # Baseten deployment is switched off: go straight to Meta. Remove to use Baseten again.
       - key: META_API_KEY
         sync: false
       - key: META_BASE_URL

@@ -223,7 +223,7 @@ async function loadOwnMatch(service: SupabaseClient, userId: string, matchId: st
   return match;
 }
 
-async function waitappCall(
+export async function waitappCall(
   service: SupabaseClient,
   userId: string,
   path: string,
@@ -534,9 +534,62 @@ export async function handleWebhook(
       });
       return { handled: true };
     }
+    case 'booking.accepted':
+    case 'booking.paid':
+    case 'booking.cancelled':
+      return applyBookingEvent(service, envelope.type, envelope.data);
     default:
       return { handled: false };
   }
+}
+
+// --- Space bookings (a linked bookable venue) ---------------------------------------------
+
+const bookingEventSchema = z.object({
+  reservationId: z.string().min(1),
+  partnerRef: z.string().nullable().optional(),
+  depositDueBy: z.string().nullable().optional(),
+});
+
+/**
+ * WaitApp says a booking made through Chabuka was accepted, paid or released. Keeps the player's booking row current
+ * and tells the player (and, once paid, the venue owner). Only moves forward: a paid booking never goes back to
+ * accepted if an older webhook arrives late, and a cancelled one stays cancelled.
+ */
+async function applyBookingEvent(
+  service: SupabaseClient,
+  type: 'booking.accepted' | 'booking.paid' | 'booking.cancelled',
+  rawData: Record<string, unknown>,
+): Promise<{ handled: boolean }> {
+  const data = bookingEventSchema.parse(rawData);
+  const next = type === 'booking.paid' ? 'paid' : type === 'booking.cancelled' ? 'cancelled' : 'accepted';
+  const { data: row, error } = await service
+    .from('waitapp_bookings')
+    .select('id,venue_id,user_id,match_id,status,space_name,starts_at')
+    .eq('waitapp_reservation_id', data.reservationId)
+    .maybeSingle();
+  if (error) throw new ActionError(500, 'Could not read the booking.');
+  const booking = row as { id: string; venue_id: string; user_id: string; match_id: string | null; status: string; space_name: string; starts_at: string } | null;
+  if (!booking) return { handled: false };
+  const rank: Record<string, number> = { pending: 0, accepted: 1, paid: 2, cancelled: 3 };
+  // Same or older news than we already hold (a repeated or late webhook): nothing to do.
+  if ((rank[next] ?? 0) <= (rank[booking.status] ?? 0)) return { handled: true };
+  const patch: Record<string, unknown> = { status: next, updated_at: new Date().toISOString() };
+  if (data.depositDueBy) patch['deposit_due_by'] = data.depositDueBy;
+  const { error: updErr } = await service.from('waitapp_bookings').update(patch).eq('id', booking.id);
+  if (updErr) throw new ActionError(500, 'Could not update the booking.');
+
+  const { data: venue } = await service.from('venues').select('name,owner_id').eq('id', booking.venue_id).maybeSingle();
+  const v = venue as { name: string; owner_id: string | null } | null;
+  const payload = { bookingId: booking.id, venueId: booking.venue_id, title: v?.name ?? '', spaceName: booking.space_name, startsAt: booking.starts_at };
+  await notifyUsers([booking.user_id], `space_booking_${next}`, payload);
+  if (next === 'paid' && v?.owner_id) await notifyUsers([v.owner_id], 'space_booking_paid_owner', payload);
+  // A game's space is now paid for: the players hear that the venue is secured.
+  if (next === 'paid' && booking.match_id) {
+    const players = (await participantIds(service, booking.match_id)).filter((id) => id !== booking.user_id);
+    await notifyUsers(players, 'game_venue_booked', { matchId: booking.match_id, title: await gameTitle(service, booking.match_id), venue: v?.name ?? '', spaceName: booking.space_name, startsAt: booking.starts_at });
+  }
+  return { handled: true };
 }
 
 // --- Refresh / reconcile ------------------------------------------------------------

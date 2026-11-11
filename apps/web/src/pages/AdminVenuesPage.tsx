@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import AdminClaims from '../components/AdminClaims';
 import EmptyState from '../components/EmptyState';
 import { fetchVenuesForReview, reviewVenueAction } from '../lib/admin';
 import type { ReviewVenueRow } from '../lib/admin';
@@ -12,6 +13,7 @@ type Tab = 'pending' | 'approved' | 'rejected';
 export default function AdminVenuesPage() {
   const { session } = useAuth();
   const token = session?.access_token;
+  const [view, setView] = useState<'venues' | 'claims' | 'add'>('venues');
   const [tab, setTab] = useState<Tab>('pending');
   const [rows, setRows] = useState<ReviewVenueRow[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -78,7 +80,22 @@ export default function AdminVenuesPage() {
         <h1>Venue review</h1>
         <p>A venue goes live only when you approve it.</p>
       </div>
-      <div className="chips" role="tablist" aria-label="Venue status">
+      <div className="chips" role="tablist" aria-label="Admin sections">
+        {([['venues', 'Venues'], ['claims', 'Claims'], ['add', 'Add a venue']] as const).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            aria-selected={view === key}
+            className={view === key ? 'chip chip-active' : 'chip'}
+            onClick={() => setView(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {view !== 'venues' ? <AdminClaims token={token} view={view} /> : null}
+      <div className="chips" role="tablist" aria-label="Venue status" hidden={view !== 'venues'}>
         {(['pending', 'approved', 'rejected'] as Tab[]).map((t) => (
           <button
             key={t}
@@ -92,12 +109,12 @@ export default function AdminVenuesPage() {
           </button>
         ))}
       </div>
-      {error ? <p className="error">{error}</p> : null}
-      {loading ? <p className="loading">Loading…</p> : null}
-      {!loading && rows.length === 0 ? (
+      {view === 'venues' && error ? <p className="error">{error}</p> : null}
+      {view === 'venues' && loading ? <p className="loading">Loading…</p> : null}
+      {view === 'venues' && !loading && rows.length === 0 ? (
         <EmptyState title="Nothing here" hint={tab === 'pending' ? 'No venues are waiting for approval.' : 'No venues in this list.'} />
       ) : null}
-      {rows.map((v) => {
+      {(view === 'venues' ? rows : []).map((v) => {
         const map =
           v.lat != null && v.lng != null ? `https://www.google.com/maps/search/?api=1&query=${v.lat},${v.lng}` : null;
         return (

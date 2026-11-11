@@ -164,10 +164,6 @@ export default function HomePage() {
           <strong>Season board</strong>
           <span aria-hidden="true">→</span>
         </Link>
-        <Link className="home-link" to="/roadmap">
-          <strong>Coming next</strong>
-          <span aria-hidden="true">→</span>
-        </Link>
       </nav>
     </div>
   );

@@ -6,11 +6,12 @@ import LandingPage from './pages/LandingPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
-import RoadmapPage from './pages/RoadmapPage';
 import NotificationsPage from './pages/NotificationsPage';
 import { CommunityPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
 import OnboardingPage from './pages/OnboardingPage';
 import WaitAppConnectPage from './pages/WaitAppConnectPage';
+import ScoreboardViewPage from './pages/ScoreboardViewPage';
+import ScoreboardControlPage from './pages/ScoreboardControlPage';
 import AdminVenuesPage from './pages/AdminVenuesPage';
 import CirclesPage from './pages/CirclesPage';
 import CompetitionsPage from './pages/CompetitionsPage';
@@ -46,9 +47,11 @@ export default function App() {
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/community" element={<CommunityPage />} />
+      <Route path="/s/:code" element={<ScoreboardViewPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/connect/waitapp" element={<WaitAppConnectPage />} />
+        <Route path="/scoreboard/:id/control" element={<ScoreboardControlPage />} />
         <Route element={<AppShell />}>
           <Route path="home" element={<HomePage />} />
           <Route path="explore" element={<ExplorePage />} />
@@ -58,7 +61,6 @@ export default function App() {
           <Route path="board" element={<CompetitionsPage />} />
           <Route path="circles" element={<CirclesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
-          <Route path="roadmap" element={<RoadmapPage />} />
           <Route path="profile" element={<ProfilePage />} />
           <Route path="venues/dashboard" element={<VenueDashboardPage />} />
           <Route path="admin/venues" element={<AdminVenuesPage />} />

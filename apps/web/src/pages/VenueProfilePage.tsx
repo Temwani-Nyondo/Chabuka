@@ -3,11 +3,13 @@ import { Link, useParams } from 'react-router-dom';
 import VenuePhoto from '../components/VenuePhoto';
 import type { Venue } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
-import { cancelBookingAction, requestBookingAction } from '../lib/api';
+import { cancelBookingAction, claimVenueAction, requestBookingAction } from '../lib/api';
+import LinkedVenueBooking from '../components/LinkedVenueBooking';
 import {
   fetchMyBookings,
   fetchMyTickets,
   fetchVenueById,
+  fetchSlotLoad,
   fetchVenueSlots,
 } from '../lib/venues';
 import type { Booking, Ticket, VenueSlot } from '../lib/venues';
@@ -103,8 +105,7 @@ function SlotCalendar({
   );
 }
 
-// Venue profile (Amendment 3): listed details, free schedule, booking.
-// Every booking is free in the MVP — no payment step anywhere.
+// Venue profile: listed details, schedule, booking, and claiming an unowned listing.
 export default function VenueProfilePage() {
   const { venueId } = useParams();
   const { session, user } = useAuth();
@@ -112,6 +113,9 @@ export default function VenueProfilePage() {
   const [slots, setSlots] = useState<VenueSlot[]>([]);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [tickets, setTickets] = useState<Ticket[]>([]);
+  const [load, setLoad] = useState<Map<string, number>>(new Map());
+  const [claimText, setClaimText] = useState('');
+  const [claiming, setClaiming] = useState(false);
   const [customTime, setCustomTime] = useState('');
   const [viewYear, setViewYear] = useState(() => new Date().getFullYear());
   const [viewMonth, setViewMonth] = useState(() => new Date().getMonth());
@@ -122,12 +126,14 @@ export default function VenueProfilePage() {
 
   const reload = useCallback(async () => {
     if (!venueId || !user) return;
-    const [v, s, b, t] = await Promise.all([
+    const [v, s, b, t, l] = await Promise.all([
       fetchVenueById(venueId),
       fetchVenueSlots(venueId),
       fetchMyBookings(user.id),
       fetchMyTickets(user.id),
+      fetchSlotLoad(venueId),
     ]);
+    setLoad(l);
     setVenue(v);
     setSlots(s);
     setBookings(b.filter((x) => x.venue_id === venueId));
@@ -192,7 +198,8 @@ export default function VenueProfilePage() {
               <strong>Booking</strong>
               <span className="tag">Request, then the venue confirms</span>
             </div>
-            <p className="muted">{venue.price_note ?? 'Free — MVP demo'}</p>
+            <p className="muted">{venue.price_note || 'Ask the venue about prices.'}</p>
+            {venue.hours ? <p className="muted">Hours: {venue.hours}</p> : null}
             {venue.contact ? <p className="muted">Contact: {venue.contact}</p> : null}
             {directions ? (
               <a className="btn" href={directions} target="_blank" rel="noreferrer">
@@ -204,6 +211,10 @@ export default function VenueProfilePage() {
             ) : null}
           </div>
 
+          {venue.waitapp_restaurant_id ? (
+            <LinkedVenueBooking venueId={venue.id} />
+          ) : (
+            <>
           <h2>Schedule — pick a day</h2>
           {slots.length === 0 ? (
             <p className="hint">No listed slots yet. Request a time below and the venue confirms.</p>
@@ -247,6 +258,8 @@ export default function VenueProfilePage() {
                     </div>
                     {mine ? (
                       <p className="muted">Your booking: {mine.status}</p>
+                    ) : (load.get(slot.id) ?? 0) >= slot.capacity ? (
+                      <p className="hint"><span className="tag">Full</span> This slot has no places left.</p>
                     ) : slot.price != null && slot.price > 0 ? (
                       <p className="hint">Paid booking opens soon.</p>
                     ) : (
@@ -258,18 +271,52 @@ export default function VenueProfilePage() {
                           token &&
                           void act(
                             () => requestBookingAction({ venueId: venue.id, slotId: slot.id }, token),
-                            'Requested — the venue confirms, then your free ticket appears here.',
+                            'Requested. The venue confirms, then your ticket appears here.',
                           )
                         }
                       >
-                        Book free
+                        Request to book
                       </button>
                     )}
                   </article>
                 );
               })
           ) : slots.length > 0 ? (
-            <p className="hint">Tap a highlighted day to see its free slots.</p>
+            <p className="hint">Tap a highlighted day to see its slots.</p>
+          ) : null}
+
+          {!venue.owner_id && venue.status === 'approved' ? (
+            <div className="card">
+              <strong>Is this your venue?</strong>
+              <p className="muted">
+                Nobody manages this listing yet. Tell us how you are connected to it and an admin will review your claim.
+              </p>
+              <label className="field">
+                How are you connected to this venue?
+                <input
+                  className="input"
+                  value={claimText}
+                  maxLength={500}
+                  onChange={(e) => setClaimText(e.target.value)}
+                  placeholder="I am the manager. You can reach me on 097..."
+                />
+              </label>
+              <button
+                className="btn"
+                type="button"
+                disabled={claiming || !token || claimText.trim().length < 5}
+                onClick={() => {
+                  if (!token) return;
+                  setClaiming(true);
+                  void act(() => claimVenueAction(venue.id, claimText.trim(), token), 'Claim sent. An admin will review it.').finally(() => {
+                    setClaiming(false);
+                    setClaimText('');
+                  });
+                }}
+              >
+                Claim this venue
+              </button>
+            </div>
           ) : null}
 
           <div className="card">
@@ -302,6 +349,9 @@ export default function VenueProfilePage() {
               Request free booking
             </button>
           </div>
+
+            </>
+          )}
 
           <h2>My bookings &amp; free tickets here</h2>
           {bookings.length === 0 ? <p className="hint">None yet.</p> : null}

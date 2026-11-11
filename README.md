@@ -10,22 +10,11 @@ arranged, not discussed: every screen moves someone from intent to a real game.
 Built for the Meta Global AI Developer Hackathon, Indie Developer track,
 "Build for Your World" (27 Oct – 4 Nov 2026). Solo build.
 
-## Try the live demo
+## Getting started
 
-Sign in with any of these seeded accounts (all share one password):
-
-Password: `Chabuka demo 2026!`
-
-- `player1@demo.chabuka` (also `player2` … `player60`) — regular player.
-  Join the 9/10 tonight game to trigger the Match Found reveal live.
-- `captain@demo.chabuka` — team owner and captain. Create teams and
-  challenges, send invites, talk or chat to Gaffer.
-- `organiser@demo.chabuka` — tournament organiser and venue-side flows.
-  Post results, confirm venue bookings.
-
-These are public demo accounts on seeded data — reset any mischief with
-`node supabase/seed/seed.mjs` followed by
-`node supabase/seed/simulate-activity.mjs`.
+Chabuka launches with real data only. There are no demo accounts or seeded
+venues. Sign up at the live site, register a venue or start a game, and a
+platform admin (a row in `platform_admins`) approves new venues.
 
 ## What is built
 
@@ -46,8 +35,8 @@ from that list.
   notifications.
 - Venues and bookings: searchable venue list, venue profiles, bookable slots,
   booking requests with venue confirmation, free coded tickets per confirmed
-  booking. Every booking and ticket is free while demonstrating. No payment
-  gateway.
+  booking. Free bookings are confirmed by the venue; paid games and slots are
+  sold through WaitApp, so Chabuka never holds money.
 - Invites: shareable team invite links at `/invite` and `/invite/:code`,
   sign-in / sign-up inline, claim tap, manual code entry, revoke from the
   team page.
@@ -79,9 +68,8 @@ Coming with the Day 3 mobile polish pass.
 chabuka/
   apps/web          React + Vite app
   apps/api          Express: /api/actions/*, /api/helper, /mcp
-  apps/agent-demo   Muse Spark agent using Chabuka's MCP
   packages/shared   zod schemas, types, action names, CTA labels
-  supabase/         migrations and seed script
+  supabase/         migrations
 ```
 
 Web routes include `/home`, `/explore`, `/teams`, `/teams/:id`,
@@ -99,7 +87,6 @@ All AI calls use Meta models through one wrapper
 - Voice notes: `POST /api/helper/transcribe` (WAV only); needs
   `META_API_KEY`, `META_BASE_URL`, and `META_TRANSCRIBE_MODEL_ID` on the API
   server, otherwise it answers HTTP 503 honestly.
-- Demo agent: Muse Spark through the MCP tools below.
 
 The Baseten and Meta keys live on the API server only, never in the web app
 or the repo.
@@ -117,13 +104,6 @@ Tools (19): `search_matches`, `get_match`, `draft_match`,
 `request_booking`, `get_board`, `follow_board`, `search_circles`,
 `join_circle`, `get_my_profile`, `search_nearby`, `get_calendar_link`,
 `get_my_schedule`. Draft-then-confirm applies where something gets created.
-
-Sample client lives in `apps/agent-demo`:
-
-```bash
-AGENT_API_URL=http://localhost:3001 AGENT_TOKEN=<paste-once-token> npm start --workspace @chabuka/agent-demo
-AGENT_API_URL=http://localhost:3001 AGENT_TOKEN=<paste-once-token> npm start --workspace @chabuka/agent-demo -- --run
-```
 
 ## Maps (Amendment 3)
 
@@ -148,10 +128,7 @@ Prerequisites: Node 20+ and npm, plus a Supabase cloud project.
 2. Apply `supabase/migrations` in order: `supabase link` + `supabase db push`,
    or paste each file into the Supabase dashboard SQL editor.
 3. `npm install`
-4. Seed the Lusaka demo scene (re-runnable):
-   `node supabase/seed/seed.mjs`, then
-   `node supabase/seed/simulate-activity.mjs`.
-5. `npm run dev` (builds `@chabuka/shared`, then starts the web app).
+4. `npm run dev` (builds `@chabuka/shared`, then starts the web app).
    Run the API in a second terminal with `npm run dev:api`. Defaults:
    web on Vite's port, API on `http://localhost:3001`; the web app points at
    the API with `VITE_API_URL`.

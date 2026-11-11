@@ -1,6 +1,6 @@
 import { useState } from 'react';
 
-// Venue imagery: seeded photos render when present, otherwise a styled
+// Venue imagery: uploaded photos render when present, otherwise a styled
 // initial banner so cards never look empty — and a broken remote image
 // falls back to the banner instead of a broken-image icon.
 export default function VenuePhoto({

@@ -11,7 +11,7 @@ export async function fetchVenues(sportName?: string): Promise<Venue[]> {
   if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase
     .from('venues')
-    .select('id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos,status,review_note')
+    .select('id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,hours,waitapp_restaurant_id,photos,status,review_note')
     // The public list is approved venues only; an owner also sees their own pending ones elsewhere.
     .eq('status', 'approved')
     .order('name');
@@ -23,7 +23,7 @@ export async function fetchVenues(sportName?: string): Promise<Venue[]> {
   return parsed.data.filter((v) => v.sports.some((s) => s.toLowerCase() === wanted));
 }
 
-const VENUE_COLS = 'id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,photos,status,review_note';
+const VENUE_COLS = 'id,owner_id,google_place_id,name,area,lat,lng,sports,facility_types,price_note,contact,hours,waitapp_restaurant_id,photos,status,review_note';
 
 export async function fetchVenueById(venueId: string): Promise<Venue | null> {
   if (!supabase) return null;
@@ -43,6 +43,16 @@ export async function fetchVenueSlots(venueId: string): Promise<VenueSlot[]> {
   if (error) throw new Error(error.message);
   const rows = (data ?? []).map((r) => venueSlotSchema.safeParse(r));
   return rows.filter((r): r is { success: true; data: VenueSlot } => r.success).map((r) => r.data);
+}
+
+/** Confirmed bookings per slot, so the calendar can show "Full". Empty if the function is not installed yet. */
+export async function fetchSlotLoad(venueId: string): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  if (!supabase) return out;
+  const { data, error } = await supabase.rpc('venue_slot_load', { p_venue: venueId });
+  if (error) return out;
+  for (const row of (data ?? []) as { slot_id: string; confirmed: number }[]) out.set(row.slot_id, row.confirmed);
+  return out;
 }
 
 export async function fetchMyBookings(userId: string): Promise<Booking[]> {

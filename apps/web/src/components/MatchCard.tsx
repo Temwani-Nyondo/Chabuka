@@ -5,6 +5,9 @@ import { downloadMatchIcs } from '../lib/api';
 import type { MatchListing } from '../lib/matches';
 import { checkoutLink, priceLabel, ticketLookupUrl } from '../lib/waitapp';
 import TicketingPanel from './TicketingPanel';
+import ScoreboardButton from './scoreboard/ScoreboardButton';
+import GameVenueBooking from './GameVenueBooking';
+import { scoreboardSportFor } from '@chabuka/shared';
 
 interface Props {
   listing: MatchListing;
@@ -122,6 +125,13 @@ export default function MatchCard({ listing, busy, onJoin, onWithdraw, highlight
       ) : (
         <p className="hint">{match.kind === 'team-vs-team' ? 'Team game — sides are set through challenges. See the Teams tab.' : match.status === 'full' || joinedCount >= match.capacity ? 'Full' : match.status}</p>
       )}
+      {scoreboardSportFor(sport?.name) &&
+      (isOrganiser || isParticipant || Math.abs(Date.now() - new Date(match.starts_at).getTime()) < 6 * 60 * 60 * 1000) ? (
+        <ScoreboardButton target={{ matchId: match.id }} />
+      ) : null}
+      {isOrganiser && venue?.waitapp_restaurant_id ? (
+        <GameVenueBooking matchId={match.id} venueId={venue.id} startsAt={match.starts_at} />
+      ) : null}
       {isOrganiser && match.kind === 'players' ? (
         <TicketingPanel matchId={match.id} ticketing={ticketing} onChanged={() => onTicketingChanged?.()} />
       ) : null}

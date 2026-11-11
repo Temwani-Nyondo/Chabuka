@@ -50,6 +50,9 @@ export default function CirclesPage() {
   const [level, setLevel] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [tab, setTab] = useState<'fixtures' | 'about'>('fixtures');
   const [editingImages, setEditingImages] = useState<string | null>(null);
   const [editPhoto, setEditPhoto] = useState<File | null>(null);
   const [editCover, setEditCover] = useState<File | null>(null);
@@ -98,26 +101,21 @@ export default function CirclesPage() {
     }
   };
 
-  const toggleEvents = async (circle: Circle) => {
-    if (events[circle.id]) {
-      setEvents((prev) => {
-        const next = { ...prev };
-        delete next[circle.id];
-        return next;
-      });
-      return;
-    }
-    if (!user) {
-      setActionError('Not signed in.');
-      return;
-    }
-    try {
-      const rows = await fetchCircleFeed(circle, user.id);
-      setEvents((prev) => ({ ...prev, [circle.id]: rows }));
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Could not load circle events.');
-    }
+  // Open a joined circle: one at a time; fixtures load in the effect below.
+  const openCircle = (circle: Circle) => {
+    setTab('fixtures');
+    setEditingImages(null);
+    setOpenId((cur) => (cur === circle.id ? null : circle.id));
   };
+
+  useEffect(() => {
+    if (!openId || !user || events[openId]) return;
+    const circle = list.find((l) => l.circle.id === openId)?.circle;
+    if (!circle) return;
+    fetchCircleFeed(circle, user.id)
+      .then((rows) => setEvents((prev) => ({ ...prev, [openId]: rows })))
+      .catch((err: unknown) => setActionError(err instanceof Error ? err.message : 'Could not load circle fixtures.'));
+  }, [openId, user, list, events]);
 
   const submit = (e: FormEvent) => {
     e.preventDefault();
@@ -278,90 +276,157 @@ export default function CirclesPage() {
         <button className="btn btn-primary" type="button" onClick={() => setShowForm(true)}>Create circle</button>
       )}
       {actionError && !showForm ? <p className="error">{actionError}</p> : null}
-      {list.map(({ circle, memberCount, isMember }) => {
-        const blockReason = isMember ? null : circleBlockReason(circle, profile, levels);
+      {(() => {
+        const joined = list.filter((l) => l.isMember);
+        const others = list.filter((l) => !l.isMember);
+        const preview = others.find((l) => l.circle.id === previewId) ?? null;
+        const meta = (c: Circle) =>
+          [c.area, ...c.age_bands, ...c.levels, ...c.genders].filter(Boolean).join(' · ');
+        const initial = (c: Circle) => (c.name.trim()[0] ?? '?').toUpperCase();
         return (
-        <div className="card" key={circle.id}>
-          {circle.cover_url ? (
-            <img className="cover-banner" src={circle.cover_url} alt="" />
-          ) : null}
-          <div className="row">
-            {circle.photo_url ? (
-              <img className="circle-photo" src={circle.photo_url} alt={`${circle.name} photo`} />
+          <>
+            {joined.length > 0 ? (
+              <section className="circle-section">
+                <h2 className="circle-section-title">Your circles</h2>
+                {joined.map(({ circle, memberCount }) => {
+                  const open = openId === circle.id;
+                  const rows = events[circle.id];
+                  return (
+                    <div className={`circle-card${open ? ' circle-card-open' : ''}`} key={circle.id}>
+                      <button
+                        type="button"
+                        className="circle-card-head"
+                        aria-expanded={open}
+                        onClick={() => openCircle(circle)}
+                      >
+                        {circle.photo_url ? (
+                          <img className="circle-photo" src={circle.photo_url} alt="" />
+                        ) : (
+                          <span className="circle-photo circle-photo-fallback" aria-hidden="true">{initial(circle)}</span>
+                        )}
+                        <span className="circle-card-text">
+                          <strong>{circle.name}</strong>
+                          <span className="muted">{memberCount} {memberCount === 1 ? 'member' : 'members'}{circle.area ? ` · ${circle.area}` : ''}</span>
+                        </span>
+                        <span className="circle-chevron" aria-hidden="true">{open ? '−' : '+'}</span>
+                      </button>
+                      {open ? (
+                        <div className="circle-card-body">
+                          {circle.cover_url ? <img className="cover-banner" src={circle.cover_url} alt="" /> : null}
+                          <div className="circle-tabs" role="tablist">
+                            <button type="button" role="tab" aria-selected={tab === 'fixtures'} className={`chip${tab === 'fixtures' ? ' chip-active' : ''}`} onClick={() => setTab('fixtures')}>Fixtures</button>
+                            <button type="button" role="tab" aria-selected={tab === 'about'} className={`chip${tab === 'about' ? ' chip-active' : ''}`} onClick={() => setTab('about')}>About</button>
+                          </div>
+                          {tab === 'fixtures' ? (
+                            rows === undefined ? (
+                              <p className="loading">Loading fixtures…</p>
+                            ) : rows.length === 0 ? (
+                              <p className="muted">No fixtures yet. Games in this circle&apos;s sport land here automatically.</p>
+                            ) : (
+                              <ul className="circle-fixtures">
+                                {rows.map(({ match: m, tagged }) => (
+                                  <li key={m.id}>
+                                    <strong>{m.title}</strong>
+                                    <span className="muted">
+                                      {new Date(m.starts_at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
+                                      {tagged ? '' : ' · from Explore'}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )
+                          ) : (
+                            <div>
+                              {circle.description ? <p>{circle.description}</p> : null}
+                              {meta(circle) ? <p className="muted">{meta(circle)}</p> : null}
+                              {editingImages === circle.id ? (
+                                <div>
+                                  <div className="field">
+                                    <label htmlFor={`edit-photo-${circle.id}`}>Photo</label>
+                                    <input id={`edit-photo-${circle.id}`} className="input" type="file" accept="image/*" disabled={busy} onChange={(e) => setEditPhoto(e.target.files?.[0] ?? null)} />
+                                  </div>
+                                  <div className="field">
+                                    <label htmlFor={`edit-cover-${circle.id}`}>Cover</label>
+                                    <input id={`edit-cover-${circle.id}`} className="input" type="file" accept="image/*" disabled={busy} onChange={(e) => setEditCover(e.target.files?.[0] ?? null)} />
+                                  </div>
+                                  <div className="actions-row">
+                                    <button className="btn btn-primary" type="button" disabled={busy} onClick={() => saveImages(circle.id)}>{busy ? 'Saving…' : 'Save images'}</button>
+                                    <button className="btn btn-ghost" type="button" onClick={() => setEditingImages(null)}>Cancel</button>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="actions-row">
+                                  <button className="btn" type="button" onClick={() => setEditingImages(circle.id)}>Edit images</button>
+                                  <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => { setOpenId(null); void run((t) => leaveCircleAction(circle.id, t)); }}>Leave circle</button>
+                                </div>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </section>
             ) : null}
-            <strong>{circle.name}</strong>
-            <span className="tag">{memberCount} in</span>
-          </div>
-          <p className="muted">
-            {circle.area ?? ''}
-            {circle.age_bands.length > 0 ? ` · ${circle.age_bands.join(', ')}` : ''}
-            {circle.levels.length > 0 ? ` · ${circle.levels.join(', ')}` : ''}
-            {circle.genders.length > 0 ? ` · ${circle.genders.join(', ')}` : ''}
-          </p>
-          {circle.description ? <p>{circle.description}</p> : null}
-          <div className="actions-row">
-            {isMember ? (
-              <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => { void run((t) => leaveCircleAction(circle.id, t)); }}>Leave</button>
-            ) : blockReason ? (
-              <span className="hint">{blockReason}</span>
-            ) : (
-              <button className="btn btn-primary" type="button" disabled={busy} onClick={() => { void run((t) => joinCircleAction(circle.id, t)); }}>Join circle</button>
-            )}
-            <button className="btn" type="button" onClick={() => { void toggleEvents(circle); }}>
-              {events[circle.id] ? 'Hide events' : 'Events'}
-            </button>
-          </div>
-          {isMember ? (
-            editingImages === circle.id ? (
-              <div>
-                <div className="field">
-                  <label htmlFor={`edit-photo-${circle.id}`}>Photo</label>
-                  <input
-                    id={`edit-photo-${circle.id}`}
-                    className="input"
-                    type="file"
-                    accept="image/*"
-                    disabled={busy}
-                    onChange={(e) => setEditPhoto(e.target.files?.[0] ?? null)}
-                  />
+            {others.length > 0 ? (
+              <section className="circle-section">
+                <h2 className="circle-section-title">Discover circles</h2>
+                <div className="circle-tiles">
+                  {others.map(({ circle, memberCount }) => (
+                    <button
+                      type="button"
+                      key={circle.id}
+                      className={`circle-tile${previewId === circle.id ? ' circle-tile-active' : ''}`}
+                      aria-pressed={previewId === circle.id}
+                      onClick={() => setPreviewId(previewId === circle.id ? null : circle.id)}
+                    >
+                      {circle.photo_url ? (
+                        <img className="circle-tile-img" src={circle.photo_url} alt="" />
+                      ) : (
+                        <span className="circle-tile-img circle-photo-fallback" aria-hidden="true">{initial(circle)}</span>
+                      )}
+                      <strong>{circle.name}</strong>
+                      <span className="muted">{memberCount} {memberCount === 1 ? 'member' : 'members'}</span>
+                    </button>
+                  ))}
                 </div>
-                <div className="field">
-                  <label htmlFor={`edit-cover-${circle.id}`}>Cover</label>
-                  <input
-                    id={`edit-cover-${circle.id}`}
-                    className="input"
-                    type="file"
-                    accept="image/*"
-                    disabled={busy}
-                    onChange={(e) => setEditCover(e.target.files?.[0] ?? null)}
-                  />
-                </div>
-                <div className="actions-row">
-                  <button className="btn btn-primary" type="button" disabled={busy} onClick={() => saveImages(circle.id)}>
-                    {busy ? 'Saving…' : 'Save images'}
-                  </button>
-                  <button className="btn btn-ghost" type="button" onClick={() => setEditingImages(null)}>Cancel</button>
-                </div>
-              </div>
-            ) : (
-              <button className="btn" type="button" onClick={() => setEditingImages(circle.id)}>Edit images</button>
-            )
-          ) : null}
-          {events[circle.id] ? (
-            events[circle.id]!.length === 0 ? (
-              <p className="muted">Nothing on yet — games in this circle&apos;s sport land here automatically.</p>
-            ) : (
-              events[circle.id]!.map(({ match: m, tagged }) => (
-                <p key={m.id}>
-                  {m.title} · {new Date(m.starts_at).toLocaleString()}
-                  {tagged ? '' : ' · from Explore'}
-                </p>
-              ))
-            )
-          ) : null}
-        </div>
+                {preview ? (
+                  <div className="card circle-preview">
+                    <div className="row">
+                      <strong>{preview.circle.name}</strong>
+                      <span className="tag">{preview.memberCount} in</span>
+                    </div>
+                    {meta(preview.circle) ? <p className="muted">{meta(preview.circle)}</p> : null}
+                    {preview.circle.description ? <p>{preview.circle.description}</p> : null}
+                    {(() => {
+                      const reason = circleBlockReason(preview.circle, profile, levels);
+                      return reason ? (
+                        <span className="hint">{reason}</span>
+                      ) : (
+                        <button
+                          className="btn btn-primary"
+                          type="button"
+                          disabled={busy}
+                          onClick={() => {
+                            const id = preview.circle.id;
+                            void run((t) => joinCircleAction(id, t)).then(() => {
+                              setPreviewId(null);
+                              setOpenId(id);
+                            });
+                          }}
+                        >
+                          Join circle
+                        </button>
+                      );
+                    })()}
+                  </div>
+                ) : null}
+              </section>
+            ) : null}
+          </>
         );
-      })}
+      })()}
     </div>
   );
 }

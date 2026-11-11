@@ -344,6 +344,22 @@ export function createVenueSlotAction(input: unknown, accessToken: string): Prom
   return runAction('create_venue_slot', input, accessToken);
 }
 
+export function updateVenueAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('update_venue', input, accessToken);
+}
+
+export function updateVenueSlotAction(input: unknown, accessToken: string): Promise<unknown> {
+  return runAction('update_venue_slot', input, accessToken);
+}
+
+export function deleteVenueSlotAction(slotId: string, accessToken: string): Promise<unknown> {
+  return runAction('delete_venue_slot', { slotId }, accessToken);
+}
+
+export function claimVenueAction(venueId: string, message: string, accessToken: string): Promise<unknown> {
+  return runAction('claim_venue', { venueId, message }, accessToken);
+}
+
 export function requestBookingAction(input: unknown, accessToken: string): Promise<unknown> {
   return runAction('request_booking', input, accessToken);
 }

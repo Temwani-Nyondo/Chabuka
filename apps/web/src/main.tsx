@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { AuthProvider } from './auth/AuthContext';
+import ErrorBoundary from './components/ErrorBoundary';
 import { applySkin, applyTheme, getSavedSkin, getSavedTheme } from './lib/theme';
 import './index.css';
 
@@ -18,7 +19,9 @@ createRoot(rootEl).render(
   <StrictMode>
     <BrowserRouter>
       <AuthProvider>
-        <App />
+        <ErrorBoundary>
+          <App />
+        </ErrorBoundary>
       </AuthProvider>
     </BrowserRouter>
   </StrictMode>,
