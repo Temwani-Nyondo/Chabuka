@@ -1,0 +1,26 @@
+.git
+.hg
+.sl
+.muse
+.eden
+.agents
+.vercel
+.tmp
+.npm-cache
+.supabase-home
+.gcloud-config
+.firebase
+node_modules
+**/node_modules
+**/dist
+.env
+.env.*
+generated_images
+other stuff
+docs
+supabase
+*.docx
+*.pdf
+*.png
+*.log
+test_baseten.py
