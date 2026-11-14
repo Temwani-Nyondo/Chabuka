@@ -204,6 +204,19 @@ function metaClient(fetchImpl: typeof fetch): { client: OpenAI; model: string } 
   };
 }
 
+// Spark Open reasons before it writes, and on the Meta endpoint nothing is sent until that
+// is done (7-12 s), after which the whole answer lands at once. META_REASONING_EFFORT
+// (minimal | low | medium | high) asks Meta for less reasoning: measured 4 s to the first
+// words, arriving in several pieces. Unset = the provider default. Meta calls only: Baseten
+// is not sent the parameter.
+type ReasoningEffort = 'minimal' | 'low' | 'medium' | 'high';
+function metaExtra(): { reasoning_effort?: ReasoningEffort } {
+  const value = (readEnv('META_REASONING_EFFORT') ?? '').toLowerCase();
+  return value === 'minimal' || value === 'low' || value === 'medium' || value === 'high'
+    ? { reasoning_effort: value }
+    : {};
+}
+
 // Log the shape that failed (roles + tool count only, never content or keys) so a
 // provider-side rejection is diagnosable from the terminal.
 function logBasetenFailure(error: unknown, params: ChatParams): void {
@@ -259,7 +272,7 @@ export async function chatOnce(params: ChatParams, deps?: { fetch?: typeof fetch
   if (skipBaseten()) {
     const meta = metaClient(fetchImpl);
     if (meta) {
-      const res = await meta.client.chat.completions.create(chatBody(params, meta.model));
+      const res = await meta.client.chat.completions.create({ ...chatBody(params, meta.model), ...metaExtra() });
       return extractResult(res.choices[0]?.message, 'meta');
     }
   }
@@ -273,7 +286,7 @@ export async function chatOnce(params: ChatParams, deps?: { fetch?: typeof fetch
     noteBasetenFailure(basetenError);
     const meta = metaClient(fetchImpl);
     if (!meta) throw basetenError;
-    const res = await meta.client.chat.completions.create({ ...body, model: meta.model });
+    const res = await meta.client.chat.completions.create({ ...body, model: meta.model, ...metaExtra() });
     return extractResult(res.choices[0]?.message, 'meta');
   }
 }
@@ -297,7 +310,7 @@ export async function chatStream(
   };
   if (skipBaseten()) {
     const meta = metaClient(fetchImpl);
-    if (meta) return await readStream(meta.client, chatBody(params, meta.model), 'meta', emit);
+    if (meta) return await readStream(meta.client, { ...chatBody(params, meta.model), ...metaExtra() }, 'meta', emit);
   }
   const baseten = basetenClient(fetchImpl);
   const body = chatBody(params, baseten.model);
@@ -308,7 +321,7 @@ export async function chatStream(
     noteBasetenFailure(basetenError);
     const meta = metaClient(fetchImpl);
     if (!meta || delivered) throw basetenError;
-    return await readStream(meta.client, { ...body, model: meta.model }, 'meta', emit);
+    return await readStream(meta.client, { ...body, model: meta.model, ...metaExtra() }, 'meta', emit);
   }
 }
 
