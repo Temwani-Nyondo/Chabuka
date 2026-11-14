@@ -24,7 +24,7 @@ function stashFrom(from: string | undefined): void {
   }
 }
 
-function readStashedFrom(): string | null {
+export function readStashedFrom(): string | null {
   try {
     return window.sessionStorage.getItem(FROM_KEY);
   } catch {
@@ -32,7 +32,7 @@ function readStashedFrom(): string | null {
   }
 }
 
-function clearStashedFrom(): void {
+export function clearStashedFrom(): void {
   try {
     window.sessionStorage.removeItem(FROM_KEY);
   } catch {

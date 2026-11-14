@@ -20,6 +20,8 @@ interface AuthValue {
 
 const AuthContext = createContext<AuthValue | null>(null);
 
+export const SIGNED_OUT_KEY = 'chabuka-signed-out';
+
 export function useAuth(): AuthValue {
   const ctx = useContext(AuthContext);
   if (!ctx) throw new Error('useAuth must be used inside AuthProvider');
@@ -119,6 +121,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const signOut = async () => {
     if (!supabase) return;
+    // A deliberate sign-out lands on the login page without a "come back to"
+    // target; ProtectedRoute reads this flag.
+    try {
+      sessionStorage.setItem(SIGNED_OUT_KEY, '1');
+    } catch {
+      // Storage blocked: the login page still works, it just remembers the last page.
+    }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
   };

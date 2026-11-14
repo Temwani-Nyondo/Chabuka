@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Building, CalendarCheck, MapPin, Moon, Navigation, Search, Shield, Sun, Timer, Trophy, UserPlus } from 'lucide-react';
 import AuthForm from '../components/AuthForm';
-import { Badge, Button, Meter, Sheet, Wordmark, cx } from '../components/ui';
+import { Badge, Button, ButtonLink, Meter, Sheet, Wordmark, cx } from '../components/ui';
 import { sportBackdrop, sportLabel } from '../components/GameCard';
 import { useTheme } from '../lib/theme';
 import { API_BASE } from '../lib/api';
@@ -114,9 +114,9 @@ export default function LandingPage() {
             >
               {theme === 'dark' ? <Sun size={19} /> : <Moon size={19} />}
             </button>
-            <Button variant="ghost" size="sm" onClick={() => setAuthMode('signin')}>
+            <ButtonLink to="/login" variant="ghost" size="sm">
               Log in
-            </Button>
+            </ButtonLink>
             <Button variant="primary" size="sm" onClick={() => setAuthMode('signup')}>
               Sign up
             </Button>

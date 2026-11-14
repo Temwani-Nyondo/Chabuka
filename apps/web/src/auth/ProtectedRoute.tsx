@@ -1,5 +1,5 @@
 import { Navigate, Outlet, useLocation } from 'react-router-dom';
-import { useAuth } from './AuthContext';
+import { SIGNED_OUT_KEY, useAuth } from './AuthContext';
 import { isSupabaseConfigured } from '../lib/supabase';
 
 function SetupNotice() {
@@ -27,7 +27,19 @@ export default function ProtectedRoute() {
         <p className="loading">Loading…</p>
       </div>
     );
-  if (!user) return <Navigate to="/" replace />;
+  if (!user) {
+    // Signed out inside the app (or the session expired, or a shared link was
+    // opened while signed out): the login page, not the marketing landing.
+    // After a deliberate sign-out there is no page to return to.
+    let signedOut = false;
+    try {
+      signedOut = sessionStorage.getItem(SIGNED_OUT_KEY) === '1';
+    } catch {
+      signedOut = false;
+    }
+    const from = `${location.pathname}${location.search}`;
+    return <Navigate to="/login" replace state={signedOut ? null : { from }} />;
+  }
   if (needsOnboarding && location.pathname !== '/onboarding')
     return <Navigate to="/onboarding" replace />;
   if (!needsOnboarding && location.pathname === '/onboarding')
