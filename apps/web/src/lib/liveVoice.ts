@@ -541,10 +541,15 @@ export function useLiveConversation(opts: {
           // A server problem is not a hearing problem: say so instead of blaming the voice.
           const setupProblem =
             heardError && /not set up|transcription key|model key|could not reach/i.test(heardError);
-          await speakText(
-            setupProblem && heardError ? heardError : "Sorry, I didn't catch that. Say that again?",
-            stream,
-          );
+          // Three different things used to sound the same: a server that is not set up, a request that failed
+          // (asleep, offline, refused), and a clip with nothing in it. Only the last one is "I didn't catch that".
+          const message =
+            setupProblem && heardError
+              ? heardError
+              : heardError
+                ? "I'm having trouble hearing you right now. Give it a moment and try again, or type to me."
+                : "Sorry, I didn't catch that. Say that again?";
+          await speakText(message, stream);
           continue;
         }
 

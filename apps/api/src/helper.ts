@@ -1136,6 +1136,12 @@ export async function runHelperTurn(
       if (err instanceof Error && err.message.includes('BASETEN_API_KEY')) {
         throw new ActionError(503, 'Gaffer is not set up yet. The server is missing its model key.');
       }
+      // Both model providers failed (switched off, out of credit, a wrong model id...). The real error goes to the
+      // server log; the person gets a clear message instead of a bare "Something went wrong".
+      if (!(err instanceof ActionError)) {
+        console.error('Gaffer model call failed:', err);
+        throw new ActionError(503, "Gaffer's AI isn't available right now. Please try again in a minute.");
+      }
       throw err;
     }
     provider = result.provider;
