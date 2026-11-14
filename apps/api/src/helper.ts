@@ -50,18 +50,21 @@ function strArg(args: Record<string, unknown>, key: string): string | undefined 
 }
 
 async function readProfile(db: SupabaseClient, userId: string): Promise<unknown> {
-  const { data: profile, error } = await db.from('profiles').select('*').eq('id', userId).maybeSingle();
-  if (error) throw new Error(error.message);
-  const { data: links, error: linksError } = await db.from('user_sports').select('sport_id').eq('user_id', userId);
-  if (linksError) throw new Error(linksError.message);
-  const ids = ((links ?? []) as { sport_id: string }[]).map((l) => l.sport_id);
+  // One parallel read (the sports table is a short list), instead of three round trips in a row.
+  const [profileRes, linksRes, sportsRes] = await Promise.all([
+    db.from('profiles').select('*').eq('id', userId).maybeSingle(),
+    db.from('user_sports').select('sport_id').eq('user_id', userId),
+    db.from('sports').select('id,name'),
+  ]);
+  if (profileRes.error) throw new Error(profileRes.error.message);
+  if (linksRes.error) throw new Error(linksRes.error.message);
+  const ids = new Set(((linksRes.data ?? []) as { sport_id: string }[]).map((l) => l.sport_id));
   let sports: unknown[] = [];
-  if (ids.length > 0) {
-    const { data, error: sportsError } = await db.from('sports').select('id,name').in('id', ids);
-    if (sportsError) throw new Error(sportsError.message);
-    sports = (data ?? []) as unknown[];
+  if (ids.size > 0) {
+    if (sportsRes.error) throw new Error(sportsRes.error.message);
+    sports = ((sportsRes.data ?? []) as { id: string; name: string }[]).filter((s) => ids.has(s.id));
   }
-  return { profile, sports };
+  return { profile: profileRes.data, sports };
 }
 
 // readMyTeams returns a list, or { memberships, teams: [], teamsError } when
@@ -1117,6 +1120,7 @@ export async function runHelperTurn(
     userMessage,
   ];
   const actionsTaken: HelperActionTaken[] = [];
+  let cardAfterRead: Promise<CardState> | null = null;
   let provider = 'baseten';
   let reply = '';
 
@@ -1192,6 +1196,12 @@ export async function runHelperTurn(
       toolMessages.push({ role: 'user', content: wrapToolResult(call.name, call.id, payload) });
     }
     messages.push(...toolMessages);
+    // Setup: the card changed, so it must be read again for the progress checklist. Start that read
+    // now, while the model writes the next round, instead of making the player wait for it afterwards.
+    if (mode === 'onboarding' && actionsTaken.some((a) => a.ok)) {
+      cardAfterRead = loadCard(params.db, params.userId);
+      cardAfterRead.catch(() => undefined);
+    }
   }
   if (!reply.trim() && messages.length > 0) {
     // The model burned its rounds on tool calls without saying anything.
@@ -1223,7 +1233,7 @@ export async function runHelperTurn(
   if (mode === 'onboarding') {
     // Re-read only if something was written: a turn that saved nothing leaves the card as it was.
     const wrote = actionsTaken.some((a) => a.ok);
-    const cardAfter = wrote || !cardBefore ? await loadCard(params.db, params.userId) : cardBefore;
+    const cardAfter = wrote || !cardBefore ? await (cardAfterRead ?? loadCard(params.db, params.userId)) : cardBefore;
     return { reply: tame(reply), actionsTaken, provider, progress: progressOf(cardAfter) };
   }
   return { reply: tame(reply), actionsTaken, provider };
