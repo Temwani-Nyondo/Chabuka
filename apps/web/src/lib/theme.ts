@@ -1,87 +1,78 @@
 import { useCallback, useEffect, useState } from 'react';
 
+// What the player picked. 'system' follows the phone's light/dark setting.
+export type ThemePref = 'light' | 'dark' | 'system';
+// What is actually painted right now.
 export type Theme = 'light' | 'dark';
 
 const KEY = 'chabuka-theme';
 const EVENT = 'chabuka-theme-change';
+const media = typeof window !== 'undefined' ? window.matchMedia('(prefers-color-scheme: dark)') : null;
 
-export function getSavedTheme(): Theme {
-  const saved = localStorage.getItem(KEY);
-  if (saved === 'light' || saved === 'dark') return saved;
-  // Brand default is the dark floodlight look; light stays one tap away.
-  return 'dark';
+export function getSavedPref(): ThemePref {
+  try {
+    const saved = localStorage.getItem(KEY);
+    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+  } catch {
+    // Private mode or blocked storage: fall through to the default.
+  }
+  return 'system';
 }
 
-export function applyTheme(theme: Theme) {
+export function resolveTheme(pref: ThemePref): Theme {
+  if (pref === 'system') return media?.matches ? 'dark' : 'light';
+  return pref;
+}
+
+// Paints the resolved theme on <html> (index.css reads [data-theme]) and keeps
+// the browser chrome colour in step with the page background.
+export function paintTheme(pref: ThemePref): Theme {
+  const theme = resolveTheme(pref);
   document.documentElement.dataset.theme = theme;
-  localStorage.setItem(KEY, theme);
+  document.querySelector('meta[name="theme-color"]')?.setAttribute('content', theme === 'dark' ? '#0d0f0e' : '#f6f7f5');
+  return theme;
 }
 
-// Synchronous flip: reads the live DOM attribute (the actual source of
-// truth), writes DOM + storage immediately so the switch is visible even
-// before React re-renders, then broadcasts for every other useTheme hook.
-export function toggleTheme(): Theme {
-  const current = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
-  const next: Theme = current === 'light' ? 'dark' : 'light';
-  applyTheme(next);
-  window.dispatchEvent(new CustomEvent<Theme>(EVENT, { detail: next }));
-  return next;
+export function setThemePref(pref: ThemePref): void {
+  try {
+    localStorage.setItem(KEY, pref);
+  } catch {
+    // Storage blocked: the choice still applies for this visit.
+  }
+  paintTheme(pref);
+  window.dispatchEvent(new CustomEvent<ThemePref>(EVENT, { detail: pref }));
 }
 
-// Placeholder theme tokens live in index.css under [data-theme]; the real
-// visual identity swaps in there later.
-export type Skin = 'floodlight' | 'clean' | 'stripes' | 'matchday';
-export const SKINS: { value: Skin; label: string }[] = [
-  { value: 'floodlight', label: 'Floodlight' },
-  { value: 'matchday', label: 'Matchday' },
-  { value: 'clean', label: 'Clean' },
-  { value: 'stripes', label: 'Stripes' },
-];
-
-const SKIN_KEY = 'chabuka-skin';
-
-export function getSavedSkin(): Skin {
-  const saved = localStorage.getItem(SKIN_KEY);
-  return saved === 'clean' || saved === 'stripes' || saved === 'matchday' ? saved : 'floodlight';
-}
-
-export function applySkin(skin: Skin) {
-  document.documentElement.dataset.skin = skin;
-  localStorage.setItem(SKIN_KEY, skin);
-}
-
-export function useSkin() {
-  const [skin, setSkin] = useState<Skin>(getSavedSkin);
-
-  useEffect(() => {
-    applySkin(skin);
-  }, [skin]);
-
-  return { skin, setSkin };
+// Runs once before React mounts so the first paint is already themed, and
+// follows the OS switch live while the preference is 'system'.
+export function bootTheme(): void {
+  paintTheme(getSavedPref());
+  media?.addEventListener('change', () => {
+    if (getSavedPref() === 'system') paintTheme('system');
+  });
 }
 
 export function useTheme() {
-  const [theme, setTheme] = useState<Theme>(getSavedTheme);
+  const [pref, setPref] = useState<ThemePref>(getSavedPref);
+  const [theme, setTheme] = useState<Theme>(() => resolveTheme(getSavedPref()));
 
   useEffect(() => {
-    applyTheme(theme);
-  }, [theme]);
-
-  // Every toggle button (top bar, profile) stays in sync in-session.
-  useEffect(() => {
-    const onChange = (e: Event) => {
-      const next = (e as CustomEvent<Theme>).detail;
-      if (next === 'light' || next === 'dark') setTheme(next);
+    const onPref = (e: Event) => {
+      const next = (e as CustomEvent<ThemePref>).detail;
+      setPref(next);
+      setTheme(resolveTheme(next));
     };
-    window.addEventListener(EVENT, onChange as EventListener);
-    return () => window.removeEventListener(EVENT, onChange as EventListener);
+    const onMedia = () => setTheme(resolveTheme(getSavedPref()));
+    window.addEventListener(EVENT, onPref as EventListener);
+    media?.addEventListener('change', onMedia);
+    return () => {
+      window.removeEventListener(EVENT, onPref as EventListener);
+      media?.removeEventListener('change', onMedia);
+    };
   }, []);
 
-  // No side effects inside the updater: toggleTheme() already wrote the
-  // DOM, storage, and broadcast; here we only sync this hook's state.
-  const toggle = useCallback(() => {
-    setTheme(toggleTheme());
-  }, []);
+  const choose = useCallback((next: ThemePref) => setThemePref(next), []);
+  const toggle = useCallback(() => setThemePref(resolveTheme(getSavedPref()) === 'dark' ? 'light' : 'dark'), []);
 
-  return { theme, toggle };
+  return { pref, theme, choose, toggle };
 }

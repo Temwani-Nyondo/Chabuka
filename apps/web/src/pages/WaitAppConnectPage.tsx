@@ -22,7 +22,7 @@ export default function WaitAppConnectPage() {
     finishWaitAppLink(token, code, state)
       .then(() => {
         const matchId = takeTicketingReturn();
-        navigate(matchId ? `/explore?highlight=${encodeURIComponent(matchId)}` : '/home', { replace: true });
+        navigate(matchId ? `/games/${encodeURIComponent(matchId)}` : '/today', { replace: true });
       })
       .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not finish linking WaitApp.'));
   }, [code, state, session, navigate]);
@@ -38,7 +38,7 @@ export default function WaitAppConnectPage() {
       ) : error ? (
         <>
           <p className="error">{error}</p>
-          <Link className="btn" to="/home">
+          <Link className="btn" to="/today">
             Back to Home
           </Link>
         </>

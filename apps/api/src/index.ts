@@ -37,6 +37,7 @@ import {
   addScoreboardEvents,
   addScoreboardPlayer,
   appointOfficial,
+  appointTimekeeper,
   createScoreboard,
   createScoreboardSchema,
   finishScoreboard,
@@ -48,6 +49,31 @@ import {
   setPlayerSide,
   undoLastEvent,
 } from './scoreboard.js';
+import {
+  getAvailability,
+  getLineups,
+  getRuleBook,
+  getTeamAdmin,
+  remindAvailability,
+  requestJoinTeam,
+  respondAvailability,
+  respondJoinRequest,
+  saveLineup,
+  saveRuleBook,
+  setShirtNumber,
+  transferOwnership,
+  updateTeamSettings,
+} from './teamAdmin.js';
+import {
+  availabilityResponseSchema,
+  joinTeamSchema,
+  respondJoinRequestSchema,
+  saveLineupSchema,
+  saveRuleBookSchema,
+  setShirtNumberSchema,
+  teamSettingsSchema,
+  transferOwnershipSchema,
+} from '@chabuka/shared';
 
 // Load the repo-root .env when present (local dev); deployed hosts set real
 // environment variables and this is a no-op there.
@@ -783,6 +809,86 @@ app.get('/api/my/space-bookings', async (req, res) => {
 // --- Ticketed games (WaitApp ticket engine) ---------------------------------
 // All writes go through the service role inside waitapp.ts, after the caller
 // is identified and checked as the game's organiser.
+
+// --- Phase 2: availability, lineups, team admin, rule books, timekeeper --------
+// Same shape as the scoreboard routes: authenticate, validate, then the module
+// checks permissions and works on the service client.
+
+const subjectType = z.enum(['fixture', 'match']);
+const uuidParam = z.string().uuid();
+
+function phase2Get<T>(path: string, label: string, run: (userId: string, params: Record<string, string>) => Promise<T>): void {
+  app.get(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    try {
+      res.json(await run(userId, req.params as Record<string, string>));
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+      }
+      sendError(res, err, label);
+    }
+  });
+}
+
+function phase2Post<S extends z.ZodTypeAny, T>(path: string, schema: S, label: string, run: (userId: string, body: z.infer<S>, params: Record<string, string>) => Promise<T>): void {
+  app.post(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    const parsed = schema.safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: parsed.error.issues[0]?.message ?? 'Check the details and try again.' });
+      return;
+    }
+    try {
+      res.json((await run(userId, parsed.data, req.params as Record<string, string>)) ?? { ok: true });
+    } catch (err) {
+      if (err instanceof z.ZodError) {
+        res.status(404).json({ error: 'Not found.' });
+        return;
+      }
+      sendError(res, err, label);
+    }
+  });
+}
+
+phase2Get('/api/availability/:type/:id', 'availability read', (userId, p) =>
+  getAvailability(createServiceClient(), userId, subjectType.parse(p['type']), uuidParam.parse(p['id'])),
+);
+phase2Post('/api/availability', availabilityResponseSchema, 'availability answer', (userId, body) => respondAvailability(createServiceClient(), userId, body));
+phase2Post('/api/availability/:type/:id/remind', z.object({}), 'availability remind', (userId, _b, p) =>
+  remindAvailability(createServiceClient(), userId, subjectType.parse(p['type']), uuidParam.parse(p['id'])),
+);
+phase2Get('/api/lineups/:type/:id', 'lineups read', (userId, p) =>
+  getLineups(createServiceClient(), userId, subjectType.parse(p['type']), uuidParam.parse(p['id'])),
+);
+phase2Post('/api/lineups', saveLineupSchema, 'lineup save', (userId, body) => saveLineup(createServiceClient(), userId, body));
+phase2Get('/api/teams/:id/admin', 'team admin read', (userId, p) => getTeamAdmin(createServiceClient(), userId, uuidParam.parse(p['id'])));
+phase2Post('/api/teams/join', joinTeamSchema, 'team join', (userId, body) => requestJoinTeam(createServiceClient(), userId, body));
+phase2Post('/api/teams/requests/respond', respondJoinRequestSchema, 'team join answer', (userId, body) => respondJoinRequest(createServiceClient(), userId, body));
+phase2Post('/api/teams/shirt', setShirtNumberSchema, 'shirt number', async (userId, body) => {
+  await setShirtNumber(createServiceClient(), userId, body);
+  return { ok: true };
+});
+phase2Post('/api/teams/transfer', transferOwnershipSchema, 'team transfer', async (userId, body) => {
+  await transferOwnership(createServiceClient(), userId, body);
+  return { ok: true };
+});
+phase2Post('/api/teams/settings', teamSettingsSchema, 'team settings', async (userId, body) => {
+  await updateTeamSettings(createServiceClient(), userId, body);
+  return { ok: true };
+});
+phase2Get('/api/rulebooks/:type/:id', 'rule book read', (userId, p) =>
+  getRuleBook(createServiceClient(), userId, { type: z.enum(['match', 'fixture', 'competition', 'team']).parse(p['type']), id: uuidParam.parse(p['id']) }),
+);
+phase2Post('/api/rulebooks', saveRuleBookSchema, 'rule book save', (userId, body) => saveRuleBook(createServiceClient(), userId, body));
+phase2Post('/api/scoreboards/:id/timekeeper', z.object({ timekeeperId: z.string().uuid().nullable() }), 'scoreboard timekeeper', async (userId, body, p) => {
+  await appointTimekeeper(createServiceClient(), userId, uuidParam.parse(p['id']), body.timekeeperId);
+  return { ok: true };
+});
+
 function sendError(res: express.Response, err: unknown, label: string): void {
   const { status, message } = toHttpError(err);
   if (status >= 500) console.error(`${label} failed:`, err);

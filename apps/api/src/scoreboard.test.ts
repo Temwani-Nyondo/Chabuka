@@ -4,6 +4,7 @@ import type { Row } from './testing.js';
 import {
   addScoreboardEvents,
   appointOfficial,
+  appointTimekeeper,
   createScoreboard,
   finishScoreboard,
   getControlScoreboard,
@@ -180,6 +181,34 @@ describe('appointing the official', () => {
     const ok = await addScoreboardEvents(client, OFFICIAL, boardId, [ev('period_start', 0)]);
     expect(ok.accepted).toHaveLength(1);
     expect(ok.status).toBe('live');
+  });
+});
+
+describe('the timekeeper', () => {
+  it('runs the clock but cannot score; the scorekeeper keeps full control', async () => {
+    const { client, t, boardId } = await startedBoard();
+    await expect(appointTimekeeper(client, STRANGER, boardId, PLAYER_A)).rejects.toMatchObject({ status: 403 });
+    await appointTimekeeper(client, OFFICIAL, boardId, PLAYER_A);
+    expect([...t.scoreboards.values()][0]!['timekeeper_id']).toBe(PLAYER_A);
+    const started = await addScoreboardEvents(client, PLAYER_A, boardId, [ev('period_start', 0)]);
+    expect(started.status).toBe('live');
+    await addScoreboardEvents(client, PLAYER_A, boardId, [ev('clock_pause', 5), ev('clock_resume', 6)]);
+    const h = playerIdOf(t, CAPTAIN_H);
+    await expect(
+      addScoreboardEvents(client, PLAYER_A, boardId, [ev('goal', 7, { side: 'home', playerId: h })]),
+    ).rejects.toMatchObject({ status: 403 });
+    // A batch mixing clock and score is the scorekeeper's.
+    await expect(
+      addScoreboardEvents(client, PLAYER_A, boardId, [ev('clock_pause', 8), ev('goal', 8, { side: 'home', playerId: h })]),
+    ).rejects.toMatchObject({ status: 403 });
+    const goal = await addScoreboardEvents(client, OFFICIAL, boardId, [ev('goal', 9, { side: 'home', playerId: h })]);
+    expect(goal.score.home).toBe(1);
+    const control = await getControlScoreboard(client, PLAYER_A, boardId);
+    expect(control.isTimekeeper).toBe(true);
+    expect(control.isOfficial).toBe(false);
+    expect(control.timekeeper?.name).toBe('Away Player');
+    await appointTimekeeper(client, ORGANISER, boardId, null);
+    await expect(addScoreboardEvents(client, PLAYER_A, boardId, [ev('clock_pause', 10)])).rejects.toMatchObject({ status: 403 });
   });
 });
 

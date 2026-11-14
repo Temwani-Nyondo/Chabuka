@@ -20,6 +20,7 @@ import {
   deleteTeam,
   deleteVenueSlot,
   joinMatch,
+  updateMatch,
   postChallenge,
   proposeTime,
   removeMember,
@@ -529,6 +530,74 @@ describe('reportScore', () => {
     await expect(
       reportScore(client, PLAYER_A, { matchId: created.matchId, homeScore: 1, awayScore: 0 }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+});
+
+describe('updateMatch', () => {
+  it('lets the organiser move and retitle a game', async () => {
+    const { client, matches } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    const later = new Date(Date.now() + 14 * 86400000).toISOString();
+    const result = (await updateMatch(client, ORGANISER, {
+      matchId: created.matchId,
+      startsAt: later,
+      title: 'Sunday football',
+    })) as { state: string };
+    expect(result.state).toBe('updated');
+    expect(matches.get(created.matchId)?.['starts_at']).toBe(later);
+    expect(matches.get(created.matchId)?.['title']).toBe('Sunday football');
+  });
+
+  it('cancels a game and refuses further edits', async () => {
+    const { client, matches } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    await updateMatch(client, ORGANISER, { matchId: created.matchId, status: 'cancelled', reason: 'Rain' });
+    expect(matches.get(created.matchId)?.['status']).toBe('cancelled');
+    await expect(
+      updateMatch(client, ORGANISER, { matchId: created.matchId, title: 'Back on' }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('refuses edits from anyone but the organiser', async () => {
+    const { client } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    await expect(
+      updateMatch(client, PLAYER_A, { matchId: created.matchId, status: 'cancelled' }),
+    ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('will not shrink capacity below the players already in', async () => {
+    const { client } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    await joinMatch(client, PLAYER_A, created.matchId);
+    await joinMatch(client, PLAYER_B, created.matchId);
+    await expect(
+      updateMatch(client, ORGANISER, { matchId: created.matchId, capacity: 2 }),
+    ).rejects.toMatchObject({ status: 409 });
+    const ok = (await updateMatch(client, ORGANISER, { matchId: created.matchId, capacity: 3 })) as {
+      match: { status: string };
+    };
+    expect(ok.match.status).toBe('full');
+  });
+
+  it('refuses to finish a game before kick-off and to move it into the past', async () => {
+    const { client } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    await expect(
+      updateMatch(client, ORGANISER, { matchId: created.matchId, status: 'finished' }),
+    ).rejects.toMatchObject({ status: 409 });
+    await expect(
+      updateMatch(client, ORGANISER, { matchId: created.matchId, startsAt: new Date(Date.now() - 3600000).toISOString() }),
+    ).rejects.toMatchObject({ status: 409 });
+  });
+
+  it('closes out a played game when its score is reported', async () => {
+    const { client, matches } = fakeDb();
+    const created = await createMatch(client, ORGANISER, matchInput(4));
+    const row = matches.get(created.matchId);
+    if (row) row['starts_at'] = new Date(Date.now() - 2 * 3600000).toISOString();
+    await reportScore(client, ORGANISER, { matchId: created.matchId, homeScore: 2, awayScore: 1 });
+    expect(matches.get(created.matchId)?.['status']).toBe('finished');
   });
 });
 

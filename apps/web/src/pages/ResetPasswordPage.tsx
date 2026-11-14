@@ -31,7 +31,7 @@ export default function ResetPasswordPage() {
       return;
     }
     setDone(true);
-    window.setTimeout(() => navigate('/home', { replace: true }), 1200);
+    window.setTimeout(() => navigate('/today', { replace: true }), 1200);
   };
 
   return (

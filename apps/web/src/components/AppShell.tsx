@@ -1,24 +1,62 @@
 import { useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import type { ReactNode } from 'react';
+import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
+import {
+  Bell,
+  Building,
+  CalendarDays,
+  ChevronRight,
+  CircleUserRound,
+  Compass,
+  MessageSquareText,
+  Plus,
+  Radio,
+  Settings,
+  Shield,
+  Swords,
+  Trophy,
+  Users,
+  Volleyball,
+} from 'lucide-react';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
 import FindOpponentForm from './FindOpponentForm';
 import GafferPage from '../pages/GafferPage';
-import { useTheme } from '../lib/theme';
 import { useUnreadCount } from '../lib/notifications';
 import { useAuth } from '../auth/AuthContext';
 import { claimTickets } from '../lib/waitapp';
+import { useIsAdmin } from '../lib/admin';
+import { IconButton, Sheet, Wordmark, cx } from './ui';
 
-type SheetMode = 'menu' | 'match' | 'team' | 'opponent';
+type CreateMode = 'menu' | 'match' | 'team' | 'opponent';
+
+const CREATE_EVENT = 'chabuka:create';
+
+// Any screen can open the Create sheet, optionally straight on one form.
+export function requestCreate(mode: CreateMode = 'menu'): void {
+  window.dispatchEvent(new CustomEvent<CreateMode>(CREATE_EVENT, { detail: mode }));
+}
+
+const TABS = [
+  { to: '/today', label: 'Today', icon: CalendarDays, match: ['/today'] },
+  { to: '/explore', label: 'Explore', icon: Compass, match: ['/explore', '/board', '/venues/', '/games/'] },
+  { to: '/circles', label: 'Circles', icon: Radio, match: ['/circles'] },
+  { to: '/you', label: 'You', icon: CircleUserRound, match: ['/you', '/teams', '/profile'] },
+] as const;
+
+function isOn(pathname: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((p) => pathname.startsWith(p));
+}
 
 export default function AppShell() {
-  const [sheetOpen, setSheetOpen] = useState(false);
-  const [mode, setMode] = useState<SheetMode>('menu');
+  const [createOpen, setCreateOpen] = useState(false);
+  const [mode, setMode] = useState<CreateMode>('menu');
   const [gafferOpen, setGafferOpen] = useState(false);
   const navigate = useNavigate();
-  const { theme, toggle } = useTheme();
+  const { pathname } = useLocation();
   const unread = useUnreadCount();
   const { session } = useAuth();
+  const isAdmin = useIsAdmin();
   const claimedFor = useRef<string | null>(null);
 
   // Tickets bought before this account existed are attached once per sign-in.
@@ -31,6 +69,15 @@ export default function AppShell() {
   }, [session]);
 
   useEffect(() => {
+    const onCreate = (e: Event) => {
+      setMode((e as CustomEvent<CreateMode>).detail ?? 'menu');
+      setCreateOpen(true);
+    };
+    window.addEventListener(CREATE_EVENT, onCreate);
+    return () => window.removeEventListener(CREATE_EVENT, onCreate);
+  }, []);
+
+  useEffect(() => {
     if (!gafferOpen) return;
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') setGafferOpen(false);
@@ -39,199 +86,225 @@ export default function AppShell() {
     return () => window.removeEventListener('keydown', onKey);
   }, [gafferOpen]);
 
-  const closeSheet = () => {
-    setSheetOpen(false);
+  // Detail screens carry their own bottom action bar.
+  const detail = /^\/(games|lineup|rules)\/[^/]+/.test(pathname);
+
+  const openCreate = () => {
+    setMode('menu');
+    setCreateOpen(true);
+  };
+  const closeCreate = () => {
+    setCreateOpen(false);
     setMode('menu');
   };
-  const navClass = ({ isActive }: { isActive: boolean }) =>
-    isActive ? 'topbar-link topbar-link-active' : 'topbar-link';
+  const go = (to: string) => {
+    closeCreate();
+    navigate(to);
+  };
+
+  const createTitle =
+    mode === 'match' ? 'Host a game' : mode === 'team' ? 'Start a team' : mode === 'opponent' ? 'Challenge a team' : 'Create';
 
   return (
-    <div className="app">
-      <header className="topbar">
+    <div className="app min-h-dvh bg-bg text-ink">
+      {/* Desktop sidebar */}
+      <aside className="fixed inset-y-0 left-0 z-40 hidden w-64 flex-col border-r border-line bg-surface px-3 py-4 lg:flex">
+        <Link to="/today" className="mb-5 px-2 no-underline" aria-label="Chabuka home">
+          <Wordmark />
+        </Link>
         <button
-          className="topbar-brand"
           type="button"
-          aria-label="Chabuka home"
-          onClick={() => navigate('/home')}
+          onClick={openCreate}
+          className="mb-4 flex h-11 cursor-pointer items-center justify-center gap-2 rounded-xl border-0 bg-brand font-bold text-on-brand hover:brightness-[1.06]"
         >
-          <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={26} height={26} />
-          <span>Chabuka</span>
+          <Plus size={18} /> Create
         </button>
-        <nav className="topbar-nav" aria-label="Primary">
-          <NavLink to="/home" end className={navClass}>
-            Home
-          </NavLink>
-          <NavLink to="/explore" className={navClass}>
-            Explore
-          </NavLink>
-          <NavLink to="/teams" className={navClass}>
-            Teams
-          </NavLink>
-          <NavLink to="/notifications" className={navClass} aria-label={unread > 0 ? `Alerts, ${unread} unread` : 'Alerts'}>
-            Alerts
-            {unread > 0 ? <span className="nav-badge">{unread > 9 ? '9+' : unread}</span> : null}
-          </NavLink>
-          <NavLink to="/profile" className={navClass}>
-            Profile
-          </NavLink>
+        <nav aria-label="Primary" className="flex flex-col gap-0.5">
+          {TABS.map((t) => (
+            <SideLink key={t.to} to={t.to} icon={<t.icon size={20} />} on={isOn(pathname, t.match)}>
+              {t.label}
+            </SideLink>
+          ))}
+          <SideLink to="/notifications" icon={<Bell size={20} />} on={pathname === '/notifications'} badge={unread}>
+            Notifications
+          </SideLink>
         </nav>
-        <div className="topbar-actions">
+        <p className="mb-1 mt-6 px-3 text-[11px] font-bold uppercase tracking-[0.08em] text-muted">Manage</p>
+        <nav aria-label="Manage" className="flex flex-col gap-0.5">
+          <SideLink to="/teams" icon={<Shield size={20} />} on={pathname.startsWith('/teams')}>
+            My teams
+          </SideLink>
+          <SideLink to="/board" icon={<Trophy size={20} />} on={pathname.startsWith('/board')}>
+            Competitions
+          </SideLink>
+          <SideLink to="/venues/dashboard" icon={<Building size={20} />} on={pathname === '/venues/dashboard'}>
+            My venues
+          </SideLink>
+          {isAdmin ? (
+            <SideLink to="/admin/venues" icon={<Settings size={20} />} on={pathname.startsWith('/admin')}>
+              Admin
+            </SideLink>
+          ) : null}
+        </nav>
+        <div className="mt-auto flex flex-col gap-0.5">
           <button
-            className="btn btn-primary topbar-create"
             type="button"
-            onClick={() => {
-              setMode('menu');
-              setSheetOpen(true);
-            }}
+            onClick={() => setGafferOpen(true)}
+            className="flex h-11 cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3 text-left font-semibold text-ink hover:bg-surface-2"
           >
-            Create
+            <MessageSquareText size={20} /> Ask Gaffer
           </button>
-          <button className="btn btn-ghost topbar-theme" type="button" onClick={toggle}>
-            {theme === 'light' ? 'Dark' : 'Light'}
-          </button>
+          <SideLink to="/you/settings" icon={<Settings size={20} />} on={pathname === '/you/settings'}>
+            Settings
+          </SideLink>
         </div>
-      </header>
-      <main>
-        <Outlet />
-      </main>
-      {sheetOpen ? (
-        <div className="sheet-backdrop" role="presentation" onClick={closeSheet}>
-          <div
-            className="sheet"
-            role="dialog"
-            aria-label="Set something up"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {mode === 'match' ? (
-              <>
-                <h2>Create match</h2>
-                <CreateMatchForm onDone={closeSheet} />
-                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
-                  Back
-                </button>
-              </>
-            ) : mode === 'team' ? (
-              <>
-                <h2>Create team</h2>
-                <CreateTeamForm onDone={closeSheet} />
-                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
-                  Back
-                </button>
-              </>
-            ) : mode === 'opponent' ? (
-              <>
-                <h2>Find opponent</h2>
-                <FindOpponentForm onDone={closeSheet} />
-                <button className="btn btn-ghost" type="button" onClick={() => setMode('menu')}>
-                  Back
-                </button>
-              </>
-            ) : (
-              <>
-                <h2>What do you want to do?</h2>
-                <p className="muted">Play</p>
-                <button className="sheet-item" type="button" onClick={() => setMode('match')}>
-                  <span>Create a match</span>
-                  <span className="tag">Open game</span>
-                </button>
-                <button className="sheet-item" type="button" onClick={() => setMode('opponent')}>
-                  <span>Challenge a team</span>
-                  <span className="tag">Team vs team</span>
-                </button>
-                <p className="muted">Organize</p>
-                <button className="sheet-item" type="button" onClick={() => setMode('team')}>
-                  <span>Start a team</span>
-                  <span className="tag">Squad</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/circles');
-                  }}
-                >
-                  <span>Join a circle</span>
-                  <span className="tag">Sport groups</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/venues/dashboard');
-                  }}
-                >
-                  <span>Register a venue</span>
-                  <span className="tag">Courts & pitches</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/board');
-                  }}
-                >
-                  <span>Run a tournament</span>
-                  <span className="tag">Season board</span>
-                </button>
-                <p className="muted">Elsewhere</p>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    setGafferOpen(true);
-                  }}
-                >
-                  <span>Ask Gaffer</span>
-                  <span className="tag">AI helper</span>
-                </button>
-                <button
-                  className="sheet-item"
-                  type="button"
-                  onClick={() => {
-                    closeSheet();
-                    navigate('/notifications');
-                  }}
-                >
-                  <span>Notifications</span>
-                  <span className="tag">Updates</span>
-                </button>
-                <button className="btn btn-ghost" type="button" onClick={closeSheet}>
-                  Close
-                </button>
-              </>
-            )}
+      </aside>
+
+      <div className="lg:pl-64">
+        {/* Phone top bar */}
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-line bg-bg/90 pl-4 pr-2 backdrop-blur lg:hidden">
+          <Link to="/today" aria-label="Chabuka home" className="no-underline">
+            <Wordmark size={26} />
+          </Link>
+          <div className="flex items-center">
+            <IconButton label="Ask Gaffer" onClick={() => setGafferOpen(true)}>
+              <MessageSquareText size={22} />
+            </IconButton>
+            <IconButton label="Notifications" badge={unread} onClick={() => navigate('/notifications')}>
+              <Bell size={22} />
+            </IconButton>
           </div>
-        </div>
-      ) : null}
-      {!gafferOpen ? (
-        <button
-          className="fab-gaffer"
-          type="button"
-          aria-label="Ask Gaffer"
-          onClick={() => setGafferOpen(true)}
+        </header>
+
+        <main className={cx(detail ? 'pb-28' : 'pb-28 lg:pb-12')}>
+          <Outlet />
+        </main>
+      </div>
+
+      {/* Phone tab bar */}
+      {!detail ? (
+        <nav
+          aria-label="Primary"
+          className="fixed inset-x-0 bottom-0 z-30 grid grid-cols-5 items-center border-t border-line bg-surface pb-[max(10px,env(safe-area-inset-bottom))] pt-1.5 lg:hidden"
         >
-          <span className="fab-gaffer-ball" aria-hidden="true">G</span>
-          Gaffer
-        </button>
+          {TABS.slice(0, 2).map((t) => (
+            <TabLink key={t.to} to={t.to} label={t.label} on={isOn(pathname, t.match)} icon={<t.icon size={22} />} />
+          ))}
+          <span className="flex justify-center">
+            <button
+              type="button"
+              aria-label="Create"
+              onClick={openCreate}
+              className="flex h-12 w-12 cursor-pointer items-center justify-center rounded-2xl border-0 bg-brand text-on-brand"
+            >
+              <Plus size={24} strokeWidth={2.4} />
+            </button>
+          </span>
+          {TABS.slice(2).map((t) => (
+            <TabLink key={t.to} to={t.to} label={t.label} on={isOn(pathname, t.match)} icon={<t.icon size={22} />} />
+          ))}
+        </nav>
       ) : null}
+
+      <Sheet open={createOpen} onClose={closeCreate} title={createTitle} wide={mode !== 'menu'}>
+        {mode === 'menu' ? (
+          <div className="flex flex-col gap-5">
+            <CreateGroup label="Play">
+              <CreateItem icon={<Volleyball size={20} />} title="Host a game" sub="An open game anyone nearby can join" onClick={() => setMode('match')} />
+              <CreateItem icon={<Swords size={20} />} title="Challenge a team" sub="Find an opponent for your side" onClick={() => setMode('opponent')} />
+            </CreateGroup>
+            <CreateGroup label="Organise">
+              <CreateItem icon={<Shield size={20} />} title="Start a team" sub="Squad, captains and fixtures" onClick={() => setMode('team')} />
+              <CreateItem icon={<Trophy size={20} />} title="Run a league or tournament" sub="Entries, fixtures and a live table" onClick={() => go('/board')} />
+              <CreateItem icon={<Users size={20} />} title="Start a circle" sub="A channel for a sport and a place" onClick={() => go('/circles?create=1')} />
+            </CreateGroup>
+            <CreateGroup label="Venue">
+              <CreateItem icon={<Building size={20} />} title="List a venue" sub="Publish slots and take bookings" onClick={() => go('/venues/dashboard')} />
+            </CreateGroup>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <button
+              type="button"
+              onClick={() => setMode('menu')}
+              className="self-start cursor-pointer border-0 bg-transparent p-0 text-[13px] font-semibold text-brand-text"
+            >
+              Back to options
+            </button>
+            {mode === 'match' ? <CreateMatchForm onDone={closeCreate} /> : null}
+            {mode === 'team' ? <CreateTeamForm onDone={closeCreate} /> : null}
+            {mode === 'opponent' ? <FindOpponentForm onDone={closeCreate} /> : null}
+          </div>
+        )}
+      </Sheet>
+
       {gafferOpen ? (
-        <div
-          className="gaffer-overlay"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Ask Gaffer"
-          onClick={() => setGafferOpen(false)}
-        >
+        <div className="gaffer-overlay" role="dialog" aria-modal="true" aria-label="Ask Gaffer" onClick={() => setGafferOpen(false)}>
           <div className="gaffer-panel" onClick={(e) => e.stopPropagation()}>
             <GafferPage onClose={() => setGafferOpen(false)} />
           </div>
         </div>
       ) : null}
     </div>
+  );
+}
+
+function SideLink({ to, icon, on, badge, children }: { to: string; icon: ReactNode; on: boolean; badge?: number; children: ReactNode }) {
+  return (
+    <NavLink
+      to={to}
+      aria-current={on ? 'page' : undefined}
+      className={cx(
+        'flex h-11 items-center gap-3 rounded-xl px-3 font-semibold no-underline',
+        on ? 'bg-brand-soft text-brand-text' : 'text-ink hover:bg-surface-2',
+      )}
+    >
+      {icon}
+      <span className="flex-1">{children}</span>
+      {badge ? (
+        <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-live px-1.5 text-[11px] font-bold text-white">
+          {badge > 9 ? '9+' : badge}
+        </span>
+      ) : null}
+    </NavLink>
+  );
+}
+
+function TabLink({ to, label, icon, on }: { to: string; label: string; icon: ReactNode; on: boolean }) {
+  return (
+    <NavLink
+      to={to}
+      aria-current={on ? 'page' : undefined}
+      className={cx('flex flex-col items-center gap-0.5 text-[11px] font-semibold no-underline', on ? 'text-brand-text' : 'text-muted')}
+    >
+      {icon}
+      {label}
+    </NavLink>
+  );
+}
+
+function CreateGroup({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <span className="px-1 text-[11px] font-bold uppercase tracking-[0.08em] text-muted">{label}</span>
+      <div className="overflow-hidden rounded-2xl border border-line">{children}</div>
+    </div>
+  );
+}
+
+function CreateItem({ icon, title, sub, onClick }: { icon: ReactNode; title: string; sub: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full cursor-pointer items-center gap-3 border-0 bg-surface px-3.5 py-3 text-left text-ink hover:bg-surface-2 [&+&]:border-t [&+&]:border-line"
+    >
+      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-text">{icon}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <strong>{title}</strong>
+        <span className="text-[13px] text-muted">{sub}</span>
+      </span>
+      <ChevronRight size={18} className="text-muted" aria-hidden="true" />
+    </button>
   );
 }

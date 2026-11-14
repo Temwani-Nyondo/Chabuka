@@ -106,7 +106,7 @@ function stepLabel(name: string): string | null {
 function stepLink(detail: string | undefined): { href: string; label: string } | null {
   if (!detail) return null;
   if (detail.startsWith('match:')) {
-    return { href: `/explore?highlight=${encodeURIComponent(detail.slice('match:'.length))}`, label: 'View game' };
+    return { href: `/games/${encodeURIComponent(detail.slice('match:'.length))}`, label: 'View game' };
   }
   if (detail.startsWith('booking:')) return { href: '/venues/dashboard', label: 'Track booking' };
   return null;

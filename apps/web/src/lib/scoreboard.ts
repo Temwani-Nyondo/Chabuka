@@ -50,6 +50,9 @@ export interface BoardBundle {
 export interface ControlBundle extends BoardBundle {
   id: string;
   isOfficial: boolean;
+  /** Runs the clock only; the scorekeeper (official) records everything else. */
+  isTimekeeper: boolean;
+  timekeeper: { userId: string; name: string } | null;
   canManage: boolean;
   fixtureId: string | null;
   matchId: string | null;
@@ -99,6 +102,8 @@ export const fetchTargetInfo = (token: string, target: { fixtureId?: string; mat
 export const createBoard = (token: string, body: unknown) => call<{ id: string; shareCode: string }>('/api/scoreboards', 'POST', token, body);
 export const appointOfficialCall = (token: string, id: string, officialId: string) =>
   call<{ ok: true }>(`/api/scoreboards/${id}/appoint`, 'POST', token, { officialId });
+export const appointTimekeeperCall = (token: string, id: string, timekeeperId: string | null) =>
+  call<{ ok: true }>(`/api/scoreboards/${id}/timekeeper`, 'POST', token, { timekeeperId });
 export const setLineupCall = (token: string, id: string, starters: string[]) =>
   call<{ ok: true }>(`/api/scoreboards/${id}/lineup`, 'POST', token, { starters });
 export const addPlayerCall = (token: string, id: string, body: { side: 'home' | 'away'; name: string; number?: number; starter?: boolean }) =>

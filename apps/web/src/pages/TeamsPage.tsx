@@ -1,18 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Link } from 'react-router-dom';
-import CreateTeamForm from '../components/CreateTeamForm';
-import EmptyState from '../components/EmptyState';
-import { useAuth } from '../auth/AuthContext';
+import { Plus, Shield, Swords } from 'lucide-react';
 import { TEAM_CATEGORY_LABELS } from '@chabuka/shared';
+import { useAuth } from '../auth/AuthContext';
 import { fetchMyTeams } from '../lib/teams';
 import type { MyTeam } from '../lib/teams';
+import { requestCreate } from '../components/AppShell';
+import { Badge, Button, Card, Crest, EmptyState, ErrorNote, ListRow, PageHeader, Skeleton } from '../components/ui';
 
 export default function TeamsPage() {
   const { user } = useAuth();
   const [teams, setTeams] = useState<MyTeam[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
 
   const reload = useCallback(async () => {
     if (!user) return;
@@ -21,57 +20,58 @@ export default function TeamsPage() {
 
   useEffect(() => {
     reload()
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : 'Could not load your teams.'),
-      )
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load your teams.'))
       .finally(() => setLoading(false));
   }, [reload]);
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <span className="eyebrow">Your sides</span>
-        <h1>Teams</h1>
-        <p>Squads you play for, challenges to answer.</p>
-      </div>
-      {loading ? <p className="loading">Loading your teams…</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      {!loading && teams.length === 0 && !showForm ? (
+    <div className="mx-auto flex max-w-[720px] flex-col gap-4 px-4 pt-4">
+      <PageHeader
+        title="My teams"
+        sub="Squads you play for and run."
+        actions={
+          <Button variant="primary" size="sm" icon={<Plus size={16} />} onClick={() => requestCreate('team')}>
+            New team
+          </Button>
+        }
+      />
+      <ErrorNote>{error}</ErrorNote>
+      {loading ? (
+        <Skeleton className="h-32" />
+      ) : teams.length === 0 ? (
         <EmptyState
+          icon={<Shield size={22} />}
           title="No teams yet"
-          hint="Create a team to post challenges and enter tournaments."
+          body="Start one for your regular side, or open an invite link from your captain to join theirs."
+          action={
+            <Button variant="primary" size="sm" onClick={() => requestCreate('team')}>
+              Start a team
+            </Button>
+          }
         />
-      ) : null}
-      {teams.map(({ team, role }) => (
-        <Link className="card card-link" key={team.id} to={`/teams/${team.id}`}>
-          <div className="row">
-            <strong>{team.name}</strong>
-            <span className="tag">{role}</span>
-          </div>
-          <p className="muted">
-            {TEAM_CATEGORY_LABELS[team.category]}
-            {team.area ? ` · ${team.area}` : ''}
-          </p>
-        </Link>
-      ))}
-      {showForm ? (
-        <div className="card">
-          <h2>Create team</h2>
-          <CreateTeamForm
-            onDone={() => {
-              setShowForm(false);
-              void reload();
-            }}
-          />
-          <button className="btn btn-ghost" type="button" onClick={() => setShowForm(false)}>
-            Cancel
-          </button>
-        </div>
       ) : (
-        <button className="btn btn-primary" type="button" onClick={() => setShowForm(true)}>
-          Create team
-        </button>
+        <Card className="overflow-hidden">
+          {teams.map(({ team, role }) => (
+            <ListRow
+              key={team.id}
+              to={`/teams/${team.id}`}
+              leading={<Crest id={team.id} name={team.name} src={team.logo_url} size={44} />}
+              title={team.name}
+              sub={[TEAM_CATEGORY_LABELS[team.category], team.area].filter(Boolean).join(' · ')}
+              trailing={role !== 'player' ? <Badge tone="brand">{role === 'owner' ? 'Owner' : 'Captain'}</Badge> : undefined}
+            />
+          ))}
+        </Card>
       )}
+      <Card className="flex items-center gap-3 p-3.5">
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-text">
+          <Swords size={20} />
+        </span>
+        <span className="flex-1 text-[14px] text-muted">Looking for a game? Post a challenge and nearby sides can take you on.</span>
+        <Button size="sm" onClick={() => requestCreate('opponent')}>
+          Challenge
+        </Button>
+      </Card>
     </div>
   );
 }

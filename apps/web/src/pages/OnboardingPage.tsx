@@ -6,6 +6,8 @@ import type { Level, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import OnboardingChat from '../components/OnboardingChat';
+import { LogoMark, Segmented, cx } from '../components/ui';
+import { sportBackdrop, sportLabel } from '../components/GameCard';
 
 const LEVELS: { value: Level; label: string }[] = [
   { value: 'recreational', label: 'Recreational' },
@@ -170,39 +172,47 @@ export default function OnboardingPage() {
     }
   };
 
+  const firstSport = sports.find((s) => s.id === picked[0])?.name ?? null;
+  const STEP_NAMES = ['You', 'Your sports', 'Finish'];
+
   return (
-    <div className="page page-narrow floodlight">
-      <div className="page-head">
-        <span className="eyebrow eyebrow-accent">First whistle</span>
-        <h1>Your player profile</h1>
-        <p>Thirty seconds, then you are in.</p>
+    <div className="min-h-dvh bg-bg pb-10">
+      <div
+        className="relative flex h-48 items-end bg-cover bg-center transition-[background-image] duration-500 sm:h-56"
+        style={{ backgroundImage: `url(${sportBackdrop(firstSport)})` }}
+      >
+        <div className="absolute inset-0 bg-black/45" aria-hidden="true" />
+        <div className="relative mx-auto w-full max-w-[480px] px-4 pb-5 text-white">
+          <span className="mb-2 inline-flex items-center gap-2 text-[15px] font-extrabold tracking-[-0.02em]">
+            <LogoMark size={24} /> Chabuka
+          </span>
+          <h1 className="m-0 text-white">Set up your player profile</h1>
+          <p className="m-0 text-[14px] text-white/85">
+            {firstSport ? `${sportLabel(firstSport)} it is. ` : ''}Thirty seconds, then you are in.
+          </p>
+        </div>
       </div>
+      <div className="mx-auto flex max-w-[480px] flex-col gap-4 px-4 pt-4">
       {loadError ? <p className="error">{loadError}</p> : null}
-      <div className="chips" role="group" aria-label="Setup style">
-        <button
-          type="button"
-          className={mode === 'wizard' ? 'chip chip-active' : 'chip'}
-          aria-pressed={mode === 'wizard'}
-          onClick={() => setMode('wizard')}
-        >
-          Step by step
-        </button>
-        <button
-          type="button"
-          className={mode === 'chat' ? 'chip chip-active' : 'chip'}
-          aria-pressed={mode === 'chat'}
-          onClick={() => setMode('chat')}
-        >
-          Chat with Gaffer
-        </button>
-      </div>
+      <Segmented<SetupMode>
+        label="Setup style"
+        value={mode}
+        onChange={setMode}
+        options={[
+          { value: 'wizard', label: 'Step by step' },
+          { value: 'chat', label: 'Chat with Gaffer' },
+        ]}
+      />
       {mode === 'wizard' ? (
       <>
-      <div className="wizard-dots" aria-hidden="true">
-        {[0, 1, 2].map((i) => (
-          <span key={i} className={i <= step ? 'wizard-dot wizard-dot-done' : 'wizard-dot'} />
+      <ol className="m-0 grid list-none grid-cols-3 gap-2 p-0" aria-label="Progress">
+        {STEP_NAMES.map((label, i) => (
+          <li key={label} className="flex flex-col gap-1.5" aria-current={i === step ? 'step' : undefined}>
+            <span className={cx('h-1.5 rounded-full', i <= step ? 'bg-brand' : 'bg-surface-3')} />
+            <span className={cx('text-[12px] font-bold', i === step ? 'text-ink' : 'text-muted')}>{label}</span>
+          </li>
         ))}
-      </div>
+      </ol>
       <form
         className="card"
         onSubmit={(e) => {
@@ -269,7 +279,7 @@ export default function OnboardingPage() {
                     className={picked.includes(s.id) ? 'chip chip-active' : 'chip'}
                     onClick={() => toggleSport(s.id)}
                   >
-                    {s.name}
+                    {sportLabel(s.name)}
                   </button>
                 ))}
               </div>
@@ -357,6 +367,7 @@ export default function OnboardingPage() {
       >
         Use a different account
       </button>
+      </div>
     </div>
   );
 }

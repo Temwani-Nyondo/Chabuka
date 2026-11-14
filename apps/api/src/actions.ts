@@ -40,6 +40,7 @@ import {
   proposeTimeSchema,
   registerEntrySchema,
   reportScoreSchema,
+  updateMatchSchema,
   removeMemberSchema,
   reportTeamSchema,
   reportUserSchema,
@@ -63,6 +64,7 @@ import {
   venueSlotSchema,
 } from '@chabuka/shared';
 import type {
+  UpdateMatchInput,
   ActionResult,
   AddDisciplineInput,
   AddPlaceInput,
@@ -631,12 +633,100 @@ export async function reportScore(
   if (match.organiser_id !== userId) {
     throw new ActionError(403, 'Only the organiser can report the score.');
   }
-  const { error } = await db
-    .from('matches')
-    .update({ home_score: input.homeScore, away_score: input.awayScore })
-    .eq('id', match.id);
+  // A score on a game that has kicked off closes it out, so it counts in
+  // everyone's record. A score typed in early is kept but the game stays open.
+  const kickedOff = new Date(match.starts_at).getTime() <= Date.now();
+  const closes = kickedOff && match.status !== 'cancelled';
+  const patch: Record<string, unknown> = { home_score: input.homeScore, away_score: input.awayScore };
+  if (closes) patch['status'] = 'finished';
+  const { error } = await db.from('matches').update(patch).eq('id', match.id);
   if (error) throw dbError(error);
-  return { state: 'reported', actions: [], match: { ...match, home_score: input.homeScore, away_score: input.awayScore } };
+  return {
+    state: 'reported',
+    actions: [],
+    match: { ...match, ...patch },
+  };
+}
+
+// --- Organiser game management: edit, move, cancel, close out. ---
+export async function updateMatch(
+  db: SupabaseClient,
+  userId: string,
+  input: UpdateMatchInput,
+): Promise<unknown> {
+  const match = await loadMatch(db, input.matchId);
+  if (match.organiser_id !== userId) {
+    throw new ActionError(403, 'Only the organiser can change this game.');
+  }
+  if (match.status === 'cancelled') {
+    throw new ActionError(409, 'This game was cancelled. Create a new one instead.');
+  }
+  if (match.status === 'finished' && input.status !== 'finished') {
+    throw new ActionError(409, 'This game is finished. Only its score can change now.');
+  }
+  const moving = input.startsAt !== undefined && input.startsAt !== match.starts_at;
+  const cancelling = input.status === 'cancelled';
+  const { data: ticketing } = await db.from('match_ticketing').select('match_id').eq('match_id', match.id).maybeSingle();
+  if (ticketing && (moving || cancelling || input.status === 'postponed')) {
+    throw new ActionError(
+      409,
+      'This game sells tickets through WaitApp. Cancel or move it there so ticket holders are refunded or told.',
+    );
+  }
+  if (moving && new Date(input.startsAt as string).getTime() < Date.now()) {
+    throw new ActionError(409, 'Pick a time in the future.');
+  }
+  if (input.status === 'finished' && new Date(match.starts_at).getTime() > Date.now()) {
+    throw new ActionError(409, 'A game can only be finished after it kicks off.');
+  }
+  const joined = await joinedCount(db, match.id);
+  if (input.capacity !== undefined && input.capacity < joined) {
+    throw new ActionError(409, `${joined} players are already in, so the game needs at least ${joined} spots.`);
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (input.title !== undefined) patch['title'] = input.title;
+  if (input.startsAt !== undefined) patch['starts_at'] = input.startsAt;
+  if (input.capacity !== undefined) patch['capacity'] = input.capacity;
+  if (input.level !== undefined) patch['level'] = input.level;
+  if (input.notes !== undefined) patch['notes'] = input.notes || null;
+  if (input.status !== undefined) {
+    patch['status'] = input.status;
+  } else if (moving && match.status === 'postponed') {
+    // A new time brings a postponed game back.
+    patch['status'] = 'open';
+  }
+  // Keep open/full honest after a capacity change.
+  const capacity = (patch['capacity'] as number | undefined) ?? match.capacity;
+  const status = (patch['status'] as string | undefined) ?? match.status;
+  if (status === 'full' && joined < capacity) patch['status'] = 'open';
+  if (status === 'open' && joined >= capacity && match.kind === 'players') patch['status'] = 'full';
+  if (Object.keys(patch).length === 0) {
+    return { state: 'unchanged', actions: [], match };
+  }
+
+  const { error } = await db.from('matches').update(patch).eq('id', match.id);
+  if (error) throw dbError(error);
+  const updated = await loadMatch(db, match.id);
+
+  // Tell the players who are in. Best-effort, never fails the edit.
+  const { data: parts } = await db
+    .from('match_participants')
+    .select('user_id')
+    .eq('match_id', match.id)
+    .eq('status', 'joined');
+  const others = ((parts ?? []) as { user_id: string }[]).map((p) => p.user_id).filter((id) => id !== userId);
+  if (cancelling) {
+    await notifyUsers(others, 'game_cancelled', { matchId: match.id, title: updated.title, reason: input.reason ?? '' });
+  } else if (moving || input.status === 'postponed') {
+    await notifyUsers(others, 'game_postponed', {
+      matchId: match.id,
+      title: updated.title,
+      newDate: moving ? updated.starts_at : '',
+      reason: input.reason ?? '',
+    });
+  }
+  return { state: 'updated', actions: [], match: updated };
 }
 
 // --- Venue system (Amendment 3): profiles, dashboard, free bookings ---
@@ -1950,6 +2040,8 @@ export async function runAction(
       return postResult(db, userId, postResultSchema.parse(body));
     case 'report_score':
       return reportScore(db, userId, reportScoreSchema.parse(body));
+    case 'update_match':
+      return updateMatch(db, userId, updateMatchSchema.parse(body));
     case 'create_poll':
       return createPoll(db, userId, createPollSchema.parse(body));
     case 'answer_poll':

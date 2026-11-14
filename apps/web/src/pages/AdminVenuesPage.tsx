@@ -68,7 +68,7 @@ export default function AdminVenuesPage() {
           <h1>Venue review</h1>
           <p>This page is for Chabuka admins only.</p>
         </div>
-        <Link className="btn" to="/home">Back to Home</Link>
+        <Link className="btn" to="/today">Back to Home</Link>
       </div>
     );
   }

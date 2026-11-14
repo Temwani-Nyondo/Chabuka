@@ -1,36 +1,103 @@
 @import "tailwindcss";
 
-/* Chabuka visual system (UI Design Direction): night pitch, electric lime as
-   the one accent. Components only reference these variables. */
-:root {
-  --bg: #eef2ee;
+/* Chabuka design system. Light = pitch green, dark = floodlight amber; both
+   share type, spacing, components and green-grey neutrals. Components read
+   only these variables. Legacy names (--accent, --text, --surface-2) stay as
+   aliases so older screens follow the theme too. */
+:root,
+[data-theme='light'] {
+  color-scheme: light;
+  --bg: #f6f7f5;
   --surface: #ffffff;
-  --surface-2: #e4eae4;
-  --text: #101713;
-  --muted: #5b6d63;
-  --border: #d3dcd3;
-  --accent: #e89b00;
-  --accent-ink: #181206;
-  --danger: #ff4d4f;
-  --radius: 14px;
-  --radius-sm: 10px;
-  --shadow: 0 1px 2px rgba(16, 23, 19, 0.06), 0 4px 16px rgba(16, 23, 19, 0.06);
+  --surface-2: #eef1ee;
+  --surface-3: #e3e8e4;
+  --text: #0e1411;
+  --muted: #5b6862;
+  --border: #e1e6e2;
+  --border-strong: #cdd5cf;
+  --brand: #0b6b3a;
+  --on-brand: #ffffff;
+  --brand-soft: #e2f0e7;
+  --brand-text: #0b6b3a;
+  --hl-bg: #fbefc9;
+  --hl-text: #6e4700;
+  --win: #17803f;
+  --win-ink: #ffffff;
+  --loss: #d93036;
+  --loss-ink: #ffffff;
+  --draw: #d5dbd7;
+  --draw-ink: #0e1411;
+  --live: #d93036;
+  --pitch: #2e7d4f;
+  --danger: #c4262c;
+  --accent: var(--brand);
+  --accent-ink: var(--on-brand);
+  --radius: 16px;
+  --radius-sm: 12px;
+  --shadow: 0 1px 2px rgba(14, 20, 17, 0.05);
+  --shadow-lg: 0 10px 30px rgba(14, 20, 17, 0.14);
   --tier-bronze: #c68a4e;
-  --tier-silver: #c9d1d9;
-  --tier-gold: #f5c542;
+  --tier-silver: #9aa5ad;
+  --tier-gold: #d9a61e;
 }
 
 [data-theme='dark'] {
-  --bg: #100e0a;
-  --surface: #1a1712;
-  --surface-2: #26211a;
-  --text: #f2f5f8;
-  --muted: #8b98a5;
-  --border: #2b2a26;
-  --accent: #ffb300;
-  --accent-ink: #181206;
+  color-scheme: dark;
+  --bg: #0d0f0e;
+  --surface: #161917;
+  --surface-2: #1f2421;
+  --surface-3: #2a302c;
+  --text: #f2f4f3;
+  --muted: #8e9893;
+  --border: #2a302c;
+  --border-strong: #3a423e;
+  --brand: #ffb020;
+  --on-brand: #1a1200;
+  --brand-soft: #3a2c0b;
+  --brand-text: #ffc14d;
+  --hl-bg: #123a24;
+  --hl-text: #7fe3aa;
+  --win: #2fa866;
+  --win-ink: #04140b;
+  --loss: #e5484d;
+  --loss-ink: #1a0405;
+  --draw: #3a423e;
+  --draw-ink: #f2f4f3;
+  --live: #ff5a5f;
+  --pitch: #1e4d33;
+  --danger: #ff6b6f;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 10px 30px rgba(0, 0, 0, 0.5);
 }
 
+/* Tailwind utilities that follow the theme: bg-surface, text-muted,
+   border-line, bg-brand, text-brand-text, etc. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-ink: var(--text);
+  --color-muted: var(--muted);
+  --color-line: var(--border);
+  --color-line-strong: var(--border-strong);
+  --color-brand: var(--brand);
+  --color-on-brand: var(--on-brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-text: var(--brand-text);
+  --color-hl: var(--hl-bg);
+  --color-hl-text: var(--hl-text);
+  --color-win: var(--win);
+  --color-loss: var(--loss);
+  --color-live: var(--live);
+  --color-danger: var(--danger);
+  --color-pitch: var(--pitch);
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Legacy component and element styles live in a layer below Tailwind's
+   utilities, so a utility class on an element always wins. */
+@layer components {
 * {
   box-sizing: border-box;
 }
@@ -40,109 +107,58 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  font-size: 15px;
+  line-height: 1.45;
   -webkit-font-smoothing: antialiased;
 }
 
 h1 {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  font-size: 30px;
-  margin: 8px 0 4px;
-  line-height: 1.1;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  margin: 4px 0 4px;
+  line-height: 1.15;
 }
 
 h2 {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  font-size: 22px;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin: 4px 0 8px;
 }
 
-/* Soft floodlight glow (amber, low opacity) behind the main card. */
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Hide scrollbars on horizontal carousels while keeping them scrollable. */
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+/* Kept for screens that still add it; the photo glow is gone. */
 .floodlight {
   position: relative;
 }
 
-/* Background skins: chosen in the locker room, applied on <html>. */
-[data-skin='clean'] .floodlight::before {
-  display: none;
-}
 
-/* Ambient backdrop inside the app: a faint fixed pitch photo behind every
-   authed screen so pages are never flat. Theme-aware strength keeps cards
-   and text crisp in both themes. */
 .app {
-  position: relative;
+  min-height: 100dvh;
 }
 
-.app::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: #100e0a url('/brand/hero-pitch.jpg') center 30% / cover no-repeat;
-  opacity: 0.16;
-  pointer-events: none;
-  z-index: 0;
+.page {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 16px 16px 32px;
 }
 
-[data-theme='light'] .app::before {
-  opacity: 0.08;
+.nudge {
+  border-left: 3px solid var(--brand);
 }
 
-.app > main {
-  position: relative;
-  z-index: 1;
-}
-
-[data-skin='clean'] .app::before,
-[data-skin='matchday'] .app::before {
-  display: none;
-}
-
-[data-skin='stripes'] body {
-  background-image: repeating-linear-gradient(
-    -45deg,
-    transparent 0 14px,
-    rgba(255, 179, 0, 0.05) 14px 15px
-  );
-}
-
-/* Matchday: the celebration photo sits fixed behind everything, veiled so
-   cards and text stay legible in both themes. */
-[data-skin='matchday'] body {
-  background: #100e0a url('/brand/celebration.jpg') center top / cover no-repeat fixed;
-}
-
-[data-skin='matchday'] body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  background: rgba(10, 8, 5, 0.66);
-  pointer-events: none;
-  z-index: 0;
-}
-
-[data-skin='matchday'] .app,
-[data-skin='matchday'] .page,
-[data-skin='matchday'] .topbar {
-  position: relative;
-  z-index: 1;
-}
-
-[data-skin='matchday'] .topbar {
-  background: rgba(16, 14, 10, 0.88);
-}
-
-/* Matchday in Light mode: lift the veil so the theme switch stays visible. */
-[data-theme='light'][data-skin='matchday'] body::before {
-  background: rgba(238, 242, 238, 0.84);
-}
-
-[data-theme='light'][data-skin='matchday'] .topbar {
-  background: rgba(238, 242, 238, 0.9);
-}
 
 /* Login: full sports backdrop, card floats above it. */
 .auth-page {
@@ -171,9 +187,10 @@ h2 {
 }
 
 .auth-card {
-  width: min(420px, 100%);
-  background: rgba(21, 24, 27, 0.92);
-  backdrop-filter: blur(6px);
+  width: 100%;
+  margin: 0;
+  background: var(--surface);
+  border-radius: 24px;
 }
 
 .auth-page h1 {
@@ -235,19 +252,6 @@ h2 {
   text-decoration: none;
 }
 
-.floodlight::before {
-  content: '';
-  position: absolute;
-  inset: -40px -16px auto;
-  height: 180px;
-  background: radial-gradient(ellipse at 50% 0%, rgba(255, 179, 0, 0.14), transparent 70%);
-  pointer-events: none;
-}
-
-/* Nudge card: one lime Join button, fits-AAA readably on dark or light. */
-.nudge {
-  border-left: 4px solid var(--accent);
-}
 
 /* Full-screen Match Found reveal. Badges slide in, VS punches in, ~1s,
    tap to skip; reduced motion collapses everything to a fade. */
@@ -267,7 +271,6 @@ h2 {
 }
 
 .match-found .versus {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-size: 56px;
   text-transform: uppercase;
   color: var(--accent);
@@ -360,107 +363,6 @@ code {
   font-size: 0.9em;
 }
 
-.app {
-  min-height: 100dvh;
-  padding-bottom: calc(24px + env(safe-area-inset-bottom));
-}
-
-.page {
-  max-width: 680px;
-  margin: 0 auto;
-  padding: 28px 20px 32px;
-}
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 1500;
-  display: flex;
-  align-items: center;
-  gap: 20px;
-  max-width: 1080px;
-  margin: 0 auto;
-  padding: 12px 20px;
-  background: color-mix(in srgb, var(--bg) 90%, transparent);
-  backdrop-filter: blur(10px);
-  border-bottom: 1px solid var(--border);
-}
-
-.topbar-brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  background: none;
-  border: 0;
-  padding: 0;
-  cursor: pointer;
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
-  font-size: 20px;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-  color: var(--text);
-}
-
-.topbar-theme {
-  min-height: 0;
-  padding: 6px 12px;
-}
-
-.topbar-nav {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-right: auto;
-}
-
-.topbar-link {
-  color: var(--muted);
-  text-decoration: none;
-  font-weight: 700;
-  font-size: 14px;
-  padding: 8px 12px;
-  border-radius: 999px;
-  white-space: nowrap;
-}
-
-.topbar-link:hover {
-  color: var(--text);
-  background: var(--surface-2);
-}
-
-.topbar-link-active {
-  color: var(--text);
-  background: var(--surface-2);
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-left: auto;
-}
-
-.topbar-create {
-  min-height: 0;
-  padding: 8px 16px;
-  font-size: 14px;
-}
-
-@media (max-width: 640px) {
-  .topbar {
-    gap: 12px;
-    padding: 10px 12px;
-    flex-wrap: wrap;
-  }
-
-  .topbar-nav {
-    order: 3;
-    width: 100%;
-    margin-right: 0;
-    overflow-x: auto;
-    padding-bottom: 2px;
-  }
-}
 
 /* Page header pattern: eyebrow, title, one-line sub. Every screen uses it. */
 .page-head {
@@ -851,7 +753,7 @@ code {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: linear-gradient(120deg, #100e0a 30%, #26211a 100%);
+  background: var(--surface-2);
 }
 
 .venue-photo-fallback.venue-photo-banner {
@@ -860,7 +762,6 @@ code {
 }
 
 .venue-photo-fallback span {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-size: 64px;
   line-height: 1;
   color: var(--accent);
@@ -1465,7 +1366,6 @@ button.sheet-item {
 }
 
 .landing-logo {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 24px;
@@ -1701,7 +1601,6 @@ button.sheet-item {
 .landing-step::before {
   content: '0' counter(step);
   display: block;
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-size: 40px;
   line-height: 1;
   color: var(--accent);
@@ -1766,7 +1665,6 @@ button.sheet-item {
   border: 2px solid var(--accent-ink);
   background: var(--accent);
   color: var(--accent-ink);
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-size: 17px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
@@ -1848,7 +1746,6 @@ button.sheet-item {
 }
 
 .gaffer-panel-bar strong {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 18px;
@@ -1878,7 +1775,6 @@ button.sheet-item {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-size: 32px;
   background: var(--surface-2);
   color: var(--accent-strong, var(--accent));
@@ -2189,7 +2085,6 @@ button.sheet-item {
   line-height: 1.2;
 }
 .gaffer-header-text strong {
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   font-size: 18px;
@@ -2235,7 +2130,6 @@ button.sheet-item {
   border: 2px solid var(--accent-ink);
   background: var(--accent);
   color: var(--accent-ink);
-  font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif;
   font-weight: 700;
   line-height: 1;
 }
@@ -2458,9 +2352,9 @@ button.sheet-item {
 .sb-team { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .sb-team-name { font-size: 0.95rem; overflow-wrap: anywhere; color: var(--muted); }
 .sb-team-win .sb-team-name { color: var(--text); font-weight: 700; }
-.sb-score { font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif; font-size: clamp(3rem, 16vw, 5.5rem); line-height: 1; }
+.sb-score { font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; font-size: clamp(3rem, 16vw, 5.5rem); line-height: 1; }
 .sb-mid { display: flex; flex-direction: column; align-items: center; gap: 6px; }
-.sb-clock { font-family: 'Oswald', 'Arial Narrow', system-ui, sans-serif; font-size: 1.6rem; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
+.sb-clock { font-weight: 800; font-size: 1.6rem; letter-spacing: 0.04em; font-variant-numeric: tabular-nums; }
 .sb-status { font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
 .sb-status-live { color: var(--accent); }
 .sb-periods { display: flex; gap: 12px; justify-content: center; flex-wrap: wrap; margin: 12px 0 0; font-size: 0.85rem; color: var(--muted); }
@@ -2501,4 +2395,5 @@ button.sheet-item {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
 }

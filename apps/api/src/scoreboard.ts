@@ -44,6 +44,8 @@ interface BoardRow {
   away_team_id: string | null;
   status: 'setup' | 'live' | 'paused' | 'break' | 'ended';
   official_id: string | null;
+  /** Runs the clock only (start/end periods, pause/resume, timeouts). */
+  timekeeper_id?: string | null;
   appointed_by: string | null;
   created_by: string;
   home_score: number;
@@ -104,6 +106,8 @@ export interface BoardBundle {
 export interface ControlBundle extends BoardBundle {
   id: string;
   isOfficial: boolean;
+  isTimekeeper: boolean;
+  timekeeper: { userId: string; name: string } | null;
   canManage: boolean;
   fixtureId: string | null;
   matchId: string | null;
@@ -475,13 +479,30 @@ export async function getControlScoreboard(service: SupabaseClient, userId: stri
   const board = await loadBoard(service, { id: boardId });
   const bundle = await bundleOf(service, board);
   const isOfficial = board.official_id === userId;
+  const isTimekeeper = !!board.timekeeper_id && board.timekeeper_id === userId;
   const canManage = isOfficial || (await managerOf(service, board, userId));
-  if (!canManage) throw new ActionError(403, 'You are not part of this game.');
+  if (!canManage && !isTimekeeper) throw new ActionError(403, 'You are not part of this game.');
   const players = await loadPlayers(service, board.id);
   const candidates = players
     .filter((p): p is PlayerRow & { user_id: string } => !!p.user_id)
     .map((p) => ({ userId: p.user_id, name: p.name }));
-  return { ...bundle, id: board.id, isOfficial, canManage, fixtureId: board.fixture_id, matchId: board.match_id, candidates, pickup: !board.home_team_id || !board.away_team_id };
+  let timekeeper: ControlBundle['timekeeper'] = null;
+  if (board.timekeeper_id) {
+    const names = await namesFor(service, [board.timekeeper_id]);
+    timekeeper = { userId: board.timekeeper_id, name: names.get(board.timekeeper_id) ?? 'Timekeeper' };
+  }
+  return {
+    ...bundle,
+    id: board.id,
+    isOfficial,
+    isTimekeeper,
+    timekeeper,
+    canManage,
+    fixtureId: board.fixture_id,
+    matchId: board.match_id,
+    candidates,
+    pickup: !board.home_team_id || !board.away_team_id,
+  };
 }
 
 export interface TargetInfo {
@@ -534,6 +555,27 @@ export async function appointOfficial(service: SupabaseClient, userId: string, b
   }
   await broadcast(service, board.share_code, { board: await publicBoard(service, { ...board, official_id: officialId }), add: [], voided: [] });
 }
+
+/** The clock-only official. Pass null to remove the timekeeper. */
+export async function appointTimekeeper(service: SupabaseClient, userId: string, boardId: string, timekeeperId: string | null): Promise<void> {
+  const board = await loadBoard(service, { id: boardId });
+  if (board.official_id !== userId && !(await managerOf(service, board, userId))) {
+    throw new ActionError(403, 'Only the organiser, a captain or the official can appoint the timekeeper.');
+  }
+  if (board.status === 'ended') throw new ActionError(409, 'This game has ended.');
+  if (timekeeperId) {
+    const { data } = await service.from('profiles').select('id').eq('id', timekeeperId).maybeSingle();
+    if (!data) throw new ActionError(404, 'That person is not on Chabuka.');
+  }
+  const { error } = await service.from('scoreboards').update({ timekeeper_id: timekeeperId }).eq('id', board.id);
+  if (error) throw new ActionError(500, 'Could not appoint the timekeeper.');
+  if (timekeeperId && timekeeperId !== userId) {
+    await notifyUsers([timekeeperId], 'timekeeper_appointed', { boardId: board.id, shareCode: board.share_code, title: `${board.home_name} vs ${board.away_name}` });
+  }
+}
+
+/** Event types a timekeeper may record: the clock and timeouts, never the score. */
+export const CLOCK_EVENT_TYPES: ReadonlySet<string> = new Set(['period_start', 'period_end', 'clock_pause', 'clock_resume', 'timeout']);
 
 export const lineupSchema = z.object({ starters: z.array(z.string().uuid()).max(60) });
 export const addPlayerSchema = z.object({
@@ -636,7 +678,11 @@ export async function addScoreboardEvents(
   now: number = Date.now(),
 ): Promise<AddEventsResult> {
   let board = await loadBoard(service, { id: boardId });
-  if (board.official_id !== userId) throw new ActionError(403, 'Only the appointed official can record events.');
+  const clockOnly = rawEvents.every((e) => CLOCK_EVENT_TYPES.has(String((e as { type?: unknown } | null)?.type ?? '')));
+  const isTimekeeper = !!board.timekeeper_id && board.timekeeper_id === userId;
+  if (board.official_id !== userId && !(isTimekeeper && clockOnly)) {
+    throw new ActionError(403, isTimekeeper ? 'The timekeeper runs the clock; the scorekeeper records goals and cards.' : 'Only the appointed official can record events.');
+  }
   const players = await loadPlayers(service, board.id);
   const roster = toRoster(players);
   const existing = (await loadEvents(service, board.id)).map(toRecord);

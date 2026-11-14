@@ -91,7 +91,7 @@ export default function InvitePage() {
             <Link className="btn btn-primary" to={`/teams/${claimedTeamId}`}>
               Open my team
             </Link>
-            <Link className="btn btn-ghost" to="/home">Home</Link>
+            <Link className="btn btn-ghost" to="/today">Home</Link>
           </div>
         </div>
       ) : !user ? (

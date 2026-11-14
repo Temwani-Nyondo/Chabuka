@@ -27,13 +27,13 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       return {
         title: 'New event in your circle',
         body: text(p.title),
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     case 'player_joined':
       return {
         title: 'A player joined your match',
         body: text(p.title),
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     case 'poll_created':
       return {
@@ -58,20 +58,20 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       return {
         title: 'Your ticket was refunded',
         body: text(p.title),
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     case 'game_cancelled':
       return {
-        title: 'A game you have a ticket for was cancelled',
+        title: 'A game you joined was cancelled',
         body: [text(p.title), text(p.reason)].filter(Boolean).join(' - '),
-        href: null,
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : null,
       };
     case 'game_postponed': {
       const when = text(p.newDate) ? new Date(text(p.newDate)).toLocaleString() : '';
       return {
-        title: 'A game you have a ticket for moved',
-        body: [text(p.title), when ? `now ${when}` : ''].filter(Boolean).join(' - '),
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        title: text(p.newDate) ? 'A game you joined has a new time' : 'A game you joined was postponed',
+        body: [text(p.title), when ? `now ${when}` : '', text(p.reason)].filter(Boolean).join(' - '),
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     }
     case 'scoreboard_appointed':
@@ -86,13 +86,13 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       return {
         title: 'Final score',
         body: `${text(p.homeName)} ${text(p.home)} - ${text(p.away)} ${text(p.awayName)}`,
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     case 'game_venue_booked':
       return {
         title: 'The venue is booked for your game',
         body: [text(p.title), text(p.venue), text(p.spaceName)].filter(Boolean).join(' - '),
-        href: text(p.matchId) ? `/explore?highlight=${encodeURIComponent(text(p.matchId))}` : '/explore',
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     case 'space_booking_requested':
       return {
@@ -138,8 +138,37 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         body: [text(p.title), text(p.note)].filter(Boolean).join(' - '),
         href: '/venues/dashboard',
       };
+    case 'lineup_published': {
+      const type = text(p.subjectType);
+      const id = text(p.subjectId);
+      return {
+        title: text(p.teamName) ? `${text(p.teamName)} lineup is out` : 'The sides are picked',
+        body: text(p.title),
+        href: type === 'match' && id ? `/games/${id}` : type && id ? `/lineup/${type}/${id}` : null,
+      };
+    }
+    case 'availability_requested':
+      return {
+        title: 'Are you available?',
+        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        href: text(p.subjectType) === 'match' && text(p.subjectId) ? `/games/${text(p.subjectId)}` : text(p.teamId) ? `/teams/${text(p.teamId)}` : null,
+      };
+    case 'team_join_request':
+      return { title: `Someone wants to join ${text(p.teamName) || 'your team'}`, body: '', href: text(p.teamId) ? `/teams/${text(p.teamId)}?tab=admin` : null };
+    case 'team_joined':
+      return { title: `A new player joined ${text(p.teamName) || 'your team'}`, body: '', href: text(p.teamId) ? `/teams/${text(p.teamId)}?tab=squad` : null };
+    case 'team_join_answered':
+      return {
+        title: text(p.decision) === 'accepted' ? `You are in ${text(p.teamName) || 'the team'}` : `${text(p.teamName) || 'The team'} said not this time`,
+        body: '',
+        href: text(p.decision) === 'accepted' && text(p.teamId) ? `/teams/${text(p.teamId)}` : null,
+      };
+    case 'team_ownership':
+      return { title: `You now own ${text(p.teamName) || 'a team'}`, body: '', href: text(p.teamId) ? `/teams/${text(p.teamId)}` : null };
+    case 'timekeeper_appointed':
+      return { title: 'You are the timekeeper', body: text(p.title), href: text(p.boardId) ? `/scoreboard/${text(p.boardId)}/control` : null };
     case 'result_posted':
-      return { title: 'New result on a board you follow', body: '', href: '/board' };
+      return { title: 'New result on a board you follow', body: '', href: text(p.competitionId) ? `/board?c=${text(p.competitionId)}` : '/board' };
     default:
       return { title: 'Update', body: text(p.title), href: null };
   }

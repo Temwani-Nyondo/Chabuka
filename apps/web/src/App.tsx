@@ -23,6 +23,10 @@ import TeamsPage from './pages/TeamsPage';
 import ProfilePage from './pages/ProfilePage';
 import VenueProfilePage from './pages/VenueProfilePage';
 import VenueDashboardPage from './pages/VenueDashboardPage';
+import GamePage from './pages/GamePage';
+import SettingsPage from './pages/SettingsPage';
+import LineupPage from './pages/LineupPage';
+import RulesPage from './pages/RulesPage';
 
 function LandingGate() {
   const { loading, user } = useAuth();
@@ -32,7 +36,7 @@ function LandingGate() {
         <p className="loading">Loading…</p>
       </div>
     );
-  if (user) return <Navigate to="/home" replace />;
+  if (user) return <Navigate to="/today" replace />;
   return <LandingPage />;
 }
 
@@ -54,15 +58,21 @@ export default function App() {
         <Route path="/connect/waitapp" element={<WaitAppConnectPage />} />
         <Route path="/scoreboard/:id/control" element={<ScoreboardControlPage />} />
         <Route element={<AppShell />}>
-          <Route path="home" element={<HomePage />} />
+          <Route path="today" element={<HomePage />} />
+          <Route path="home" element={<Navigate to="/today" replace />} />
           <Route path="explore" element={<ExplorePage />} />
+          <Route path="games/:id" element={<GamePage />} />
+          <Route path="lineup/:type/:id" element={<LineupPage />} />
+          <Route path="rules/:type/:id" element={<RulesPage />} />
           <Route path="teams" element={<TeamsPage />} />
-        <Route path="teams/:id" element={<TeamDetailPage />} />
+          <Route path="teams/:id" element={<TeamDetailPage />} />
           <Route path="gaffer" element={<GafferPage />} />
           <Route path="board" element={<CompetitionsPage />} />
           <Route path="circles" element={<CirclesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
-          <Route path="profile" element={<ProfilePage />} />
+          <Route path="you" element={<ProfilePage />} />
+          <Route path="you/settings" element={<SettingsPage />} />
+          <Route path="profile" element={<Navigate to="/you" replace />} />
           <Route path="venues/dashboard" element={<VenueDashboardPage />} />
           <Route path="admin/venues" element={<AdminVenuesPage />} />
           <Route path="venues/:venueId" element={<VenueProfilePage />} />

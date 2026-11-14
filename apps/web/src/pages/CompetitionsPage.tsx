@@ -1,6 +1,7 @@
 import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import MatchFoundOverlay from '../components/MatchFoundOverlay';
 import { useAuth } from '../auth/AuthContext';
@@ -30,7 +31,9 @@ export default function CompetitionsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showForm, setShowForm] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  // ?c=<id> (from Explore) opens that competition's board directly.
+  const [searchParams] = useSearchParams();
+  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get('c'));
   const [board, setBoard] = useState<Board | null>(null);
   const [tab, setTab] = useState<Tab>('fixtures');
   const [busy, setBusy] = useState(false);

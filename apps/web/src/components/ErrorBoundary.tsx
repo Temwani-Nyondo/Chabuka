@@ -22,7 +22,7 @@ export default class ErrorBoundary extends Component<{ children: ReactNode }, { 
         <div className="card">
           <p>This screen hit an error. Your data is safe.</p>
           <p className="muted">{this.state.error.message}</p>
-          <a className="btn btn-primary" href="/home">Back to Home</a>
+          <a className="btn btn-primary" href="/today">Back to Home</a>
         </div>
       </div>
     );

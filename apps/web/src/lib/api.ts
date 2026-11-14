@@ -12,6 +12,7 @@ import type {
   SetPositionInput,
   SetRoleInput,
   UpdateTeamInput,
+  UpdateMatchInput,
 } from '@chabuka/shared';
 
 // One action layer: every write goes through POST /api/actions/:name with
@@ -266,6 +267,19 @@ export function joinMatchAction(matchId: string, accessToken: string): Promise<A
 
 export function withdrawMatchAction(matchId: string, accessToken: string): Promise<ActionResult> {
   return runAction<ActionResult>('withdraw_match', { matchId }, accessToken);
+}
+
+// Organiser: edit, move, cancel or close out a game.
+export function updateMatchAction(input: UpdateMatchInput, accessToken: string): Promise<unknown> {
+  return runAction('update_match', input, accessToken);
+}
+
+// Organiser: final score; closes the game out once it has kicked off.
+export function reportScoreAction(
+  input: { matchId: string; homeScore: number; awayScore: number },
+  accessToken: string,
+): Promise<unknown> {
+  return runAction('report_score', input, accessToken);
 }
 
 export function createTeamAction(input: CreateTeamInput, accessToken: string): Promise<unknown> {

@@ -4,13 +4,12 @@ import { BrowserRouter } from 'react-router-dom';
 import App from './App';
 import { AuthProvider } from './auth/AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
-import { applySkin, applyTheme, getSavedSkin, getSavedTheme } from './lib/theme';
+import { bootTheme } from './lib/theme';
 import './index.css';
 
-// The theme and skin live on <html>, outside React: apply the saved choices
-// before the first paint so every route renders themed and there is no flash.
-applyTheme(getSavedTheme());
-applySkin(getSavedSkin());
+// The theme lives on <html>, outside React: apply the saved choice before the
+// first paint so every route renders themed and there is no flash.
+bootTheme();
 
 const rootEl = document.getElementById('root');
 if (!rootEl) throw new Error('Missing #root element');

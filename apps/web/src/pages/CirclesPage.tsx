@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import EmptyState from '../components/EmptyState';
 import { useAuth } from '../auth/AuthContext';
 import { createCircleAction, joinCircleAction, leaveCircleAction, updateCircleAction } from '../lib/api';
@@ -38,7 +39,9 @@ export default function CirclesPage() {
   const [events, setEvents] = useState<Record<string, { match: Match; tagged: boolean }[]>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+  // ?create=1 (from the Create sheet) opens the new-circle form.
+  const [searchParams] = useSearchParams();
+  const [showForm, setShowForm] = useState(() => searchParams.get('create') === '1');
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 

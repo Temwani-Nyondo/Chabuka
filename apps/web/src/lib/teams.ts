@@ -51,6 +51,7 @@ export interface TeamMemberDetail {
   userId: string;
   role: TeamRole;
   position: string | null;
+  shirt: number | null;
   name: string | null;
   photoUrl: string | null;
 }
@@ -66,6 +67,8 @@ export interface TeamFixture {
   awayScore: number | null;
   status: string;
   isHome: boolean | null;
+  /** The game behind an accepted challenge: availability and lineups hang off it. */
+  matchId: string | null;
 }
 
 export interface TeamDetail {
@@ -88,13 +91,14 @@ export async function fetchTeamDetail(teamId: string, userId: string): Promise<T
 
   const { data: memberRows, error: memberErr } = await supabase
     .from('team_members')
-    .select('user_id,role,position')
+    .select('user_id,role,position,shirt_number')
     .eq('team_id', teamId);
   if (memberErr) throw new Error(memberErr.message);
   const memberList = (memberRows ?? []) as {
     user_id: string;
     role: TeamRole;
     position: string | null;
+    shirt_number?: number | null;
   }[];
   const myRole = memberList.find((m) => m.user_id === userId)?.role ?? null;
 
@@ -113,6 +117,7 @@ export async function fetchTeamDetail(teamId: string, userId: string): Promise<T
     userId: m.user_id,
     role: m.role,
     position: m.position,
+    shirt: m.shirt_number ?? null,
     name: profileMap.get(m.user_id)?.name ?? null,
     photoUrl: profileMap.get(m.user_id)?.photoUrl ?? null,
   }));
@@ -196,6 +201,7 @@ export async function fetchTeamDetail(teamId: string, userId: string): Promise<T
         awayScore: null,
         status: c.status,
         isHome,
+        matchId: c.match_id ?? null,
       };
     }),
     ...fixtureRows.map((f): TeamFixture => {
@@ -212,6 +218,7 @@ export async function fetchTeamDetail(teamId: string, userId: string): Promise<T
         awayScore: f.away_score,
         status: f.status,
         isHome,
+        matchId: null,
       };
     }),
   ].sort((a, b) => (b.startsAt ?? '').localeCompare(a.startsAt ?? ''));

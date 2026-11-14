@@ -113,6 +113,8 @@ export const matchSchema = z.object({
   status: matchStatusSchema,
   notes: z.string().nullable().optional(),
   circle_id: z.string().uuid().nullable().optional(),
+  home_score: z.number().int().nullable().optional(),
+  away_score: z.number().int().nullable().optional(),
 });
 export type Match = z.infer<typeof matchSchema>;
 
@@ -150,6 +152,20 @@ export const matchIdSchema = z.object({
   matchId: z.string().uuid(),
 });
 export type MatchIdInput = z.infer<typeof matchIdSchema>;
+
+// Organiser edits to a game: details, a new time, cancel, or close it out.
+// Only the fields given change. 'finished' is refused before kick-off.
+export const updateMatchSchema = z.object({
+  matchId: z.string().uuid(),
+  title: z.string().trim().min(1, 'Title is required').max(80).optional(),
+  startsAt: z.iso.datetime({ offset: true }).optional(),
+  capacity: z.number().int().min(2).max(100).optional(),
+  level: levelSchema.optional(),
+  notes: z.string().trim().max(500).optional(),
+  status: z.enum(['open', 'postponed', 'cancelled', 'finished']).optional(),
+  reason: z.string().trim().max(200).optional(),
+});
+export type UpdateMatchInput = z.infer<typeof updateMatchSchema>;
 
 // --- Venues (brief section 7): listed places to play, picked from the map
 // or a listing; a dropped pin on a match is venue_id-less lat/lng. ---
@@ -367,6 +383,8 @@ export const teamSchema = z.object({
   lng: z.number().nullable().optional(),
   verified: z.boolean().optional(),
   created_by: z.string().uuid(),
+  join_policy: z.enum(['invite', 'request', 'open']).optional(),
+  kit_colour: z.string().nullable().optional(),
 });
 export type Team = z.infer<typeof teamSchema>;
 
@@ -848,6 +866,7 @@ export const ACTION_NAMES = [
   'close_registration',
   'post_result',
   'report_score',
+  'update_match',
   'create_poll',
   'answer_poll',
   'post_announcement',
@@ -1236,3 +1255,4 @@ export function classifyEnder(utterance: string): ConversationEnder {
 }
 
 export * from './scoreboard.js';
+export * from './teamAdmin.js';

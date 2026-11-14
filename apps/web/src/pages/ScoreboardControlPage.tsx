@@ -9,6 +9,7 @@ import {
   ScoreboardApiError,
   addPlayerCall,
   appointOfficialCall,
+  appointTimekeeperCall,
   fetchControlBoard,
   finishCall,
   movePlayerCall,
@@ -19,6 +20,11 @@ import {
   useServerNow,
 } from '../lib/scoreboard';
 import type { ControlBundle } from '../lib/scoreboard';
+import { fetchRuleBook } from '../lib/teamAdmin';
+import type { RuleBookView } from '../lib/teamAdmin';
+import { Segmented } from '../components/ui';
+
+type Role = 'score' | 'time' | 'rules';
 
 type Picker =
   | { kind: 'goal'; side: ScoreSide; points: number; step: 'points' | 'scorer' | 'assist' | 'own'; playerId?: string }
@@ -61,6 +67,14 @@ export default function ScoreboardControlPage() {
   const [picker, setPicker] = useState<Picker>(null);
   const [offset, setOffset] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [role, setRole] = useState<Role>('score');
+  const roleChosen = useRef(false);
+  // A timekeeper lands on the clock; everyone else on the score.
+  useEffect(() => {
+    if (!bundle || roleChosen.current) return;
+    roleChosen.current = true;
+    if (bundle.isTimekeeper && !bundle.isOfficial) setRole('time');
+  }, [bundle]);
   const flushing = useRef(false);
   const pendingRef = useRef<ScoreboardEventInput[]>([]);
   pendingRef.current = pending;
@@ -163,7 +177,7 @@ export default function ScoreboardControlPage() {
       <div className="page">
         <h1>Scoreboard</h1>
         <p className="error">{loadError}</p>
-        <Link className="btn" to="/home">Back to Home</Link>
+        <Link className="btn" to="/today">Back to Home</Link>
       </div>
     );
   }
@@ -171,6 +185,7 @@ export default function ScoreboardControlPage() {
 
   const { board } = bundle;
   const cfg = board.config;
+  const canClock = bundle.isOfficial || bundle.isTimekeeper;
   const byId = new Map(bundle.roster.map((p) => [p.id, p]));
   const isOfficial = bundle.isOfficial;
 
@@ -390,10 +405,39 @@ export default function ScoreboardControlPage() {
     }
   };
 
+  const clockControls = () => {
+    if (!canClock) {
+      return <p className="hint">The timekeeper or the scorekeeper runs the clock. You can follow it here.</p>;
+    }
+    if (state.kind === 'racket') return <p className="hint">Tennis and padel have no game clock. The scorekeeper starts the match.</p>;
+    switch (state.status) {
+      case 'setup':
+        return <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'period_start' })}>Start the clock: kick off</button>;
+      case 'break':
+        return <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'period_start' })}>Start {periodsCfg?.periodNames[state.period] ?? 'next period'}</button>;
+      case 'ended':
+        return <p className="hint">Full time.</p>;
+      default:
+        return (
+          <>
+            {state.status === 'live' ? (
+              <button className="btn sb-big" type="button" onClick={() => void emit({ type: 'clock_pause' })}>Stop clock</button>
+            ) : (
+              <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'clock_resume' })}>Resume clock</button>
+            )}
+            <button className="btn sb-big" type="button" onClick={() => void emit({ type: 'period_end' })}>
+              End {periodsCfg?.periods === 2 ? (state.period === 1 ? 'first half' : 'second half') : (periodsCfg?.periodNames[state.period - 1] ?? 'period')}
+            </button>
+            {periodsCfg && periodsCfg.timeoutsPerSide > 0 ? sideButtons('Timeout', (side) => void emit({ type: 'timeout', side })) : null}
+          </>
+        );
+    }
+  };
+
   return (
     <div className="page sb-page">
       <div className="sb-top">
-        <Link to="/home">← Home</Link>
+        <Link to="/today">← Home</Link>
         <span className={`sb-live-dot${offline ? '' : ' sb-live-on'}`}>
           {offline ? `Offline · ${pending.length} waiting` : pending.length > 0 ? `Saving ${pending.length}…` : 'All saved'}
         </span>
@@ -420,12 +464,46 @@ export default function ScoreboardControlPage() {
         </p>
       ) : null}
 
-      {picker ? renderPicker() : controls()}
+      <Segmented<Role>
+        label="Official role"
+        value={role}
+        onChange={(r) => {
+          setPicker(null);
+          setRole(r);
+        }}
+        options={[
+          { value: 'score', label: 'Scorekeeper' },
+          { value: 'time', label: 'Timekeeper' },
+          { value: 'rules', label: 'Rule book' },
+        ]}
+      />
 
-      {isOfficial ? (
-        <div className="actions-row">
-          <button className="btn btn-ghost" type="button" disabled={busy || records.length === 0} onClick={undo}>Undo last</button>
-        </div>
+      {role === 'score' ? (
+        <>
+          {!isOfficial && bundle.isTimekeeper ? (
+            <p className="hint">You are the timekeeper. {board.officialName ? `${board.officialName} keeps the score.` : 'No scorekeeper yet.'}</p>
+          ) : null}
+          {picker ? renderPicker() : controls()}
+          {isOfficial ? (
+            <div className="actions-row">
+              <button className="btn btn-ghost" type="button" disabled={busy || records.length === 0} onClick={undo}>Undo last</button>
+            </div>
+          ) : null}
+        </>
+      ) : null}
+
+      {role === 'time' ? (
+        <>
+          {clockControls()}
+          <TimekeeperPanel bundle={bundle} userId={user.id} busy={busy} onAppoint={(tk) => token && id && run(() => appointTimekeeperCall(token, id, tk))} />
+        </>
+      ) : null}
+
+      {role === 'rules' ? (
+        <RulesPanel
+          token={token}
+          target={bundle.fixtureId ? { type: 'fixture', id: bundle.fixtureId } : bundle.matchId ? { type: 'match', id: bundle.matchId } : null}
+        />
       ) : null}
 
       {state.status === 'ended' && !board.resultPosted && (isOfficial || bundle.canManage) ? (
@@ -444,6 +522,84 @@ export default function ScoreboardControlPage() {
       <Timeline board={board} state={state} roster={bundle.roster} />
       <h2>Line-ups</h2>
       <Lineups board={board} state={state} roster={bundle.roster} />
+    </div>
+  );
+}
+
+function TimekeeperPanel({ bundle, userId, busy, onAppoint }: { bundle: ControlBundle; userId: string; busy: boolean; onAppoint: (id: string | null) => void }) {
+  const canAppoint = bundle.canManage || bundle.isOfficial;
+  const tk = bundle.timekeeper;
+  const who = tk ? (tk.userId === userId ? 'You are' : `${tk.name} is`) : null;
+  return (
+    <div className="card sb-panel">
+      <strong>Timekeeper</strong>
+      <p className="muted">
+        {who ? `${who} keeping time.` : 'No separate timekeeper: the scorekeeper runs the clock.'} The timekeeper starts and stops the clock, ends periods and calls
+        timeouts, but cannot change the score.
+      </p>
+      {canAppoint && bundle.board.status !== 'ended' ? (
+        <div className="actions-row">
+          {tk?.userId !== userId ? (
+            <button className="btn" type="button" disabled={busy} onClick={() => onAppoint(userId)}>
+              I will keep time
+            </button>
+          ) : null}
+          {bundle.candidates
+            .filter((c) => c.userId !== tk?.userId && c.userId !== userId)
+            .slice(0, 8)
+            .map((c) => (
+              <button key={c.userId} className="btn btn-ghost" type="button" disabled={busy} onClick={() => onAppoint(c.userId)}>
+                {c.name}
+              </button>
+            ))}
+          {tk ? (
+            <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => onAppoint(null)}>
+              Remove timekeeper
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function RulesPanel({ token, target }: { token: string | undefined; target: { type: 'fixture' | 'match'; id: string } | null }) {
+  const [book, setBook] = useState<RuleBookView | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const type = target?.type;
+  const targetId = target?.id;
+  useEffect(() => {
+    if (!token || !type || !targetId) return;
+    fetchRuleBook(token, type, targetId)
+      .then(setBook)
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load the rules.'));
+  }, [token, type, targetId]);
+  if (!target) return <p className="hint">This scoreboard is not linked to a game, so it has no rule book.</p>;
+  if (error) return <p className="error">{error}</p>;
+  if (!book) return <p className="loading">Loading the rules…</p>;
+  return (
+    <div className="card sb-panel">
+      <strong>{book.title}</strong>
+      <p className="muted">
+        {book.source === 'template'
+          ? 'Starter rules for this sport.'
+          : book.source === 'competition'
+            ? 'Set by the competition organiser.'
+            : `Set by the host · version ${book.version}`}
+      </p>
+      <ol className="m-0 flex flex-col gap-2 pl-5">
+        {book.rules.map((r, i) => (
+          <li key={i}>
+            <strong>{r.title}</strong>
+            {r.body ? <span className="muted"> {r.body}</span> : null}
+          </li>
+        ))}
+      </ol>
+      {book.canEdit ? (
+        <Link className="btn btn-ghost" to={`/rules/${target.type}/${target.id}`}>
+          Edit the rule book
+        </Link>
+      ) : null}
     </div>
   );
 }

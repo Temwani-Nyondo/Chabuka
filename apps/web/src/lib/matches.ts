@@ -108,6 +108,100 @@ export async function fetchMyMatches(userId: string): Promise<MatchListing[]> {
   return buildListings(data ?? [], userId);
 }
 
+// Games I played or hosted that have already started, newest first: the
+// player's record and the "add the result" prompts both read this.
+export async function fetchMyPastMatches(userId: string, limit = 30): Promise<MatchListing[]> {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const { data: myParts } = await supabase
+    .from('match_participants')
+    .select('match_id')
+    .eq('user_id', userId)
+    .eq('status', 'joined');
+  const joinedIds = (myParts ?? []).map((p) => (p as { match_id: string }).match_id);
+  const { data, error } = await supabase
+    .from('matches')
+    .select('*')
+    .or(`organiser_id.eq.${userId}${joinedIds.length ? `,id.in.(${joinedIds.join(',')})` : ''}`)
+    .lt('starts_at', new Date().toISOString())
+    .order('starts_at', { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(error.message);
+  return buildListings(data ?? [], userId);
+}
+
+export interface MatchPerson {
+  id: string;
+  name: string | null;
+  photoUrl: string | null;
+}
+
+export interface MatchSide {
+  teamId: string;
+  name: string;
+  logoUrl: string | null;
+}
+
+export interface MatchDetail {
+  listing: MatchListing;
+  players: MatchPerson[];
+  organiser: MatchPerson | null;
+  // Team games made from an accepted challenge: home = the challenging team.
+  sides: { home: MatchSide; away: MatchSide } | null;
+}
+
+export async function fetchMatchDetail(matchId: string, userId: string): Promise<MatchDetail | null> {
+  if (!supabase) throw new Error('Supabase is not configured.');
+  const { data: row, error } = await supabase.from('matches').select('*').eq('id', matchId).maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) return null;
+  const [listing] = await buildListings([row], userId);
+  if (!listing) return null;
+
+  const { data: parts } = await supabase
+    .from('match_participants')
+    .select('user_id')
+    .eq('match_id', matchId)
+    .eq('status', 'joined');
+  const ids = [...new Set([...((parts ?? []) as { user_id: string }[]).map((p) => p.user_id), listing.match.organiser_id])];
+  const people = new Map<string, MatchPerson>();
+  if (ids.length > 0) {
+    const { data: profs } = await supabase.from('profiles').select('id,name,photo_url').in('id', ids);
+    for (const p of (profs ?? []) as { id: string; name: string | null; photo_url: string | null }[]) {
+      people.set(p.id, { id: p.id, name: p.name, photoUrl: p.photo_url });
+    }
+  }
+  const players = ((parts ?? []) as { user_id: string }[]).map(
+    (p) => people.get(p.user_id) ?? { id: p.user_id, name: null, photoUrl: null },
+  );
+
+  let sides: MatchDetail['sides'] = null;
+  if (listing.match.kind === 'team-vs-team') {
+    const { data: ch } = await supabase
+      .from('challenges')
+      .select('team_id,opponent_team_id')
+      .eq('match_id', matchId)
+      .maybeSingle();
+    const c = ch as { team_id: string; opponent_team_id: string | null } | null;
+    if (c?.opponent_team_id) {
+      const { data: teams } = await supabase
+        .from('teams')
+        .select('id,name,logo_url')
+        .in('id', [c.team_id, c.opponent_team_id]);
+      const byId = new Map(((teams ?? []) as { id: string; name: string; logo_url: string | null }[]).map((t) => [t.id, t]));
+      const h = byId.get(c.team_id);
+      const a = byId.get(c.opponent_team_id);
+      if (h && a) {
+        sides = {
+          home: { teamId: h.id, name: h.name, logoUrl: h.logo_url },
+          away: { teamId: a.id, name: a.name, logoUrl: a.logo_url },
+        };
+      }
+    }
+  }
+
+  return { listing, players, organiser: people.get(listing.match.organiser_id) ?? null, sides };
+}
+
 export async function fetchSports(): Promise<Sport[]> {
   if (!supabase) throw new Error('Supabase is not configured.');
   const { data, error } = await supabase.from('sports').select('id,name,formats').order('name');

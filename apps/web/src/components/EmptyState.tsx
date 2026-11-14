@@ -1,3 +1,5 @@
+import { Button, EmptyState as UiEmptyState } from './ui';
+
 interface Props {
   title: string;
   hint?: string;
@@ -5,17 +7,19 @@ interface Props {
   onAction?: () => void;
 }
 
+// Older screens still call this; it now renders the design-system empty state.
 export default function EmptyState({ title, hint, actionLabel, onAction }: Props) {
   return (
-    <div className="card empty empty-brand">
-      <img className="brand-mark" src="/brand/logo-mark.png" alt="" width={40} height={40} />
-      <strong>{title}</strong>
-      {hint ? <p className="muted">{hint}</p> : null}
-      {actionLabel && onAction ? (
-        <button className="btn btn-primary" type="button" onClick={onAction}>
-          {actionLabel}
-        </button>
-      ) : null}
-    </div>
+    <UiEmptyState
+      title={title}
+      body={hint}
+      action={
+        actionLabel && onAction ? (
+          <Button variant="primary" size="sm" onClick={onAction}>
+            {actionLabel}
+          </Button>
+        ) : undefined
+      }
+    />
   );
 }
