@@ -7,7 +7,7 @@ import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
 import ResetPasswordPage from './pages/ResetPasswordPage';
 import NotificationsPage from './pages/NotificationsPage';
-import { CommunityPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
+import { CommunityPage, DataDeletionPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
 import OnboardingPage from './pages/OnboardingPage';
 import WaitAppConnectPage from './pages/WaitAppConnectPage';
 import ScoreboardViewPage from './pages/ScoreboardViewPage';
@@ -47,6 +47,7 @@ export default function App() {
       <Route path="/privacy" element={<PrivacyPage />} />
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/community" element={<CommunityPage />} />
+      <Route path="/data-deletion" element={<DataDeletionPage />} />
       <Route path="/s/:code" element={<ScoreboardViewPage />} />
       <Route element={<ProtectedRoute />}>
         <Route path="/onboarding" element={<OnboardingPage />} />

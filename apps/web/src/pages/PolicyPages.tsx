@@ -7,9 +7,42 @@ function Shell({ title, children }: { title: string; children: React.ReactNode }
       {children}
       <p className="muted">
         <Link to="/privacy">Privacy</Link> · <Link to="/terms">Terms</Link> ·{' '}
-        <Link to="/community">Community &amp; safety</Link>
+        <Link to="/community">Community &amp; safety</Link> ·{' '}
+        <Link to="/data-deletion">Delete my data</Link>
       </p>
     </div>
+  );
+}
+
+const DELETION_EMAIL = 'ahead.cglm@gmail.com';
+
+export function DataDeletionPage() {
+  return (
+    <Shell title="Delete your data">
+      <div className="card">
+        <p>You can ask us to delete your Chabuka account and the data attached to it at any time.</p>
+        <p className="muted">
+          How to ask: email{' '}
+          <a href={`mailto:${DELETION_EMAIL}?subject=Delete%20my%20Chabuka%20data`}>{DELETION_EMAIL}</a>{' '}
+          from the email address you signed up with (or the one on your Google or Facebook account if
+          you signed in that way), with the subject &ldquo;Delete my Chabuka data&rdquo;. We use that
+          to check the request is really from you.
+        </p>
+        <p className="muted">
+          What we delete: your profile and photo, your sports, availability and settings, your
+          team memberships, game sign-ups, venue booking requests, notifications and agent access
+          tokens. Games or results you organised for other people may stay without your name.
+        </p>
+        <p className="muted">
+          Ticket payments are handled by WaitApp, not by Chabuka. Payment and ticket records held
+          there may be kept as the law requires, under WaitApp&rsquo;s own policy.
+        </p>
+        <p className="muted">
+          We aim to finish within 30 days and will email you when it is done. If you signed in with
+          Facebook, you can also remove Chabuka from your Facebook settings under Apps and Websites.
+        </p>
+      </div>
+    </Shell>
   );
 }
 
