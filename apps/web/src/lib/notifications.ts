@@ -167,8 +167,42 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       return { title: `You now own ${text(p.teamName) || 'a team'}`, body: '', href: text(p.teamId) ? `/teams/${text(p.teamId)}` : null };
     case 'timekeeper_appointed':
       return { title: 'You are the timekeeper', body: text(p.title), href: text(p.boardId) ? `/scoreboard/${text(p.boardId)}/control` : null };
+    case 'entry_received':
+      return { title: `${text(p.teamName) || 'A team'} entered ${text(p.name)}`, body: text(p.status) === 'pending' ? 'Waiting for your approval.' : '', href: `/competitions/${text(p.competitionId)}?tab=manage` };
+    case 'entry_reviewed':
+      return {
+        title: text(p.decision) === 'approved' ? `${text(p.teamName) || 'Your team'} is in ${text(p.name)}` : `${text(p.name)}: entry not accepted`,
+        body: text(p.note),
+        href: `/competitions/${text(p.competitionId)}`,
+      };
+    case 'entry_withdrawn':
+      return { title: `A team withdrew from ${text(p.name)}`, body: '', href: `/competitions/${text(p.competitionId)}?tab=manage` };
+    case 'competition_started':
+      return { title: `${text(p.name)}: the fixtures are out`, body: '', href: `/competitions/${text(p.competitionId)}?tab=fixtures` };
+    case 'knockout_drawn':
+      return { title: `${text(p.name)}: the knockout is drawn`, body: '', href: `/competitions/${text(p.competitionId)}?tab=table` };
+    case 'competition_cancelled':
+      return { title: `${text(p.name)} was cancelled`, body: '', href: `/competitions/${text(p.competitionId)}` };
+    case 'competition_won':
+      return { title: `Champions of ${text(p.name)}`, body: 'Your team won it.', href: `/competitions/${text(p.competitionId)}?tab=table` };
+    case 'fixture_scheduled':
+    case 'fixture_postponed':
+    case 'fixture_cancelled':
+      return {
+        title: n.type === 'fixture_cancelled' ? `${text(p.name)}: a game was cancelled` : n.type === 'fixture_postponed' ? `${text(p.name)}: a game was postponed` : `${text(p.name)}: game scheduled`,
+        body: text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : '',
+        href: `/competitions/${text(p.competitionId)}?tab=fixtures`,
+      };
+    case 'result_to_confirm':
+      return { title: 'Confirm the result', body: `${text(p.name)}: reported ${String(p.home ?? '')}–${String(p.away ?? '')}`, href: `/competitions/${text(p.competitionId)}?tab=fixtures` };
+    case 'result_disputed':
+      return { title: 'A result is disputed', body: text(p.name), href: `/competitions/${text(p.competitionId)}?tab=manage` };
+    case 'game_result_final':
+      return { title: 'Result confirmed', body: `${text(p.name)}: ${String(p.home ?? '')}–${String(p.away ?? '')}`, href: `/competitions/${text(p.competitionId)}?tab=fixtures` };
+    case 'series_game_added':
+      return { title: `You’re in next week: ${text(p.title)}`, body: 'As a regular you’re added to each new game.', href: text(p.matchId) ? `/games/${text(p.matchId)}` : null };
     case 'result_posted':
-      return { title: 'New result on a board you follow', body: '', href: text(p.competitionId) ? `/board?c=${text(p.competitionId)}` : '/board' };
+      return { title: 'New result in a competition you follow', body: '', href: text(p.competitionId) ? `/competitions/${text(p.competitionId)}?tab=fixtures` : '/competitions' };
     default:
       return { title: 'Update', body: text(p.title), href: null };
   }

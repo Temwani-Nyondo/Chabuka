@@ -27,6 +27,9 @@ import GamePage from './pages/GamePage';
 import SettingsPage from './pages/SettingsPage';
 import LineupPage from './pages/LineupPage';
 import RulesPage from './pages/RulesPage';
+import CompetitionPage from './pages/CompetitionPage';
+import CompetitionCreatePage from './pages/CompetitionCreatePage';
+import CompetitionRegisterPage from './pages/CompetitionRegisterPage';
 
 function LandingGate() {
   const { loading, user } = useAuth();
@@ -68,6 +71,10 @@ export default function App() {
           <Route path="teams/:id" element={<TeamDetailPage />} />
           <Route path="gaffer" element={<GafferPage />} />
           <Route path="board" element={<CompetitionsPage />} />
+          <Route path="competitions" element={<CompetitionsPage />} />
+          <Route path="competitions/new" element={<CompetitionCreatePage />} />
+          <Route path="competitions/:id" element={<CompetitionPage />} />
+          <Route path="competitions/:id/register" element={<CompetitionRegisterPage />} />
           <Route path="circles" element={<CirclesPage />} />
           <Route path="notifications" element={<NotificationsPage />} />
           <Route path="you" element={<ProfilePage />} />

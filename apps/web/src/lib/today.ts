@@ -13,7 +13,7 @@ export type Result = 'W' | 'D' | 'L';
 // screen where it is done, with the button label it needs.
 export interface NeedsItem {
   id: string;
-  kind: 'result' | 'challenge' | 'booking' | 'week';
+  kind: 'result' | 'challenge' | 'booking' | 'week' | 'confirm' | 'entries' | 'dispute';
   title: string;
   sub: string;
   to: string;
@@ -217,6 +217,62 @@ export async function fetchNeedsYou(userId: string, past: MatchListing[], teams:
         to: `/teams/${ours}`,
         cta: 'Answer',
       });
+    }
+  }
+
+  // 2b. Competition results the other captain reported, waiting on my side.
+  if (captainIds.length > 0) {
+    const list = captainIds.join(',');
+    const { data } = await db
+      .from('fixtures')
+      .select('id,competition_id,home_team_id,away_team_id,reported_side,reported_home,reported_away,status')
+      .or(`home_team_id.in.(${list}),away_team_id.in.(${list})`)
+      .eq('status', 'scheduled')
+      .not('reported_side', 'is', null)
+      .limit(20);
+    const rows = (data ?? []) as {
+      id: string;
+      competition_id: string;
+      home_team_id: string;
+      away_team_id: string;
+      reported_side: 'home' | 'away';
+      reported_home: number;
+      reported_away: number;
+    }[];
+    const names = new Map(teams.map((t) => [t.team.id, t.team.name]));
+    const other = [...new Set(rows.flatMap((r) => [r.home_team_id, r.away_team_id]).filter((x) => !names.has(x)))];
+    if (other.length) {
+      const { data: tRows } = await db.from('teams').select('id,name').in('id', other);
+      for (const t of (tRows ?? []) as { id: string; name: string }[]) names.set(t.id, t.name);
+    }
+    for (const r of rows) {
+      const myTeam = r.reported_side === 'home' ? r.away_team_id : r.home_team_id;
+      if (!captainIds.includes(myTeam)) continue;
+      items.push({
+        id: `confirm-${r.id}`,
+        kind: 'confirm',
+        title: `Confirm the result: ${names.get(r.home_team_id) ?? 'Home'} ${r.reported_home}–${r.reported_away} ${names.get(r.away_team_id) ?? 'Away'}`,
+        sub: 'Reported by the other captain. Confirm it or report the right score.',
+        to: `/competitions/${r.competition_id}?tab=fixtures`,
+        cta: 'Confirm',
+      });
+    }
+  }
+
+  // 2c. Competitions I organise: entries to review, results in dispute.
+  const { data: mine } = await db.from('competitions').select('id,name,status').eq('organiser_id', userId).in('status', ['registration', 'live']);
+  const comps = (mine ?? []) as { id: string; name: string; status: string }[];
+  if (comps.length) {
+    const ids = comps.map((c) => c.id);
+    const [{ data: pend }, { data: disp }] = await Promise.all([
+      db.from('competition_entries').select('competition_id').in('competition_id', ids).eq('status', 'pending'),
+      db.from('fixtures').select('competition_id').in('competition_id', ids).eq('status', 'disputed'),
+    ]);
+    for (const c of comps) {
+      const p = ((pend ?? []) as { competition_id: string }[]).filter((e) => e.competition_id === c.id).length;
+      const d = ((disp ?? []) as { competition_id: string }[]).filter((e) => e.competition_id === c.id).length;
+      if (p) items.push({ id: `entries-${c.id}`, kind: 'entries', title: `${p} team${p === 1 ? '' : 's'} waiting to enter ${c.name}`, sub: 'Approve or decline their entry.', to: `/competitions/${c.id}?tab=manage`, cta: 'Review' });
+      if (d) items.push({ id: `dispute-${c.id}`, kind: 'dispute', title: `${d} disputed result${d === 1 ? '' : 's'} in ${c.name}`, sub: 'The captains disagree. Your decision is final.', to: `/competitions/${c.id}?tab=manage`, cta: 'Settle' });
     }
   }
 

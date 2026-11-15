@@ -31,6 +31,10 @@ import {
   updateTeamSchema,
   type ActionName,
   type OnboardingProgress,
+  registerTeamSchema,
+  reportResultSchema,
+  fixtureIdSchema,
+  seriesIdSchema,
 } from '@chabuka/shared';
 import { chatOnce, chatStream, type ModelMessage, type ModelResult } from './model.js';
 import { ActionError, runAction, toHttpError } from './actions.js';
@@ -671,6 +675,10 @@ const CONFIRM_REQUIRED: ReadonlySet<string> = new Set([
   'remove_place',
   'update_team',
   'update_circle',
+  'register_team',
+  'report_result',
+  'confirm_result',
+  'join_series',
 ]);
 
 const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
@@ -704,6 +712,10 @@ const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
   create_invite_link: createInviteLinkSchema,
   claim_invite_link: inviteCodeSchema,
   update_team: updateTeamSchema,
+  register_team: registerTeamSchema,
+  report_result: reportResultSchema,
+  confirm_result: fixtureIdSchema,
+  join_series: seriesIdSchema,
 };
 
 // Hand-written shapes for the two actions the model uses most.

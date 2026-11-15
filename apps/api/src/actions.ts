@@ -17,8 +17,6 @@ import {
   competitionEntrySchema,
   competitionIdSchema,
   competitionSchema,
-  computeStandings,
-  createCompetitionSchema,
   createInviteLinkSchema,
   createMatchSchema,
   createTeamSchema,
@@ -41,6 +39,20 @@ import {
   registerEntrySchema,
   reportScoreSchema,
   updateMatchSchema,
+  createCompetitionV2Schema,
+  fixtureIdSchema,
+  createSeriesSchema,
+  leagueTable,
+  registerTeamSchema,
+  removeSponsorSchema,
+  reportResultSchema,
+  reviewEntrySchema,
+  scheduleFixtureSchema,
+  seriesIdSchema,
+  skipOccurrenceSchema,
+  sponsorInputSchema,
+  updateCompetitionSchema,
+  withdrawEntrySchema,
   removeMemberSchema,
   reportTeamSchema,
   reportUserSchema,
@@ -63,6 +75,28 @@ import {
   venueSupportsSport,
   venueSlotSchema,
 } from '@chabuka/shared';
+import {
+  advanceKnockout,
+  cancelCompetition,
+  confirmResult,
+  createCompetitionV2,
+  createSeries,
+  endSeries,
+  generateFixtures,
+  joinSeries,
+  leaveSeries,
+  registerTeam,
+  removeSponsor,
+  reportResult,
+  reviewEntry,
+  scheduleFixture,
+  skipOccurrence,
+  startKnockout,
+  topUpSeries,
+  updateCompetition,
+  upsertSponsor,
+  withdrawEntry,
+} from './competitions.js';
 import type {
   UpdateMatchInput,
   ActionResult,
@@ -1181,11 +1215,14 @@ async function loadFixture(db: SupabaseClient, fixtureId: string): Promise<Fixtu
 async function loadEntries(db: SupabaseClient, competitionId: string): Promise<string[]> {
   const { data, error } = await db
     .from('competition_entries')
-    .select('team_id')
+    .select('team_id,status')
     .eq('competition_id', competitionId);
   if (error) throw dbError(error);
-  const rows = (data as { team_id: string }[] | null) ?? [];
-  return rows.map((r) => competitionEntrySchema.parse({ competition_id: competitionId, team_id: r.team_id, status: 'registered' }).team_id);
+  const rows = (data as { team_id: string; status: string }[] | null) ?? [];
+  return rows
+    .map((r) => competitionEntrySchema.parse({ competition_id: competitionId, team_id: r.team_id, status: r.status }))
+    .filter((e) => e.status === 'approved')
+    .map((e) => e.team_id);
 }
 
 async function loadFixtures(db: SupabaseClient, competitionId: string): Promise<Fixture[]> {
@@ -1233,6 +1270,12 @@ export async function registerEntry(
   if (competition.status !== 'registration') {
     throw new ActionError(409, 'Entries are closed for this tournament.');
   }
+  if (competition.registration_closes_at && new Date(competition.registration_closes_at).getTime() < Date.now()) {
+    throw new ActionError(409, 'Registration has closed.');
+  }
+  if (competition.registration_questions.some((q) => q.required)) {
+    throw new ActionError(409, 'This competition has entry questions. Enter from the competition page in the app.');
+  }
   await requireCaptain(db, input.teamId, userId);
   const team = await loadTeam(db, input.teamId);
   if (team.sport_id !== competition.sport_id) {
@@ -1245,11 +1288,15 @@ export async function registerEntry(
   if (entries.length >= competition.max_entries) {
     throw new ActionError(409, 'This tournament is full.');
   }
+  const status = competition.requires_approval ? 'pending' : 'approved';
   const { error } = await db
     .from('competition_entries')
-    .insert({ competition_id: competition.id, team_id: team.id, status: 'registered' });
+    .insert({ competition_id: competition.id, team_id: team.id, status });
   if (error) throw dbError(error);
-  return { state: competition.status, actions: [], competition, entries: [...entries, team.id] };
+  if (competition.organiser_id !== userId) {
+    await notifyUsers([competition.organiser_id], 'entry_received', { competitionId: competition.id, name: competition.name, teamName: team.name, status });
+  }
+  return { state: status, actions: [], competition, entries: status === 'approved' ? [...entries, team.id] : entries };
 }
 
 export async function closeRegistration(
@@ -1296,24 +1343,41 @@ export async function recordFixtureResult(
   homeScore: number,
   awayScore: number,
   actorId: string,
+  winnerTeamId?: string,
 ): Promise<{ competition: Competition; fixtures: Fixture[]; standings: unknown; finished: boolean }> {
   const fixture = await loadFixture(db, fixtureId);
   const competition = await loadCompetition(db, fixture.competition_id);
   const { error } = await db
     .from('fixtures')
-    .update({ status: 'finished', home_score: homeScore, away_score: awayScore })
+    .update({ status: 'finished', home_score: homeScore, away_score: awayScore, winner_team_id: winnerTeamId ?? null })
     .eq('id', fixture.id);
   if (error) throw dbError(error);
+  // Knockout: the winner moves into the next round's slot.
+  const { champion } = fixture.stage === 'knockout' ? await advanceKnockout(db, fixture.id) : { champion: null };
   const entries = await loadEntries(db, competition.id);
   const fixtures = await loadFixtures(db, competition.id);
-  const standings = computeStandings(entries, fixtures);
+  const standings = leagueTable(entries, fixtures.filter((f) => f.stage !== 'knockout'), {
+    win: competition.points_win,
+    draw: competition.points_draw,
+    loss: competition.points_loss,
+  });
   const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
   await notifyUsers(
     ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== actorId),
     'result_posted',
     { competitionId: competition.id, fixtureId: fixture.id },
   );
-  const finished = fixtures.every((f) => f.status === 'finished');
+  const hasKnockout = fixtures.some((f) => f.stage === 'knockout');
+  const finished = hasKnockout
+    ? champion !== null
+    : competition.format !== 'groups_knockout' && fixtures.every((f) => f.status === 'finished' || f.status === 'cancelled');
+  if (champion) {
+    const { data: membersRows } = await db.from('team_members').select('user_id').eq('team_id', champion);
+    await notifyUsers(((membersRows ?? []) as { user_id: string }[]).map((r) => r.user_id), 'competition_won', {
+      competitionId: competition.id,
+      name: competition.name,
+    });
+  }
   if (finished) {
     const { error: finishErr } = await db.from('competitions').update({ status: 'finished' }).eq('id', competition.id);
     if (finishErr) throw dbError(finishErr);
@@ -1352,8 +1416,11 @@ export async function postResult(
   if (competition.status !== 'live') {
     throw new ActionError(409, 'This tournament is not live.');
   }
-  if (fixture.status !== 'scheduled') {
+  if (fixture.status === 'finished' || fixture.status === 'cancelled') {
     throw new ActionError(409, 'This result is already in.');
+  }
+  if (fixture.stage === 'knockout' && input.homeScore === input.awayScore) {
+    throw new ActionError(400, 'A knockout game needs a winner. Use Report result and pick who won on penalties.');
   }
   const result = await recordFixtureResult(db, fixture.id, input.homeScore, input.awayScore, userId);
   if (result.finished) {
@@ -1976,6 +2043,18 @@ export async function unblockUser(
   return { state: 'unblocked' };
 }
 
+// A game in a weekly series changed state: keep the next four in place.
+async function topUpAfter(db: SupabaseClient, matchId: string | undefined): Promise<void> {
+  if (!matchId) return;
+  try {
+    const { data } = await db.from('matches').select('series_id').eq('id', matchId).maybeSingle();
+    const seriesId = (data as { series_id?: string | null } | null)?.series_id;
+    if (seriesId) await topUpSeries(privilegedClient(db), seriesId);
+  } catch (err) {
+    console.error('series top-up failed', err instanceof Error ? err.message : 'unknown');
+  }
+}
+
 // HTTP entry points: parse once with the shared schema, then dispatch.
 // Notifications land with the Day 5 board; the matches migrations have
 // no notifications table yet, so no notification rows are written here.
@@ -2031,17 +2110,56 @@ export async function runAction(
     case 'check_in_ticket':
       return checkInTicket(db, userId, ticketIdSchema.parse(body).ticketId);
     case 'create_competition':
-      return createCompetition(db, userId, createCompetitionSchema.parse(body));
+      return createCompetitionV2(privilegedClient(db), userId, createCompetitionV2Schema.parse(body));
     case 'register_entry':
       return registerEntry(db, userId, registerEntrySchema.parse(body));
     case 'close_registration':
-      return closeRegistration(db, userId, competitionIdSchema.parse(body).competitionId);
+    case 'generate_fixtures':
+      return generateFixtures(privilegedClient(db), userId, competitionIdSchema.parse(body).competitionId);
+    case 'start_knockout':
+      return startKnockout(privilegedClient(db), userId, competitionIdSchema.parse(body).competitionId);
+    case 'update_competition':
+      return updateCompetition(privilegedClient(db), userId, updateCompetitionSchema.parse(body)).then(() => ({ state: 'updated' }));
+    case 'upsert_sponsor':
+      return upsertSponsor(privilegedClient(db), userId, sponsorInputSchema.parse(body));
+    case 'remove_sponsor':
+      return removeSponsor(privilegedClient(db), userId, removeSponsorSchema.parse(body)).then(() => ({ state: 'removed' }));
+    case 'register_team':
+      return registerTeam(privilegedClient(db), userId, registerTeamSchema.parse(body));
+    case 'review_entry':
+      return reviewEntry(privilegedClient(db), userId, reviewEntrySchema.parse(body));
+    case 'withdraw_entry':
+      return withdrawEntry(privilegedClient(db), userId, withdrawEntrySchema.parse(body)).then(() => ({ state: 'withdrawn' }));
+    case 'schedule_fixture':
+      return scheduleFixture(privilegedClient(db), userId, scheduleFixtureSchema.parse(body)).then(() => ({ state: 'scheduled' }));
+    case 'report_result':
+      return reportResult(privilegedClient(db), userId, reportResultSchema.parse(body));
+    case 'confirm_result':
+      return confirmResult(privilegedClient(db), userId, fixtureIdSchema.parse(body).fixtureId);
+    case 'cancel_competition':
+      return cancelCompetition(privilegedClient(db), userId, competitionIdSchema.parse(body).competitionId).then(() => ({ state: 'cancelled' }));
+    case 'create_series':
+      return createSeries(privilegedClient(db), userId, createSeriesSchema.parse(body));
+    case 'end_series':
+      return endSeries(privilegedClient(db), userId, seriesIdSchema.parse(body).seriesId).then(() => ({ state: 'ended' }));
+    case 'skip_occurrence':
+      return skipOccurrence(privilegedClient(db), userId, skipOccurrenceSchema.parse(body)).then(() => ({ state: 'skipped' }));
+    case 'join_series':
+      return joinSeries(privilegedClient(db), userId, seriesIdSchema.parse(body).seriesId);
+    case 'leave_series':
+      return leaveSeries(privilegedClient(db), userId, seriesIdSchema.parse(body).seriesId).then(() => ({ state: 'left' }));
     case 'post_result':
       return postResult(db, userId, postResultSchema.parse(body));
-    case 'report_score':
-      return reportScore(db, userId, reportScoreSchema.parse(body));
-    case 'update_match':
-      return updateMatch(db, userId, updateMatchSchema.parse(body));
+    case 'report_score': {
+      const out = await reportScore(db, userId, reportScoreSchema.parse(body));
+      await topUpAfter(db, (body as { matchId?: string }).matchId);
+      return out;
+    }
+    case 'update_match': {
+      const out = await updateMatch(db, userId, updateMatchSchema.parse(body));
+      await topUpAfter(db, (body as { matchId?: string }).matchId);
+      return out;
+    }
     case 'create_poll':
       return createPoll(db, userId, createPollSchema.parse(body));
     case 'answer_poll':

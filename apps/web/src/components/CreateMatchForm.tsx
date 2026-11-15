@@ -4,7 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { createMatchSchema, LEVEL_LABELS, LEVELS } from '@chabuka/shared';
 import type { Level, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
-import { createMatchAction } from '../lib/api';
+import { createMatchAction, runAction } from '../lib/api';
 import { fetchSports } from '../lib/matches';
 import { fetchCircles } from '../lib/circles';
 import { fetchSlotLoad, fetchVenueSlots } from '../lib/venues';
@@ -31,6 +31,8 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const [circleId, setCircleId] = useState('');
   const [slots, setSlots] = useState<VenueSlot[]>([]);
   const [slotId, setSlotId] = useState('');
+  const [repeat, setRepeat] = useState<0 | 1 | 2>(0);
+  const [until, setUntil] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -119,9 +121,42 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
     }
     setBusy(true);
     try {
-      await createMatchAction(parsed.data, token);
+      if (repeat) {
+        // startsAt is the local "YYYY-MM-DDTHH:MM" from the picker: Lusaka time.
+        const [datePart = '', timePart = ''] = startsAt.split('T');
+        const [y, m, d] = datePart.split('-').map(Number) as [number, number, number];
+        const res = await runAction<{ seriesId: string; matchIds: string[] }>(
+          'create_series',
+          {
+            sportId: parsed.data.sportId,
+            title: parsed.data.title,
+            weekday: new Date(y, m - 1, d).getDay(),
+            time: timePart.slice(0, 5),
+            intervalWeeks: repeat,
+            startsOn: datePart,
+            until: until || null,
+            area: parsed.data.area,
+            venueId: parsed.data.venueId,
+            venueName: parsed.data.venueName,
+            placeId: parsed.data.placeId,
+            lat: parsed.data.lat,
+            lng: parsed.data.lng,
+            format: parsed.data.format,
+            capacity: parsed.data.capacity,
+            level: parsed.data.level,
+            notes: parsed.data.notes,
+            visibility: parsed.data.visibility,
+            circleId: parsed.data.circleId,
+          },
+          token,
+        );
+        onDone();
+        navigate(res.matchIds[0] ? `/games/${res.matchIds[0]}` : '/explore');
+        return;
+      }
+      const res = await createMatchAction(parsed.data, token);
       onDone();
-      navigate('/explore');
+      navigate(res.matchId ? `/games/${res.matchId}` : '/explore');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not create the match.');
     } finally {
@@ -190,7 +225,22 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
         onAreaChange={setArea}
         onPick={setVenuePick}
       />
-      {slots.length > 0 ? (
+      <label className="field">
+        Repeats
+        <select className="input" value={repeat} onChange={(e) => setRepeat(Number(e.target.value) as 0 | 1 | 2)}>
+          <option value={0}>Just this once</option>
+          <option value={1}>Every week, same day and time</option>
+          <option value={2}>Every 2 weeks</option>
+        </select>
+        {repeat ? <span className="hint">The next 4 games are always listed so people can join ahead. Regulars can join every week in one tap.</span> : null}
+      </label>
+      {repeat ? (
+        <label className="field">
+          Until (optional)
+          <input className="input" type="date" value={until} onChange={(e) => setUntil(e.target.value)} />
+        </label>
+      ) : null}
+      {slots.length > 0 && !repeat ? (
         <label className="field">
           Book a slot at this venue (optional)
           <select
@@ -276,7 +326,7 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
       ) : null}
       {error ? <p className="error">{error}</p> : null}
       <button className="btn btn-primary" type="submit" disabled={busy}>
-        {busy ? 'Creating…' : 'Create match'}
+        {busy ? 'Creating…' : repeat ? 'Create weekly game' : 'Create game'}
       </button>
     </form>
   );

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Building, List, Map as MapIcon, Radio, Search, Swords, Trophy, Volleyball } from 'lucide-react';
-import { COMPETITION_STATUS_LABELS } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, FORMAT_LABELS } from '@chabuka/shared';
 import type { Competition, Sport, Venue } from '@chabuka/shared';
 import ChallengeCard from '../components/ChallengeCard';
 import ExploreMap from '../components/ExploreMap';
@@ -314,7 +314,7 @@ export default function ExplorePage() {
             title="No leagues or tournaments yet"
             body="Run one: entries, fixtures and a live table in one place."
             action={
-              <Link to="/board" className="text-[14px] font-bold text-brand-text">
+              <Link to="/competitions/new" className="text-[14px] font-bold text-brand-text">
                 Start a competition
               </Link>
             }
@@ -324,7 +324,7 @@ export default function ExplorePage() {
             {visibleComps.map(({ competition, entryTeamIds }) => (
               <ListRow
                 key={competition.id}
-                to={`/board?c=${competition.id}`}
+                to={`/competitions/${competition.id}`}
                 leading={
                   <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-text">
                     <Trophy size={20} />
@@ -409,5 +409,5 @@ export default function ExplorePage() {
 
 function compSub(c: Competition, entries: number, sports: Sport[]): string {
   const sport = sportLabel(sports.find((s) => s.id === c.sport_id)?.name) || null;
-  return [sport, c.kind.charAt(0).toUpperCase() + c.kind.slice(1), `${entries}/${c.max_entries} teams`, c.area].filter(Boolean).join(' · ');
+  return [CATEGORY_LABELS[c.category], sport, FORMAT_LABELS[c.format], `${entries}/${c.max_entries} teams`, c.area].filter(Boolean).join(' · ');
 }

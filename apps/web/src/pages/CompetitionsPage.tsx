@@ -1,495 +1,139 @@
-import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
-import { useCallback, useEffect, useState } from 'react';
-import type { FormEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import EmptyState from '../components/EmptyState';
-import MatchFoundOverlay from '../components/MatchFoundOverlay';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, Navigate, useSearchParams } from 'react-router-dom';
+import { Plus, Trophy } from 'lucide-react';
+import { CATEGORY_LABELS, COMPETITION_CATEGORIES, COMPETITION_STATUS_LABELS, FORMAT_LABELS } from '@chabuka/shared';
+import type { CompetitionCategory, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
-import {
-  closeRegistrationAction,
-  createCompetitionAction,
-  followCompetitionAction,
-  postAnnouncementAction,
-  postResultAction,
-  registerEntryAction,
-} from '../lib/api';
-import { fetchBoard, fetchCompetitions } from '../lib/competitions';
-import type { Board } from '../lib/competitions';
+import { supabase } from '../lib/supabase';
+import { fetchCompetitions } from '../lib/competitions';
+import type { CompetitionListing } from '../lib/competitions';
 import { fetchSports } from '../lib/matches';
-import { fetchMyTeams, isCaptainRole } from '../lib/teams';
-import type { Sport } from '@chabuka/shared';
-import { COMPETITION_STATUS_LABELS } from '@chabuka/shared';
-import type { CreateCompetitionInput } from '@chabuka/shared';
-
-type Tab = 'fixtures' | 'standings' | 'results' | 'news';
+import { fetchMyTeams } from '../lib/teams';
+import { sportBackdrop, sportLabel } from '../components/GameCard';
+import { Badge, ButtonLink, Chip, EmptyState, ErrorNote, PageHeader, Section, Skeleton } from '../components/ui';
 
 export default function CompetitionsPage() {
-  const { session, user } = useAuth();
-  const [list, setList] = useState<Awaited<ReturnType<typeof fetchCompetitions>>>([]);
-  const [myTeams, setMyTeams] = useState<Awaited<ReturnType<typeof fetchMyTeams>>>([]);
+  const { user } = useAuth();
+  const [params] = useSearchParams();
+  const [list, setList] = useState<CompetitionListing[]>([]);
   const [sports, setSports] = useState<Sport[]>([]);
+  const [myTeamIds, setMyTeamIds] = useState<Set<string>>(new Set());
+  const [following, setFollowing] = useState<Set<string>>(new Set());
+  const [category, setCategory] = useState<CompetitionCategory | 'all'>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
-  // ?c=<id> (from Explore) opens that competition's board directly.
-  const [searchParams] = useSearchParams();
-  const [selectedId, setSelectedId] = useState<string | null>(() => searchParams.get('c'));
-  const [board, setBoard] = useState<Board | null>(null);
-  const [tab, setTab] = useState<Tab>('fixtures');
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
-
-  const [name, setName] = useState('');
-  const [area, setArea] = useState('');
-  const [startsOn, setStartsOn] = useState('');
-  const [maxEntries, setMaxEntries] = useState(6);
-  const [sportId, setSportId] = useState('');
-
-  const [scores, setScores] = useState<Record<string, { home: string; away: string }>>({});
-  const [announceText, setAnnounceText] = useState('');
-  const [reveal, setReveal] = useState<{ home: string; away: string; homeScore: number; awayScore: number } | null>(null);
-
-  const reloadList = useCallback(async () => {
-    setList(await fetchCompetitions());
-  }, []);
-
-  const reloadBoard = useCallback(async () => {
-    if (!selectedId || !user) {
-      setBoard(null);
-      return;
-    }
-    setBoard(await fetchBoard(selectedId, user.id));
-  }, [selectedId, user]);
 
   useEffect(() => {
     if (!user) return;
-    Promise.all([reloadList(), fetchMyTeams(user.id), fetchSports()])
-      .then(([, mine, sportList]) => {
-        setMyTeams(mine);
-        setSports(sportList);
-        if (sportList[0]) setSportId((prev) => prev || sportList[0]!.id);
+    void Promise.all([
+      fetchCompetitions(),
+      fetchSports().catch(() => []),
+      fetchMyTeams(user.id).catch(() => []),
+      supabase ? supabase.from('follows').select('competition_id').eq('user_id', user.id) : Promise.resolve({ data: [] }),
+    ])
+      .then(([comps, sp, teams, follows]) => {
+        setList(comps);
+        setSports(sp);
+        setMyTeamIds(new Set(teams.map((t) => t.team.id)));
+        setFollowing(new Set(((follows.data ?? []) as { competition_id: string }[]).map((f) => f.competition_id)));
       })
-      .catch((err: unknown) =>
-        setError(err instanceof Error ? err.message : 'Could not load tournaments.'),
-      )
+      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load competitions.'))
       .finally(() => setLoading(false));
-  }, [reloadList, user]);
+  }, [user]);
 
-  useEffect(() => {
-    reloadBoard().catch((err: unknown) =>
-      setActionError(err instanceof Error ? err.message : 'Could not open the board.'),
-    );
-  }, [reloadBoard]);
+  const mine = useMemo(
+    () =>
+      list.filter(
+        (l) => l.competition.organiser_id === user?.id || l.entryTeamIds.some((t) => myTeamIds.has(t)) || following.has(l.competition.id),
+      ),
+    [list, user?.id, myTeamIds, following],
+  );
+  const discover = list.filter((l) => l.competition.status !== 'cancelled' && (category === 'all' || l.competition.category === category));
 
-  const token = session?.access_token;
+  const legacy = params.get('c');
+  if (legacy) return <Navigate to={`/competitions/${legacy}`} replace />;
 
-  const run = async (fn: (token: string) => Promise<unknown>, after?: () => Promise<void>) => {
-    if (!token) {
-      setActionError('Not signed in.');
-      return;
-    }
-    setBusy(true);
-    setActionError(null);
-    try {
-      await fn(token);
-      await reloadList();
-      await reloadBoard();
-      if (after) await after();
-    } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const captainTeams = myTeams.filter((m) => isCaptainRole(m.role)).map((m) => m.team);
-
-  const createSubmit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!token) {
-      setActionError('Not signed in.');
-      return;
-    }
-    const input: CreateCompetitionInput = {
-      name: name.trim(),
-      sportId,
-      area: area.trim(),
-      startsOn,
-      maxEntries,
-    };
-    if (!input.name || !input.area || !input.startsOn || !input.sportId) {
-      setActionError('Fill name, area, start date and pick a sport.');
-      return;
-    }
-    void run(
-      (t) => createCompetitionAction(input, t),
-      async () => {
-        setShowForm(false);
-        setName('');
-        setArea('');
-        setStartsOn('');
-      },
+  const sportName = (id: string) => sportLabel(sports.find((s) => s.id === id)?.name);
+  const tile = (l: CompetitionListing) => {
+    const c = l.competition;
+    const role = c.organiser_id === user?.id ? 'Organising' : l.entryTeamIds.some((t) => myTeamIds.has(t)) ? 'Your team is in' : following.has(c.id) ? 'Following' : null;
+    return (
+      <Link key={c.id} to={`/competitions/${c.id}`} className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface text-ink no-underline hover:border-line-strong">
+        <span
+          className="relative block h-28 bg-cover bg-center"
+          style={{ backgroundImage: `url(${c.banner_url || sportBackdrop(sports.find((s) => s.id === c.sport_id)?.name)})` }}
+        >
+          <span className="absolute inset-0 bg-black/30" aria-hidden="true" />
+          <span className="absolute left-3 top-3 flex gap-1.5">
+            <span className="rounded-full bg-white/90 px-2 py-0.5 text-[11px] font-bold text-[#0e1411]">{CATEGORY_LABELS[c.category]}</span>
+          </span>
+        </span>
+        <span className="flex flex-col gap-1 p-3.5">
+          <strong className="text-[16px]">{c.name}</strong>
+          <span className="text-[13px] text-muted">
+            {[sportName(c.sport_id), FORMAT_LABELS[c.format], c.area].filter(Boolean).join(' · ')}
+          </span>
+          <span className="mt-1 flex flex-wrap items-center gap-1.5">
+            <Badge tone={c.status === 'registration' ? 'hl' : c.status === 'live' ? 'brand' : 'muted'}>{COMPETITION_STATUS_LABELS[c.status]}</Badge>
+            <span className="text-[12px] font-semibold text-muted">
+              {l.entryTeamIds.length}/{c.max_entries} teams
+            </span>
+            {role ? <Badge tone="neutral">{role}</Badge> : null}
+          </span>
+        </span>
+      </Link>
     );
   };
-
-  const teamName = (id: string) => board?.teams.get(id)?.name ?? 'Team';
-  const isOrganiser = board && user ? board.competition.organiser_id === user.id : false;
 
   return (
-    <div className="page">
-      <div className="page-head">
-        <span className="eyebrow">Season board</span>
-        <h1>Season</h1>
-        <p>Tournaments first: fixtures, results, standings, announcements.</p>
-      </div>
-      {reveal ? (
-        <MatchFoundOverlay
-          home={reveal.home}
-          away={reveal.away}
-          homeScore={reveal.homeScore}
-          awayScore={reveal.awayScore}
-          onClose={() => setReveal(null)}
-        />
-      ) : null}
-      {loading ? <p className="loading">Loading tournaments…</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      {!loading && list.length === 0 && !showForm ? (
-        <EmptyState
-          title="No tournaments yet"
-          hint="Create a tournament to generate fixtures and a live table."
-          actionLabel="Create tournament"
-          onAction={() => setShowForm(true)}
-        />
-      ) : null}
-
-      {showForm ? (
-        <div className="card">
-          <h2>Create tournament</h2>
-          <form onSubmit={createSubmit}>
-            <div className="field">
-              <label htmlFor="comp-name">Name</label>
-              <input
-                id="comp-name"
-                className="input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="Saturday Football"
-                maxLength={80}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="comp-area">Area</label>
-              <input
-                id="comp-area"
-                className="input"
-                value={area}
-                onChange={(e) => setArea(e.target.value)}
-                placeholder="Woodlands"
-                maxLength={80}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="comp-start">Starts</label>
-              <input
-                id="comp-start"
-                className="input"
-                type="date"
-                value={startsOn}
-                onChange={(e) => setStartsOn(e.target.value)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="comp-max">Max teams (2–16)</label>
-              <input
-                id="comp-max"
-                className="input"
-                type="number"
-                min={2}
-                max={16}
-                value={maxEntries}
-                onChange={(e) => setMaxEntries(Number(e.target.value))}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="comp-sport">Sport</label>
-              <select
-                id="comp-sport"
-                className="input"
-                value={sportId}
-                onChange={(e) => setSportId(e.target.value)}
-              >
-                <option value="">Pick a sport…</option>
-                {sports.map((sport) => (
-                  <option key={sport.id} value={sport.id}>
-                    {sport.name}
-                  </option>
-                ))}
-              </select>
-              <p className="hint">Pick a sport from your teams, or create a team first.</p>
-            </div>
-            {actionError && showForm ? <p className="error">{actionError}</p> : null}
-            <button className="btn btn-primary" type="submit" disabled={busy}>
-              {busy ? 'Creating…' : 'Create tournament'}
-            </button>
-            <button className="btn btn-ghost" type="button" onClick={() => setShowForm(false)}>
-              Cancel
-            </button>
-          </form>
-        </div>
+    <div className="mx-auto flex max-w-[960px] flex-col gap-5 px-4 pt-4">
+      <PageHeader
+        title="Leagues and tournaments"
+        sub="Community, charity, corporate and school events."
+        actions={
+          <ButtonLink to="/competitions/new" variant="primary" size="sm" icon={<Plus size={16} />}>
+            Create
+          </ButtonLink>
+        }
+      />
+      <ErrorNote>{error}</ErrorNote>
+      {loading ? (
+        <Skeleton className="h-48" />
       ) : (
-        <button className="btn btn-primary" type="button" onClick={() => setShowForm(true)}>
-          Create tournament
-        </button>
-      )}
-
-      {list.map(({ competition }) => (
-        <div className="card" key={competition.id}>
-          <div className="row">
-            <strong>{competition.name}</strong>
-            <span className="tag">{COMPETITION_STATUS_LABELS[competition.status]}</span>
-          </div>
-          <p className="muted">
-            {competition.area ?? ''} · starts {competition.starts_on}
-          </p>
-          <button
-            className="btn btn-ghost"
-            type="button"
-            onClick={() => {
-              setSelectedId(selectedId === competition.id ? null : competition.id);
-              setTab('fixtures');
-            }}
-          >
-            {selectedId === competition.id ? 'Close board' : 'Open board'}
-          </button>
-        </div>
-      ))}
-
-      {selectedId && board ? (
-        <div>
-          <div className="chips">
-            {(['fixtures', 'standings', 'results', 'news'] as Tab[]).map((t) => (
-              <button
-                key={t}
-                className={tab === t ? 'chip chip-active' : 'chip'}
-                type="button"
-                onClick={() => setTab(t)}
-              >
-                {t[0]?.toUpperCase() + t.slice(1)}
-              </button>
-            ))}
-          </div>
-
-          <div className="actions-row">
-            {!board.following ? (
-              <button
-                className="btn"
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  void run((t) => followCompetitionAction(board.competition.id, t));
-                }}
-              >
-                Follow
-              </button>
+        <>
+          {mine.length ? (
+            <Section title="Yours" count={mine.length}>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{mine.map(tile)}</div>
+            </Section>
+          ) : null}
+          <Section title="Find one">
+            <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4" role="group" aria-label="Category">
+              <Chip on={category === 'all'} onClick={() => setCategory('all')}>
+                All
+              </Chip>
+              {COMPETITION_CATEGORIES.map((cat) => (
+                <Chip key={cat} on={category === cat} onClick={() => setCategory(cat)}>
+                  {CATEGORY_LABELS[cat]}
+                </Chip>
+              ))}
+            </div>
+            {discover.length === 0 ? (
+              <EmptyState
+                icon={<Trophy size={22} />}
+                title={list.length === 0 ? 'No events yet' : 'Nothing in this category'}
+                body="Run one: a charity cup, an office league or a weekend tournament."
+                action={
+                  <ButtonLink to="/competitions/new" variant="primary" size="sm">
+                    Create an event
+                  </ButtonLink>
+                }
+              />
             ) : (
-              <span className="tag">Following</span>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">{discover.map(tile)}</div>
             )}
-            {isOrganiser && board.competition.status === 'registration' && board.entries.length >= 2 ? (
-              <button
-                className="btn btn-primary"
-                type="button"
-                disabled={busy}
-                onClick={() => {
-                  void run((t) => closeRegistrationAction(board.competition.id, t));
-                }}
-              >
-                Start tournament
-              </button>
-            ) : null}
-          </div>
-          {actionError ? <p className="error">{actionError}</p> : null}
-
-          {board.competition.status === 'registration' ? (
-            <div className="card">
-              <h2>Entries ({board.entries.length})</h2>
-              {board.entries.length === 0 ? <p className="muted">No teams entered yet.</p> : null}
-              {board.entries.map((id) => (
-                <p key={id}>{board.teams.get(id)?.name ?? 'Team'}</p>
-              ))}
-              <div className="chips">
-                {captainTeams
-                  .filter((team) => !board.entries.includes(team.id))
-                  .map((team) => (
-                    <button
-                      key={team.id}
-                      className="chip"
-                      type="button"
-                      disabled={busy}
-                      onClick={() => {
-                        void run((t) =>
-                          registerEntryAction(
-                            { competitionId: board.competition.id, teamId: team.id },
-                            t,
-                          ),
-                        );
-                      }}
-                    >
-                      Enter {team.name}
-                    </button>
-                  ))}
-              </div>
-            </div>
-          ) : null}
-
-          {tab === 'fixtures' ? (
-            <div>
-              {board.fixtures.filter((f) => f.status === 'scheduled').length === 0 ? (
-                <EmptyState title="No fixtures yet" hint="Start the tournament to generate them." />
-              ) : null}
-              {board.fixtures
-                .filter((f) => f.status === 'scheduled')
-                .map((f) => (
-                  <div className="card" key={f.id}>
-                    <div className="row">
-                      <strong>
-                        {teamName(f.home_team_id)} vs {teamName(f.away_team_id)}
-                      </strong>
-                      <span className="tag">Scheduled</span>
-                    </div>
-                    <ScoreboardButton target={{ fixtureId: f.id }} />
-                    {isOrganiser ? (
-                      <div className="actions-row">
-                        <input
-                          className="input"
-                          style={{ maxWidth: 90 }}
-                          inputMode="numeric"
-                          placeholder="Home"
-                          value={scores[f.id]?.home ?? ''}
-                          onChange={(e) =>
-                            setScores((prev) => ({
-                              ...prev,
-                              [f.id]: { home: e.target.value, away: prev[f.id]?.away ?? '' },
-                            }))
-                          }
-                        />
-                        <input
-                          className="input"
-                          style={{ maxWidth: 90 }}
-                          inputMode="numeric"
-                          placeholder="Away"
-                          value={scores[f.id]?.away ?? ''}
-                          onChange={(e) =>
-                            setScores((prev) => ({
-                              ...prev,
-                              [f.id]: { home: prev[f.id]?.home ?? '', away: e.target.value },
-                            }))
-                          }
-                        />
-                        <button
-                          className="btn btn-primary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            const home = Number(scores[f.id]?.home);
-                            const away = Number(scores[f.id]?.away);
-                            if (!Number.isInteger(home) || !Number.isInteger(away) || home < 0 || away < 0) {
-                              setActionError('Enter whole-number scores.');
-                              return;
-                            }
-                            const homeName = teamName(f.home_team_id);
-                            const awayName = teamName(f.away_team_id);
-                            void run((t) => postResultAction({ fixtureId: f.id, homeScore: home, awayScore: away }, t)).then(
-                              () => setReveal({ home: homeName, away: awayName, homeScore: home, awayScore: away }),
-                            );
-                          }}
-                        >
-                          Post result
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
-                ))}
-            </div>
-          ) : null}
-
-          {tab === 'results' ? (
-            <div>
-              {board.fixtures.filter((f) => f.status === 'finished').length === 0 ? (
-                <EmptyState title="No results yet" hint="Results appear here as fixtures finish." />
-              ) : null}
-              {board.fixtures
-                .filter((f) => f.status === 'finished')
-                .map((f) => (
-                  <div className="card" key={f.id}>
-                    <div className="row">
-                      <strong>
-                        {teamName(f.home_team_id)} {f.home_score}–{f.away_score} {teamName(f.away_team_id)}
-                      </strong>
-                      <span className="tag">Full time</span>
-                    </div>
-                    <ScoreboardButton target={{ fixtureId: f.id }} watchOnly />
-                  </div>
-                ))}
-            </div>
-          ) : null}
-
-          {tab === 'standings' ? (
-            <div className="card">
-              <h2>Standings</h2>
-              {board.standings.map((row, i) => (
-                <div className="row" key={row.teamId}>
-                  <span>
-                    {i + 1}. {teamName(row.teamId)}
-                  </span>
-                  <span className="muted">
-                    P{row.played} W{row.won} D{row.drawn} L{row.lost} · {row.points} pts
-                  </span>
-                </div>
-              ))}
-              {board.standings.length === 0 ? <p className="muted">No entries yet.</p> : null}
-            </div>
-          ) : null}
-
-          {tab === 'news' ? (
-            <div>
-              {board.announcements.length === 0 ? (
-                <EmptyState title="No announcements" hint="Organiser updates land here." />
-              ) : null}
-              {board.announcements.map((a) => (
-                <div className="card" key={a.id}>
-                  <p>{a.text}</p>
-                  <p className="muted">{a.type}</p>
-                </div>
-              ))}
-              {isOrganiser ? (
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    if (!announceText.trim()) return;
-                    void run((t) =>
-                      postAnnouncementAction({ competitionId: board.competition.id, text: announceText.trim() }, t),
-                    );
-                    setAnnounceText('');
-                  }}
-                >
-                  <div className="field">
-                    <input
-                      className="input"
-                      value={announceText}
-                      onChange={(e) => setAnnounceText(e.target.value)}
-                      placeholder="Post an announcement…"
-                      maxLength={500}
-                    />
-                  </div>
-                  <button className="btn btn-primary" type="submit" disabled={busy}>
-                    Announce
-                  </button>
-                </form>
-              ) : null}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
+          </Section>
+        </>
+      )}
     </div>
   );
 }

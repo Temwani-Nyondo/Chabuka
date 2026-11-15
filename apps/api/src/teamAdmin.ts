@@ -73,13 +73,16 @@ export async function loadSubject(service: SupabaseClient, type: LineupSubject, 
       .select('id,competition_id,home_team_id,away_team_id,starts_at')
       .eq('id', id)
       .maybeSingle();
-    const fixture = f as { id: string; competition_id: string; home_team_id: string; away_team_id: string; starts_at: string | null } | null;
+    const fixture = f as { id: string; competition_id: string; home_team_id: string | null; away_team_id: string | null; starts_at: string | null } | null;
     if (!fixture) throw new ActionError(404, 'Fixture not found.');
+    if (!fixture.home_team_id || !fixture.away_team_id) throw new ActionError(409, 'Both teams for this game are not known yet.');
+    const homeId = fixture.home_team_id;
+    const awayId = fixture.away_team_id;
     const { data: c } = await service.from('competitions').select('organiser_id,sport_id,name').eq('id', fixture.competition_id).maybeSingle();
     const comp = c as { organiser_id: string; sport_id: string; name: string } | null;
-    const teams = await teamInfo(service, [fixture.home_team_id, fixture.away_team_id]);
-    const h = teams.get(fixture.home_team_id);
-    const a = teams.get(fixture.away_team_id);
+    const teams = await teamInfo(service, [homeId, awayId]);
+    const h = teams.get(homeId);
+    const a = teams.get(awayId);
     return {
       type,
       id,
@@ -90,8 +93,8 @@ export async function loadSubject(service: SupabaseClient, type: LineupSubject, 
       organiserId: comp?.organiser_id ?? null,
       pickup: false,
       sides: [
-        { side: 'home', teamId: fixture.home_team_id, name: h?.name ?? 'Home', kitColour: h?.kit ?? null },
-        { side: 'away', teamId: fixture.away_team_id, name: a?.name ?? 'Away', kitColour: a?.kit ?? null },
+        { side: 'home', teamId: homeId, name: h?.name ?? 'Home', kitColour: h?.kit ?? null },
+        { side: 'away', teamId: awayId, name: a?.name ?? 'Away', kitColour: a?.kit ?? null },
       ],
       participants: [],
     };

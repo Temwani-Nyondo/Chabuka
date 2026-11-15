@@ -34,6 +34,7 @@ import TicketingPanel from '../components/TicketingPanel';
 import GameVenueBooking from '../components/GameVenueBooking';
 import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
 import { AvailabilityCard, LineupsPanel } from '../components/MatchDay';
+import SeriesPanel from '../components/SeriesPanel';
 import { dayLabel, placeLabel, sportBackdrop, sportLabel, statusBadge, timeLabel } from '../components/GameCard';
 import {
   Avatar,
@@ -372,6 +373,8 @@ export default function GamePage() {
             </Card>
           </Section>
         ) : null}
+
+        {match.series_id ? <SeriesPanel seriesId={match.series_id} matchId={match.id} onChanged={() => void reload()} /> : null}
 
         {!cancelled ? (
           <>

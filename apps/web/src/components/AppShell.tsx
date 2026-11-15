@@ -39,7 +39,7 @@ export function requestCreate(mode: CreateMode = 'menu'): void {
 
 const TABS = [
   { to: '/today', label: 'Today', icon: CalendarDays, match: ['/today'] },
-  { to: '/explore', label: 'Explore', icon: Compass, match: ['/explore', '/board', '/venues/', '/games/'] },
+  { to: '/explore', label: 'Explore', icon: Compass, match: ['/explore', '/board', '/competitions', '/venues/', '/games/'] },
   { to: '/circles', label: 'Circles', icon: Radio, match: ['/circles'] },
   { to: '/you', label: 'You', icon: CircleUserRound, match: ['/you', '/teams', '/profile'] },
 ] as const;
@@ -87,7 +87,7 @@ export default function AppShell() {
   }, [gafferOpen]);
 
   // Detail screens carry their own bottom action bar.
-  const detail = /^\/(games|lineup|rules)\/[^/]+/.test(pathname);
+  const detail = /^\/(games|lineup|rules)\/[^/]+/.test(pathname) || /^\/competitions\/(new|[^/]+\/register)$/.test(pathname);
 
   const openCreate = () => {
     setMode('menu');
@@ -134,7 +134,7 @@ export default function AppShell() {
           <SideLink to="/teams" icon={<Shield size={20} />} on={pathname.startsWith('/teams')}>
             My teams
           </SideLink>
-          <SideLink to="/board" icon={<Trophy size={20} />} on={pathname.startsWith('/board')}>
+          <SideLink to="/competitions" icon={<Trophy size={20} />} on={pathname.startsWith('/board') || pathname.startsWith('/competitions')}>
             Competitions
           </SideLink>
           <SideLink to="/venues/dashboard" icon={<Building size={20} />} on={pathname === '/venues/dashboard'}>
@@ -215,7 +215,7 @@ export default function AppShell() {
             </CreateGroup>
             <CreateGroup label="Organise">
               <CreateItem icon={<Shield size={20} />} title="Start a team" sub="Squad, captains and fixtures" onClick={() => setMode('team')} />
-              <CreateItem icon={<Trophy size={20} />} title="Run a league or tournament" sub="Entries, fixtures and a live table" onClick={() => go('/board')} />
+              <CreateItem icon={<Trophy size={20} />} title="Run a league or tournament" sub="Entries, fixtures and a live table" onClick={() => go('/competitions/new')} />
               <CreateItem icon={<Users size={20} />} title="Start a circle" sub="A channel for a sport and a place" onClick={() => go('/circles?create=1')} />
             </CreateGroup>
             <CreateGroup label="Venue">

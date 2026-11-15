@@ -64,6 +64,7 @@ import {
   transferOwnership,
   updateTeamSettings,
 } from './teamAdmin.js';
+import { entriesForOrganiser, getSeries } from './competitions.js';
 import {
   availabilityResponseSchema,
   joinTeamSchema,
@@ -884,6 +885,8 @@ phase2Get('/api/rulebooks/:type/:id', 'rule book read', (userId, p) =>
   getRuleBook(createServiceClient(), userId, { type: z.enum(['match', 'fixture', 'competition', 'team']).parse(p['type']), id: uuidParam.parse(p['id']) }),
 );
 phase2Post('/api/rulebooks', saveRuleBookSchema, 'rule book save', (userId, body) => saveRuleBook(createServiceClient(), userId, body));
+phase2Get('/api/competitions/:id/entries', 'competition entries', (userId, p) => entriesForOrganiser(createServiceClient(), userId, uuidParam.parse(p['id'])));
+phase2Get('/api/series/:id', 'series read', (userId, p) => getSeries(createServiceClient(), userId, uuidParam.parse(p['id'])));
 phase2Post('/api/scoreboards/:id/timekeeper', z.object({ timekeeperId: z.string().uuid().nullable() }), 'scoreboard timekeeper', async (userId, body, p) => {
   await appointTimekeeper(createServiceClient(), userId, uuidParam.parse(p['id']), body.timekeeperId);
   return { ok: true };

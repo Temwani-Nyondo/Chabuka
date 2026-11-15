@@ -115,6 +115,7 @@ export const matchSchema = z.object({
   circle_id: z.string().uuid().nullable().optional(),
   home_score: z.number().int().nullable().optional(),
   away_score: z.number().int().nullable().optional(),
+  series_id: z.string().uuid().nullable().optional(),
 });
 export type Match = z.infer<typeof matchSchema>;
 
@@ -523,7 +524,7 @@ export const COMPETITION_STATUS_LABELS: Record<CompetitionStatus, string> = {
   cancelled: 'Cancelled',
 };
 
-export const FIXTURE_STATUSES = ['scheduled', 'finished'] as const;
+export const FIXTURE_STATUSES = ['scheduled', 'finished', 'postponed', 'disputed', 'cancelled'] as const;
 export const fixtureStatusSchema = z.enum(FIXTURE_STATUSES);
 export type FixtureStatus = z.infer<typeof fixtureStatusSchema>;
 
@@ -532,34 +533,75 @@ export const competitionSchema = z.object({
   organiser_id: z.string().uuid(),
   sport_id: z.string().uuid(),
   name: z.string().min(1).max(80),
-  kind: z.literal('tournament'),
-  format: z.literal('round_robin'),
+  kind: z.enum(['tournament', 'league']),
+  format: z.enum(['round_robin', 'double_round_robin', 'knockout', 'groups_knockout']),
   area: z.string().nullable().optional(),
   starts_on: z.string(),
   ends_on: z.string().nullable().optional(),
   max_entries: z.number().int().positive(),
   status: competitionStatusSchema,
   rules: z.string().nullable().optional(),
+  // Event details (Phase 3). Optional so rows read before the columns existed parse.
+  category: z.enum(['community', 'charity', 'corporate', 'school', 'social']).default('community'),
+  description: z.string().nullable().optional(),
+  banner_url: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
+  venue_id: z.string().uuid().nullable().optional(),
+  host_name: z.string().nullable().optional(),
+  host_logo_url: z.string().nullable().optional(),
+  host_contact: z.string().nullable().optional(),
+  host_website: z.string().nullable().optional(),
+  cause_name: z.string().nullable().optional(),
+  cause_description: z.string().nullable().optional(),
+  cause_url: z.string().nullable().optional(),
+  fundraising_note: z.string().nullable().optional(),
+  entry_fee_note: z.string().nullable().optional(),
+  registration_closes_at: z.string().nullable().optional(),
+  requires_approval: z.boolean().default(true),
+  team_size_min: z.number().int().nullable().optional(),
+  team_size_max: z.number().int().nullable().optional(),
+  registration_questions: z.array(z.object({ label: z.string(), required: z.boolean().default(false) })).default([]),
+  points_win: z.number().int().default(3),
+  points_draw: z.number().int().default(1),
+  points_loss: z.number().int().default(0),
+  group_count: z.number().int().nullable().optional(),
+  advance_per_group: z.number().int().nullable().optional(),
 });
 export type Competition = z.infer<typeof competitionSchema>;
 
 export const competitionEntrySchema = z.object({
   competition_id: z.string().uuid(),
   team_id: z.string().uuid(),
-  status: z.literal('registered'),
+  // 'registered' is the pre-Phase 3 value and means approved.
+  status: z.enum(['pending', 'approved', 'rejected', 'withdrawn', 'registered']).transform((v) => (v === 'registered' ? 'approved' : v)),
+  group_label: z.string().nullable().optional(),
+  seed: z.number().int().nullable().optional(),
 });
 export type CompetitionEntry = z.infer<typeof competitionEntrySchema>;
 
 export const fixtureSchema = z.object({
   id: z.string().uuid(),
   competition_id: z.string().uuid(),
-  home_team_id: z.string().uuid(),
-  away_team_id: z.string().uuid(),
+  // Knockout slots wait for winners: null until the earlier round is played.
+  home_team_id: z.string().uuid().nullable(),
+  away_team_id: z.string().uuid().nullable(),
   starts_at: z.string().nullable().optional(),
   venue_id: z.string().uuid().nullable().optional(),
+  venue_name: z.string().nullable().optional(),
   home_score: z.number().int().nonnegative().nullable().optional(),
   away_score: z.number().int().nonnegative().nullable().optional(),
   status: fixtureStatusSchema,
+  stage: z.enum(['league', 'group', 'knockout']).default('league'),
+  round: z.number().int().nullable().optional(),
+  leg: z.number().int().nullable().optional(),
+  group_label: z.string().nullable().optional(),
+  bracket_slot: z.number().int().nullable().optional(),
+  winner_team_id: z.string().uuid().nullable().optional(),
+  reported_by: z.string().uuid().nullable().optional(),
+  reported_side: z.enum(['home', 'away']).nullable().optional(),
+  reported_home: z.number().int().nullable().optional(),
+  reported_away: z.number().int().nullable().optional(),
+  reported_winner: z.string().uuid().nullable().optional(),
 });
 export type Fixture = z.infer<typeof fixtureSchema>;
 
@@ -642,6 +684,7 @@ export function computeStandings(
   }
   for (const f of fixtures) {
     if (f.status !== 'finished' || f.home_score == null || f.away_score == null) continue;
+    if (!f.home_team_id || !f.away_team_id) continue;
     const home = rows.get(f.home_team_id);
     const away = rows.get(f.away_team_id);
     if (!home || !away) continue;
@@ -867,6 +910,23 @@ export const ACTION_NAMES = [
   'post_result',
   'report_score',
   'update_match',
+  'update_competition',
+  'upsert_sponsor',
+  'remove_sponsor',
+  'register_team',
+  'review_entry',
+  'withdraw_entry',
+  'generate_fixtures',
+  'start_knockout',
+  'schedule_fixture',
+  'report_result',
+  'confirm_result',
+  'cancel_competition',
+  'create_series',
+  'end_series',
+  'skip_occurrence',
+  'join_series',
+  'leave_series',
   'create_poll',
   'answer_poll',
   'post_announcement',
@@ -1256,3 +1316,4 @@ export function classifyEnder(utterance: string): ConversationEnder {
 
 export * from './scoreboard.js';
 export * from './teamAdmin.js';
+export * from './competitions.js';
