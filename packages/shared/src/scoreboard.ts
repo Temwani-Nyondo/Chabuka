@@ -69,6 +69,34 @@ export const SCOREBOARD_PRESETS: Record<ScoreboardSport, ScoreboardConfig> = {
   },
 };
 
+/**
+ * What each sport's officiating looks like: the word for a score, how play starts, and which disciplines exist. Football
+ * has cards and own goals; basketball has fouls (a player fouls out, a team reaches the bonus) and no cards; netball has
+ * neither. The engine refuses events a sport doesn't have, and the officiating screen only offers what applies.
+ */
+export interface SportRules {
+  scoreWord: string;
+  startWord: string;
+  cards: boolean;
+  ownGoal: boolean;
+  assists: boolean;
+  /** Basketball: a player is out at `playerLimit` fouls (or two technicals); a team's fouls in a period from `teamBonusAt` give free throws. */
+  fouls: { playerLimit: number; teamBonusAt: number } | null;
+}
+
+export const SPORT_RULES: Record<ScoreboardSport, SportRules> = {
+  football: { scoreWord: 'Goal', startWord: 'Kick off', cards: true, ownGoal: true, assists: true, fouls: null },
+  futsal: { scoreWord: 'Goal', startWord: 'Kick off', cards: true, ownGoal: true, assists: true, fouls: null },
+  basketball: { scoreWord: 'Basket', startWord: 'Tip off', cards: false, ownGoal: false, assists: true, fouls: { playerLimit: 5, teamBonusAt: 5 } },
+  netball: { scoreWord: 'Goal', startWord: 'Centre pass', cards: false, ownGoal: false, assists: false, fouls: null },
+  tennis: { scoreWord: 'Point', startWord: 'Start match', cards: false, ownGoal: false, assists: false, fouls: null },
+  padel: { scoreWord: 'Point', startWord: 'Start match', cards: false, ownGoal: false, assists: false, fouls: null },
+};
+
+export function rulesFor(sport: ScoreboardSport): SportRules {
+  return SPORT_RULES[sport] ?? SPORT_RULES.football;
+}
+
 export function presetFor(sport: ScoreboardSport): ScoreboardConfig {
   return structuredCloneConfig(SCOREBOARD_PRESETS[sport]);
 }
@@ -88,6 +116,7 @@ export const SCOREBOARD_EVENT_TYPES = [
   'point', // racket sports: a point won
   'sub',
   'card',
+  'foul', // basketball: personal, technical or unsportsmanlike
   'timeout',
   'game_end', // ends the game early (abandoned, walkover, retirement)
   'note',
@@ -99,13 +128,16 @@ export const scoreboardEventInputSchema = z.object({
   clientId: z.string().uuid(),
   type: z.enum(SCOREBOARD_EVENT_TYPES),
   /** When it happened, ms since epoch. The server clamps it near its own clock. */
-  at: z.number().int().positive(),
+  // Rounded, not refused: a phone's clock offset can be a half millisecond (it averages two times), which used to
+  // reject the whole tap with "expected int".
+  at: z.number().positive().transform((n) => Math.round(n)),
   side: z.enum(['home', 'away']).optional(),
   playerId: z.string().max(64).optional(),
   assistId: z.string().max(64).optional(),
   inId: z.string().max(64).optional(),
   outId: z.string().max(64).optional(),
   card: z.enum(['yellow', 'red']).optional(),
+  foul: z.enum(['personal', 'technical', 'unsportsmanlike']).optional(),
   points: z.number().int().min(1).max(3).optional(),
   ownGoal: z.boolean().optional(),
   note: z.string().trim().max(200).optional(),
@@ -131,6 +163,7 @@ export interface PlayerStats {
   points: number;
   yellow: number;
   red: number;
+  fouls: number;
   subsOn: number;
   subsOff: number;
 }
@@ -144,6 +177,7 @@ export interface TimelineItem {
   inId?: string;
   outId?: string;
   card?: 'yellow' | 'red';
+  foul?: 'personal' | 'technical' | 'unsportsmanlike';
   points?: number;
   ownGoal?: boolean;
   note?: string;
@@ -173,6 +207,11 @@ export interface PeriodsState {
   onCourt: { home: string[]; away: string[] };
   sentOff: string[];
   yellows: Record<string, number>;
+  /** Basketball: players out on fouls (their team brings someone on, unlike a sending-off). */
+  fouledOut: string[];
+  technicals: Record<string, number>;
+  /** Team fouls per period (index = period - 1). */
+  teamFouls: { home: number; away: number }[];
   timeouts: { home: number; away: number };
   stats: Record<string, PlayerStats>;
   timeline: TimelineItem[];
@@ -202,7 +241,7 @@ export interface RacketState {
 
 export type ScoreboardState = PeriodsState | RacketState;
 
-const emptyStats = (): PlayerStats => ({ goals: 0, assists: 0, points: 0, yellow: 0, red: 0, subsOn: 0, subsOff: 0 });
+const emptyStats = (): PlayerStats => ({ goals: 0, assists: 0, points: 0, yellow: 0, red: 0, fouls: 0, subsOn: 0, subsOff: 0 });
 const other = (s: ScoreSide): ScoreSide => (s === 'home' ? 'away' : 'home');
 
 export function initialState(config: ScoreboardConfig, roster: RosterPlayer[] = []): ScoreboardState {
@@ -222,7 +261,7 @@ export function initialState(config: ScoreboardConfig, roster: RosterPlayer[] = 
       home: roster.filter((p) => p.side === 'home' && p.starter).map((p) => p.id),
       away: roster.filter((p) => p.side === 'away' && p.starter).map((p) => p.id),
     },
-    sentOff: [], yellows: {}, timeouts: { home: 0, away: 0 }, stats, timeline: [], winner: null, lastSeq: 0,
+    sentOff: [], yellows: {}, fouledOut: [], technicals: {}, teamFouls: [], timeouts: { home: 0, away: 0 }, stats, timeline: [], winner: null, lastSeq: 0,
   };
 }
 
@@ -291,7 +330,7 @@ function reducePeriods(config: PeriodsConfig, roster: RosterPlayer[], events: Sc
         label: clockLabel(config, Math.max(1, s.period), elapsedAt), score: { ...s.score },
         ...(e.side ? { side: e.side } : {}), ...(e.playerId ? { playerId: e.playerId } : {}),
         ...(e.assistId ? { assistId: e.assistId } : {}), ...(e.inId ? { inId: e.inId } : {}),
-        ...(e.outId ? { outId: e.outId } : {}), ...(e.card ? { card: e.card } : {}),
+        ...(e.outId ? { outId: e.outId } : {}), ...(e.card ? { card: e.card } : {}), ...(e.foul ? { foul: e.foul } : {}),
         ...(e.note ? { note: e.note } : {}), ...extra,
       };
       s.timeline.push(item);
@@ -303,6 +342,7 @@ function reducePeriods(config: PeriodsConfig, roster: RosterPlayer[], events: Sc
         if (s.period >= config.periods) break;
         s.period += 1;
         s.periodScores[s.period - 1] = { home: 0, away: 0 };
+        s.teamFouls[s.period - 1] = { home: 0, away: 0 };
         s.elapsedMs = 0;
         s.anchorAt = e.at;
         s.status = 'live';
@@ -385,6 +425,24 @@ function reducePeriods(config: PeriodsConfig, roster: RosterPlayer[], events: Sc
           s.sentOff.push(e.playerId);
           for (const side of ['home', 'away'] as const) {
             s.onCourt[side] = s.onCourt[side].filter((id) => id !== e.playerId);
+          }
+        }
+        push();
+        break;
+      }
+      case 'foul': {
+        const limits = rulesFor(config.sport).fouls;
+        if ((s.status === 'setup' || s.status === 'ended') || !e.side || !limits) break;
+        const tf = (s.teamFouls[Math.max(0, s.period - 1)] ??= { home: 0, away: 0 });
+        tf[e.side] += 1;
+        if (e.playerId) {
+          const st = statsFor(e.playerId);
+          st.fouls += 1;
+          if (e.foul === 'technical') s.technicals[e.playerId] = (s.technicals[e.playerId] ?? 0) + 1;
+          const out = st.fouls >= limits.playerLimit || (s.technicals[e.playerId] ?? 0) >= 2;
+          if (out && !s.fouledOut.includes(e.playerId)) {
+            s.fouledOut.push(e.playerId);
+            s.onCourt[e.side] = s.onCourt[e.side].filter((id) => id !== e.playerId);
           }
         }
         push();
@@ -560,6 +618,8 @@ export function validateScoreboardEvent(
       const pts = event.points ?? 1;
       if (!config.pointValues.includes(pts)) return `A ${config.sport} score is worth ${config.pointValues.join(', ')}.`;
       if (event.ownGoal && event.assistId) return 'An own goal has no assist.';
+      if (event.ownGoal && !rulesFor(config.sport).ownGoal) return `${config.sport} has no own goals.`;
+      if (event.assistId && !rulesFor(config.sport).assists) return `${config.sport} does not record assists.`;
       if (event.playerId && !event.ownGoal) {
         const p = byId.get(event.playerId);
         if (!p) return 'Unknown scorer.';
@@ -585,9 +645,23 @@ export function validateScoreboardEvent(
       if (!st.onCourt[event.side].includes(event.outId)) return 'That player is not on the court.';
       if (st.onCourt[event.side].includes(event.inId)) return 'That player is already on.';
       if (st.sentOff.includes(event.inId)) return 'A sent-off player cannot come back on.';
+      if ((st.fouledOut ?? []).includes(event.inId)) return 'That player has fouled out.';
+      return null;
+    }
+    case 'foul': {
+      if (!rulesFor(config.sport).fouls) return `${config.sport} does not track fouls here.`;
+      if (st.status === 'setup' || st.status === 'ended') return 'Fouls are given during the game.';
+      if (!event.side) return 'Say which side.';
+      if (event.playerId) {
+        const p = byId.get(event.playerId);
+        if (!p) return 'Unknown player.';
+        if (p.side !== event.side) return 'That player is on the other side.';
+        if ((st.fouledOut ?? []).includes(p.id)) return 'That player has already fouled out.';
+      }
       return null;
     }
     case 'card': {
+      if (!rulesFor(config.sport).cards) return `${config.sport} has no cards.`;
       if (st.status === 'setup') return 'Start the game first.';
       if (!event.playerId || !event.card) return 'Pick the player and the card.';
       return byId.has(event.playerId) ? null : 'Unknown player.';

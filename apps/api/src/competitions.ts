@@ -97,7 +97,7 @@ function shuffle<T>(list: T[]): T[] {
 
 // --- Create and edit -------------------------------------------------------------------
 
-function detailColumns(input: Partial<UpdateCompetitionInput>): Record<string, unknown> {
+export function detailColumns(input: Partial<UpdateCompetitionInput>): Record<string, unknown> {
   const map: [keyof UpdateCompetitionInput, string][] = [
     ['description', 'description'],
     ['bannerUrl', 'banner_url'],
@@ -687,6 +687,34 @@ export async function topUpSeries(service: SupabaseClient, seriesId: string, now
     await notifyUsers(regulars, 'series_game_added', { seriesId: s.id, title: s.title, matchId: created[0] });
   }
   return created;
+}
+
+/**
+ * The daily job: every active series gets its next four games in place even when nothing happened to it (top-ups
+ * otherwise only run when one of its games changes). One failing series never stops the rest.
+ */
+export async function topUpAllSeries(service: SupabaseClient, now: Date = new Date()): Promise<{ series: number; created: number; failed: number }> {
+  const { data, error } = await service.from('match_series').select('id').eq('status', 'active');
+  if (error) throw new ActionError(500, 'Could not list the series.');
+  const out = { series: 0, created: 0, failed: 0 };
+  for (const row of (data ?? []) as { id: string }[]) {
+    out.series += 1;
+    try {
+      out.created += (await topUpSeries(service, row.id, now)).length;
+    } catch {
+      out.failed += 1;
+    }
+  }
+  return out;
+}
+
+/** The scheduler's shared secret (CRON_SECRET, at least 16 characters), compared in constant time. */
+export function cronAllowed(header: string | undefined): boolean {
+  const secret = process.env['CRON_SECRET'];
+  if (!secret || secret.length < 16 || !header) return false;
+  const a = Buffer.from(header);
+  const b = Buffer.from(secret);
+  return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
 export async function createSeries(service: SupabaseClient, userId: string, input: CreateSeriesInput): Promise<{ seriesId: string; matchIds: string[] }> {

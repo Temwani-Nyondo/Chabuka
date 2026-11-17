@@ -1,8 +1,15 @@
 import express from 'express';
 import { z } from 'zod';
 import { actionNameSchema } from '@chabuka/shared';
-import { runAction, toHttpError } from './actions.js';
+import { ActionError, runAction, toHttpError } from './actions.js';
 import { runHelperTurn } from './helper.js';
+import * as vb from './venueBooking.js';
+import * as handshake from './venueHandshake.js';
+import * as golf from './golf.js';
+import * as golfDays from './golfDays.js';
+import * as races from './races.js';
+import * as social from './social.js';
+import * as records from './records.js';
 import { transcribeVoice } from './model.js';
 import { handleMcpRequest } from './mcp.js';
 import { createAgentToken, listAgentTokens, revokeAgentToken } from './tokens.js';
@@ -31,6 +38,7 @@ import {
 import { buildIcs, formatEventLocation, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 import { loadServerEnv } from './env.js';
 import { readLanding } from './landing.js';
+import { readSportFeed } from './sportFeed.js';
 import { bookSpace, bookSpaceSchema, getVenueAvailability, getVenueSpaces, listMySpaceBookings, setVenueCalendarLink } from './spaces.js';
 import {
   addPlayerSchema,
@@ -64,7 +72,7 @@ import {
   transferOwnership,
   updateTeamSettings,
 } from './teamAdmin.js';
-import { entriesForOrganiser, getSeries } from './competitions.js';
+import { cronAllowed, entriesForOrganiser, getSeries, topUpAllSeries } from './competitions.js';
 import {
   availabilityResponseSchema,
   joinTeamSchema,
@@ -267,6 +275,25 @@ const helperBodySchema = z.object({
 
 // "Ask Gaffer" in the web nav lands here. Same auth shape as the
 // action layer; the model acts as the signed-in user via runAction.
+// Public, read-only: the sport feed WaitApp's Discover shows (sportFeed.ts). Trimmed, no identities, cached briefly.
+app.get('/api/public/sport-feed', async (req, res) => {
+  const num = (v: unknown) => (typeof v === 'string' && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const sport = typeof req.query['sport'] === 'string' ? req.query['sport'].slice(0, 40) : undefined;
+  try {
+    const feed = await readSportFeed(createServiceClient(), {
+      sport,
+      lat: num(req.query['lat']),
+      lng: num(req.query['lng']),
+      days: num(req.query['days']) ?? 14,
+    });
+    res.set('Cache-Control', 'public, max-age=120');
+    res.json(feed);
+  } catch (err) {
+    console.error('sport feed read failed:', err);
+    res.status(500).json({ error: 'Could not load the sport feed.' });
+  }
+});
+
 // Public, read-only: upcoming open games and approved venues for the landing page.
 app.get('/api/public/landing', async (_req, res) => {
   try {
@@ -742,9 +769,304 @@ app.post('/api/venues/:id/waitapp-calendar', async (req, res) => {
     return;
   }
   try {
-    res.json(await setVenueCalendarLink(createServiceClient(), userId, id.data, body.data.link));
+    const svc = createServiceClient();
+    // Unlinking: first refresh Chabuka's own spaces and hours from WaitApp (needs the link), so the venue keeps working here.
+    let pulled: unknown = null;
+    if (!body.data.link) {
+      const before = await vb.loadVenueRow(svc, id.data);
+      if (before.owner_id === userId && vb.isLinked(before)) pulled = await vb.pullVenueFromWaitApp(svc, before).catch(() => null);
+    }
+    // Linking now goes through the venue handshake (/api/venues/:id/waitapp/start); this route only unlinks.
+    const result = await setVenueCalendarLink(svc, userId, id.data, body.data.link);
+    res.json({ ...result, pulled });
   } catch (err) {
     sendError(res, err, 'venue calendar link');
+  }
+});
+
+// --- Venue handshake: "Take paid bookings online" (venueHandshake.ts) ----------------------
+app.get('/api/venues/:id/waitapp', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = z.string().uuid().safeParse(req.params['id']);
+  if (!id.success) {
+    res.status(404).json({ error: 'Venue not found.' });
+    return;
+  }
+  try {
+    const svc = createServiceClient();
+    await vb.requireVenueManager(svc, id.data, userId);
+    res.set('Cache-Control', 'no-store');
+    res.json(await handshake.venueLinkInfo(svc, id.data));
+  } catch (err) {
+    sendError(res, err, 'venue waitapp info');
+  }
+});
+
+app.post('/api/venues/:id/waitapp/start', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const id = z.string().uuid().safeParse(req.params['id']);
+  if (!id.success) {
+    res.status(404).json({ error: 'Venue not found.' });
+    return;
+  }
+  try {
+    res.json(await handshake.startVenueConnect(createServiceClient(), userId, id.data));
+  } catch (err) {
+    sendError(res, err, 'venue waitapp start');
+  }
+});
+
+app.post('/api/venues/waitapp/complete', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  const body = z.object({ code: z.string().min(8).max(200), state: z.string().min(8).max(400) }).safeParse(req.body ?? {});
+  if (!body.success) {
+    res.status(400).json({ error: 'Check the request.' });
+    return;
+  }
+  try {
+    res.json(await handshake.completeVenueConnect(createServiceClient(), userId, body.data.code, body.data.state));
+  } catch (err) {
+    sendError(res, err, 'venue waitapp complete');
+  }
+});
+
+// --- Venue booking (Phase 4): same answers for Chabuka-only and WaitApp-linked venues ---------
+function venueGet<T>(path: string, label: string, run: (userId: string, venueId: string, q: Record<string, string>) => Promise<T>): void {
+  app.get(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params['id']);
+    if (!id.success) {
+      res.status(404).json({ error: 'Venue not found.' });
+      return;
+    }
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await run(userId, id.data, req.query as Record<string, string>));
+    } catch (err) {
+      sendError(res, err, label);
+    }
+  });
+}
+venueGet('/api/venues/:id/booking/spaces', 'venue booking spaces', (_u, id) => vb.listSpaces(createServiceClient(), id));
+venueGet('/api/venues/:id/booking/availability', 'venue booking availability', (_u, id, q) =>
+  vb.getAvailability(createServiceClient(), id, String(q['spaceId'] ?? ''), String(q['date'] ?? '')),
+);
+venueGet('/api/venues/:id/booking/calendar', 'venue calendar', (u, id, q) =>
+  vb.getCalendar(createServiceClient(), u, id, String(q['from'] ?? ''), Number(q['days'] ?? 7) || 7),
+);
+venueGet('/api/venues/:id/booking/requests', 'venue requests', async (u, id) => ({ requests: await vb.getRequests(createServiceClient(), u, id) }));
+venueGet('/api/venues/:id/booking/today', 'venue today', (u, id) => vb.getToday(createServiceClient(), u, id));
+venueGet('/api/venues/:id/booking/stats', 'venue stats', (u, id) => vb.getStats(createServiceClient(), u, id));
+venueGet('/api/venues/:id/booking/staff', 'venue staff', (u, id) => vb.listStaff(createServiceClient(), u, id));
+// --- Race events: public view, organiser entries, finish line, results, my races ------------------
+function raceGet<T>(path: string, label: string, run: (userId: string, id: string, q: Record<string, string>) => Promise<T>): void {
+  app.get(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    const id = z.string().uuid().safeParse(req.params['id']);
+    if (!id.success) {
+      res.status(404).json({ error: 'Not found.' });
+      return;
+    }
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await run(userId, id.data, req.query as Record<string, string>));
+    } catch (err) {
+      sendError(res, err, label);
+    }
+  });
+}
+raceGet('/api/races/:id', 'race view', (u, id) => races.getRaceView(createServiceClient(), u, id));
+raceGet('/api/races/:id/entries', 'race entries', (u, id) => races.getRaceEntries(createServiceClient(), u, id));
+raceGet('/api/races/:id/results', 'race results', (u, id) => races.getRaceResults(createServiceClient(), u, id));
+raceGet('/api/race-distances/:id/line', 'finish line', (u, id) => races.getLineState(createServiceClient(), u, id));
+// --- Phase 5: circles as channels, creators, following, player profiles ------------------------
+function socialGet<T>(path: string, label: string, run: (userId: string, params: Record<string, string>, q: Record<string, string>) => Promise<T>): void {
+  app.get(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    try {
+      res.set('Cache-Control', 'no-store');
+      res.json(await run(userId, req.params as Record<string, string>, req.query as Record<string, string>));
+    } catch (err) {
+      sendError(res, err, label);
+    }
+  });
+}
+const uuidOr404 = (v: string | undefined) => {
+  const r = z.string().uuid().safeParse(v);
+  if (!r.success) throw new ActionError(404, 'Not found.');
+  return r.data;
+};
+socialGet('/api/circles', 'circles', (u) => social.listCircles(createServiceClient(), u));
+socialGet('/api/circles/:id', 'circle', (u, p) => social.getCircle(createServiceClient(), u, uuidOr404(p['id'])));
+socialGet('/api/circles/:id/posts', 'circle posts', (u, p, q) =>
+  social.getCirclePosts(createServiceClient(), u, uuidOr404(p['id']), typeof q['before'] === 'string' && !Number.isNaN(Date.parse(q['before'])) ? q['before'] : undefined),
+);
+socialGet('/api/creators/:handle', 'creator', (u, p) => social.getCreator(createServiceClient(), u, String(p['handle'] ?? '').slice(0, 30)));
+socialGet('/api/creator-posts/:id', 'creator post', (u, p) => social.getCreatorPost(createServiceClient(), u, uuidOr404(p['id'])));
+socialGet('/api/me/creator', 'my creator status', async (u) => ({ creator: await social.myCreatorStatus(createServiceClient(), u) }));
+socialGet('/api/following', 'following feed', (u) => social.getFollowingFeed(createServiceClient(), u));
+socialGet('/api/me/follows', 'my follows', (u) => social.getMyFollows(createServiceClient(), u));
+socialGet('/api/players/:id', 'player', (u, p) => social.getPlayer(createServiceClient(), u, uuidOr404(p['id'])));
+socialGet('/api/admin/creators', 'creator applications', (u, _p, q) =>
+  social.listCreatorApplications(createServiceClient(), u, ['pending', 'approved', 'rejected', 'suspended'].includes(String(q['status'])) ? String(q['status']) : 'pending'),
+);
+socialGet('/api/follow-state/:type/:id', 'follow state', async (u, p) => {
+  const type = z.enum(['creator', 'team', 'competition', 'venue']).parse(p['type']);
+  const id = uuidOr404(p['id']);
+  const svc = createServiceClient();
+  const { data: mine } = await svc.from('user_follows').select('user_id').eq('user_id', u).eq('subject_type', type).eq('subject_id', id).maybeSingle();
+  const { data: all } = await svc.from('user_follows').select('user_id').eq('subject_type', type).eq('subject_id', id);
+  return { following: !!mine, followers: ((all ?? []) as unknown[]).length };
+});
+
+// --- Phase 6: records, ratings (bands only), matchmaking, Free tonight ---------------------------
+socialGet('/api/records/me', 'my record', (u) => records.recordFor(createServiceClient(), u));
+socialGet('/api/teams/:id/record', 'team record', (_u, p) => records.getTeamRecord(createServiceClient(), uuidOr404(p['id'])));
+socialGet('/api/teams/:id/opponents', 'opponent suggestions', (u, p) => records.suggestOpponents(createServiceClient(), u, uuidOr404(p['id'])));
+socialGet('/api/versus/:home/:away', 'versus', (_u, p) => records.versus(createServiceClient(), uuidOr404(p['home']), uuidOr404(p['away'])));
+socialGet('/api/games/for-you', 'games for you', (u) => records.gamesForYou(createServiceClient(), u));
+socialGet('/api/games/:id/free-nearby', 'free nearby', (u, p) => records.freeNearby(createServiceClient(), u, uuidOr404(p['id'])));
+// Before the game exists (the create form): a count only, and only from FREE_PREVIEW_MIN up.
+socialGet('/api/free-nearby', 'free nearby preview', (u, _p, q) => {
+  const num = (v: string | undefined) => (v != null && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
+  const uuid = (v: string | undefined) => (v && z.string().uuid().safeParse(v).success ? v : undefined);
+  return records.freeNearbyPreview(createServiceClient(), u, {
+    sportId: uuid(q['sportId']),
+    startsAt: q['startsAt'],
+    lat: num(q['lat']),
+    lng: num(q['lng']),
+    venueId: uuid(q['venueId']) ?? null,
+  });
+});
+socialGet('/api/me/free-tonight', 'free tonight', (u) => records.myFreeTonight(createServiceClient(), u));
+// --- Golf (golf.ts): course cards ------------------------------------------------------------
+socialGet('/api/golf/courses', 'golf courses', (u) => golf.pickableCourses(createServiceClient(), u).then((courses) => ({ courses })));
+socialGet('/api/golf/courses/:id', 'golf course', (_u, p) => golf.getCourse(createServiceClient(), uuidOr404(p['id'])));
+socialGet('/api/venues/:id/golf-courses', 'venue golf courses', (_u, p) => golf.venueCourses(createServiceClient(), uuidOr404(p['id'])).then((courses) => ({ courses })));
+app.post('/api/golf/courses', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json({ course: await golf.saveCourse(createServiceClient(), userId, req.body ?? {}) });
+  } catch (err) {
+    sendError(res, err, 'golf course save');
+  }
+});
+app.delete('/api/golf/courses/:id', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json(await golf.deleteCourse(createServiceClient(), userId, uuidOr404(req.params['id'])));
+  } catch (err) {
+    sendError(res, err, 'golf course delete');
+  }
+});
+
+socialGet('/api/me/golf', 'my golf', (u) => golf.myGolf(createServiceClient(), u));
+app.post('/api/golf/rounds', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json(await golf.logRound(createServiceClient(), userId, req.body ?? {}));
+  } catch (err) {
+    sendError(res, err, 'golf round');
+  }
+});
+app.delete('/api/golf/rounds/:id', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json(await golf.deleteRound(createServiceClient(), userId, uuidOr404(req.params['id'])));
+  } catch (err) {
+    sendError(res, err, 'golf round delete');
+  }
+});
+
+// --- Golf days (golfDays.ts): entries, flights, live scoring ----------------------------------------
+socialGet('/api/golf-days/:id', 'golf day', (u, p) => golfDays.getGolfDayView(createServiceClient(), u, uuidOr404(p['id'])));
+socialGet('/api/golf-days/:id/entries', 'golf day entries', (u, p) => golfDays.getGolfEntries(createServiceClient(), u, uuidOr404(p['id'])).then((entries) => ({ entries })));
+const golfPosts: [string, (svc: ReturnType<typeof createServiceClient>, u: string, body: unknown) => Promise<unknown>][] = [
+  ['/api/golf-days', golfDays.createGolfDay],
+  ['/api/golf-days/settings', golfDays.updateGolfDaySettings],
+  ['/api/golf-days/open-entries', golfDays.openGolfEntries],
+  ['/api/golf-days/enter', golfDays.enterGolfDay],
+  ['/api/golf-days/cancel-entry', golfDays.cancelGolfEntry],
+  ['/api/golf-days/flights', golfDays.buildFlights],
+  ['/api/golf-days/claim-scorer', golfDays.claimScorer],
+  ['/api/golf-days/scores', golfDays.saveGolfScores],
+  ['/api/golf-days/side-result', golfDays.setSideResult],
+  ['/api/golf-days/publish', golfDays.publishGolfResults],
+];
+for (const [path, run] of golfPosts) {
+  app.post(path, async (req, res) => {
+    const userId = await authedUserId(req, res);
+    if (!userId) return;
+    try {
+      res.json(await run(createServiceClient(), userId, req.body ?? {}));
+    } catch (err) {
+      sendError(res, err, path);
+    }
+  });
+}
+
+// Daily (Cloud Scheduler, with the CRON_SECRET header): keep every weekly series four games ahead.
+app.post('/api/internal/series/top-up', async (req, res) => {
+  if (!cronAllowed(req.get('x-cron-secret'))) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
+  try {
+    res.json(await topUpAllSeries(createServiceClient()));
+  } catch (err) {
+    sendError(res, err, 'series top-up');
+  }
+});
+
+app.post('/api/internal/records/backfill', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.json(await records.backfillRecords(createServiceClient(), userId));
+  } catch (err) {
+    sendError(res, err, 'records backfill');
+  }
+});
+
+app.get('/api/my/races', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ races: await races.myRaces(createServiceClient(), userId) });
+  } catch (err) {
+    sendError(res, err, 'my races');
+  }
+});
+
+app.get('/api/my/venues', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ venues: await vb.myVenues(createServiceClient(), userId) });
+  } catch (err) {
+    sendError(res, err, 'my venues');
+  }
+});
+app.get('/api/my/bookings', async (req, res) => {
+  const userId = await authedUserId(req, res);
+  if (!userId) return;
+  try {
+    res.set('Cache-Control', 'no-store');
+    res.json({ bookings: await vb.myBookings(createServiceClient(), userId) });
+  } catch (err) {
+    sendError(res, err, 'my bookings');
   }
 });
 

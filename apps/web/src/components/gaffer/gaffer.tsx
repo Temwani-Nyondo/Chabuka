@@ -1,3 +1,4 @@
+import { notifyDataChanged } from '../../lib/dataChanged';
 import { useEffect, useRef } from 'react';
 import type { Dispatch, FormEvent, KeyboardEvent, ReactNode, SetStateAction } from 'react';
 import { Link } from 'react-router-dom';
@@ -47,6 +48,8 @@ export function streamSink(setMessages: Dispatch<SetStateAction<GafferMessage[]>
       const had = open;
       open = false;
       const final: GafferMessage = { from: 'gaffer', text, ...(actionsTaken ? { actionsTaken } : {}) };
+      // Gaffer changed something (made or joined a game, booked...): screens showing that data reload.
+      if ((actionsTaken ?? []).some((a) => a.ok)) notifyDataChanged();
       setMessages((prev) =>
         had && prev[prev.length - 1]?.streaming ? [...prev.slice(0, -1), final] : [...prev, final],
       );

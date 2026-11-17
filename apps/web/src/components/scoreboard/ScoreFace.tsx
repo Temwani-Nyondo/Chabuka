@@ -1,4 +1,4 @@
-import { displayClock, gamePointLabel } from '@chabuka/shared';
+import { displayClock, gamePointLabel, rulesFor } from '@chabuka/shared';
 import type { PeriodsConfig, PeriodsState, RacketConfig, RacketState, ScoreboardState, TimelineItem } from '@chabuka/shared';
 import type { BoardRoster, PublicBoard } from '../../lib/scoreboard';
 
@@ -33,7 +33,7 @@ export function describeItem(item: TimelineItem, board: PublicBoard, byId: Map<s
   switch (item.type) {
     case 'period_start':
       if (cfg.kind === 'racket') return 'Match started';
-      return item.period === 1 ? 'Kick-off' : `${cfg.periodNames[item.period - 1] ?? 'Next period'} starts`;
+      return item.period === 1 ? rulesFor(cfg.sport).startWord : `${cfg.periodNames[item.period - 1] ?? 'Next period'} starts`;
     case 'period_end': {
       if (cfg.kind === 'racket') return 'Match over';
       return item.period >= cfg.periods ? 'Full time' : cfg.periods === 2 ? 'Half time' : `End of ${cfg.periodNames[item.period - 1] ?? 'period'}`;
@@ -56,6 +56,10 @@ export function describeItem(item: TimelineItem, board: PublicBoard, byId: Map<s
       return `${side} sub: ${name(item.inId)} on, ${name(item.outId)} off`;
     case 'card':
       return `${item.card === 'red' ? 'Red' : 'Yellow'} card: ${name(item.playerId)}`;
+    case 'foul': {
+      const kind = item.foul === 'technical' ? 'Technical foul' : item.foul === 'unsportsmanlike' ? 'Unsportsmanlike foul' : 'Foul';
+      return item.playerId ? `${kind}: ${name(item.playerId)}` : `${kind}: ${side} bench`;
+    }
     case 'timeout':
       return `Timeout: ${side}`;
     case 'point':
@@ -189,7 +193,9 @@ export function Lineups({ board, state, roster }: TimelineProps) {
                       {st && st.assists > 0 ? ` ${st.assists} ast` : ''}
                       {st && st.yellow > 0 ? ' Y' : ''}
                       {st && st.red > 0 ? ' R' : ''}
+                      {st && st.fouls > 0 ? ` ${st.fouls} fouls` : ''}
                       {sentOff ? ' off' : ''}
+                      {state.kind === 'periods' && (state.fouledOut ?? []).includes(p.id) ? ' fouled out' : ''}
                     </span>
                   </li>
                 );

@@ -10,6 +10,7 @@ import { fetchCircles } from '../lib/circles';
 import { fetchSlotLoad, fetchVenueSlots } from '../lib/venues';
 import type { VenueSlot } from '../lib/venues';
 import type { CircleListing } from '../lib/circles';
+import { fetchFreePreview } from '../lib/records';
 import VenuePicker from './VenuePicker';
 import type { VenuePick } from './VenuePicker';
 
@@ -35,6 +36,7 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
   const [until, setUntil] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [freeCount, setFreeCount] = useState(0);
 
   useEffect(() => {
     fetchSports()
@@ -82,6 +84,21 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
     const pad = (n: number) => String(n).padStart(2, '0');
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   };
+
+  // Free tonight: a game later today, in public, with a place set shows how many players nearby are free for this sport.
+  useEffect(() => {
+    const token = session?.access_token;
+    const hasPlace = (venuePick.lat != null && venuePick.lng != null) || !!venuePick.venueId;
+    if (!token || !sportId || !startsAt || visibility !== 'public' || !hasPlace) { setFreeCount(0); return; }
+    const iso = new Date(startsAt).toISOString();
+    let stop = false;
+    const t = window.setTimeout(() => {
+      fetchFreePreview(token, { sportId, startsAt: iso, lat: venuePick.lat, lng: venuePick.lng, venueId: venuePick.venueId })
+        .then((r) => { if (!stop) setFreeCount(r.eligible ? r.count : 0); })
+        .catch(() => { if (!stop) setFreeCount(0); });
+    }, 400);
+    return () => { stop = true; window.clearTimeout(t); };
+  }, [session, sportId, startsAt, visibility, venuePick.lat, venuePick.lng, venuePick.venueId]);
 
   const sport = sports.find((s) => s.id === sportId);
 
@@ -225,6 +242,11 @@ export default function CreateMatchForm({ onDone }: { onDone: () => void }) {
         onAreaChange={setArea}
         onPick={setVenuePick}
       />
+      {freeCount > 0 ? (
+        <p className="hint" role="status">
+          {freeCount} players near here are free tonight for {sport?.name?.toLowerCase() ?? 'this sport'}. Once the game is created, you can let them know from the game page.
+        </p>
+      ) : null}
       <label className="field">
         Repeats
         <select className="input" value={repeat} onChange={(e) => setRepeat(Number(e.target.value) as 0 | 1 | 2)}>

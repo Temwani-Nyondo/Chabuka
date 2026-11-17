@@ -3,7 +3,7 @@ import type { FormEvent, ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Check, Copy, LogOut, Monitor, Moon, Sun } from 'lucide-react';
 import { GAME_TYPES, TIME_BANDS, WEEK_DAYS } from '@chabuka/shared';
-import type { GameType, TimeBand } from '@chabuka/shared';
+import type { GameType, ProfileVisibility, TimeBand } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
 import { uploadImage } from '../lib/upload';
@@ -20,6 +20,7 @@ import {
 } from '../lib/api';
 import type { AgentTokenRow } from '../lib/api';
 import { useIsAdmin } from '../lib/admin';
+import { CreatorSettings, PrivacySettings } from '../components/SettingsSocial';
 import { Avatar, Button, Card, Chip, ErrorNote, PageHeader, Segmented, cx } from '../components/ui';
 
 const fieldCls = 'h-11 w-full rounded-xl border border-line bg-surface px-3 text-[15px] text-ink focus-visible:outline-2 focus-visible:outline-brand';
@@ -266,6 +267,18 @@ export default function SettingsPage() {
           </div>
         </form>
       </Block>
+
+      {token && user ? (
+        <Block id="privacy" title="Privacy" sub="Chabuka keeps social features small: no messages, no comments.">
+          <PrivacySettings token={token} userId={user.id} current={(profile as { visibility?: ProfileVisibility } | null)?.visibility} />
+        </Block>
+      ) : null}
+
+      {token ? (
+        <Block id="creator" title="Become a creator">
+          <CreatorSettings token={token} />
+        </Block>
+      ) : null}
 
       <Block title="Appearance">
         <Segmented<ThemePref>

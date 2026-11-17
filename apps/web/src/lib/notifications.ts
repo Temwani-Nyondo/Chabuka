@@ -43,17 +43,141 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       };
     case 'booking_answered': {
       const decision = text(p.decision);
+      const confirmed = Number(p.confirmed ?? 0);
+      const declined = Number(p.declined ?? 0);
+      const multi = confirmed + declined > 1;
       return {
         title:
           decision === 'confirm'
-            ? 'Your booking was confirmed'
+            ? multi
+              ? `${confirmed} week${confirmed === 1 ? '' : 's'} confirmed${declined ? `, ${declined} already taken` : ''}`
+              : 'Your booking was confirmed'
             : decision === 'decline'
               ? 'Your booking was declined'
               : 'Your booking was answered',
-        body: '',
+        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : '', text(p.note)].filter(Boolean).join(' - '),
         href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/explore',
       };
     }
+    case 'race_entry_confirmed':
+      return {
+        title: `${text(p.runner) || 'You'} ${text(p.runner) ? 'is' : 'are'} in: bib ${text(p.bib)}`,
+        body: [text(p.title), text(p.distance)].filter(Boolean).join(' - '),
+        href: text(p.competitionId) ? `/races/${text(p.competitionId)}` : '/competitions',
+      };
+    case 'race_entry_refunded':
+      return { title: 'Your race entry was refunded', body: [text(p.title), text(p.runner)].filter(Boolean).join(' - '), href: text(p.competitionId) ? `/races/${text(p.competitionId)}` : '/competitions' };
+    case 'race_entry_cancelled':
+      return { title: 'The organiser cancelled a race entry', body: [text(p.title), text(p.runner)].filter(Boolean).join(' - '), href: text(p.competitionId) ? `/races/${text(p.competitionId)}` : '/competitions' };
+    case 'race_entry_moved':
+      return {
+        title: `Moved to the ${text(p.distance)}${text(p.bib) ? `, new bib ${text(p.bib)}` : ''}`,
+        body: [text(p.title), text(p.runner)].filter(Boolean).join(' - '),
+        href: text(p.competitionId) ? `/races/${text(p.competitionId)}` : '/competitions',
+      };
+    case 'race_result':
+      return {
+        title:
+          text(p.status) === 'finished'
+            ? `${text(p.runner)}: ${text(p.time)}${text(p.position) ? `, ${text(p.position)} of ${text(p.of)}` : ''}`
+            : `${text(p.runner)}: results are out`,
+        body: [text(p.title), text(p.distance)].filter(Boolean).join(' - '),
+        href: text(p.competitionId) ? `/races/${text(p.competitionId)}?tab=results` : '/competitions',
+      };
+    case 'team_band_changed':
+      return {
+        title: `${text(p.title)} ${p.up ? 'moved up to' : 'is now'} ${text(p.label)}`,
+        body: 'Level bands come from results against other teams.',
+        href: text(p.teamId) ? `/teams/${text(p.teamId)}` : '/teams',
+      };
+    case 'golf_entry_confirmed':
+      return { title: `${text(p.player)} is in`, body: text(p.title), href: text(p.competitionId) ? `/golf/${text(p.competitionId)}` : '/competitions' };
+    case 'golf_entry_refunded':
+      return { title: 'Golf day entry refunded', body: `${text(p.player)}, ${text(p.title)}`, href: text(p.competitionId) ? `/golf/${text(p.competitionId)}` : '/competitions' };
+    case 'golf_entry_cancelled':
+      return { title: 'Golf day entry cancelled', body: `${text(p.player)}, ${text(p.title)}. The organiser cancelled it.`, href: text(p.competitionId) ? `/golf/${text(p.competitionId)}` : '/competitions' };
+    case 'golf_flight':
+      return {
+        title: `Your flight: ${text(p.flight)}`,
+        body: [text(p.title), text(p.teeTime) ? new Date(text(p.teeTime)).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' - '),
+        href: text(p.competitionId) ? `/golf/${text(p.competitionId)}?tab=field` : '/competitions',
+      };
+    case 'golf_results':
+      return { title: 'Golf day results are in', body: text(p.title), href: text(p.competitionId) ? `/golf/${text(p.competitionId)}?tab=leaderboard` : '/competitions' };
+    case 'followed_team_result':
+      return {
+        title: `Result: ${text(p.score)}`,
+        body: `${text(p.title)}, a team you follow.`,
+        href: text(p.teamId) ? `/teams/${text(p.teamId)}` : '/you',
+      };
+    case 'venue_new_game':
+      return {
+        title: `New game at ${text(p.title)}`,
+        body: [text(p.game), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' - '),
+        href: text(p.matchId) ? `/games/${text(p.matchId)}` : '/explore',
+      };
+    case 'free_tonight_game':
+      return {
+        title: 'A game near you tonight',
+        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }) : ''].filter(Boolean).join(' - '),
+        href: text(p.matchId) ? `/games/${text(p.matchId)}` : '/explore',
+      };
+    case 'circle_post':
+      return {
+        title: `${p.important ? 'Important: ' : ''}${text(p.title)}`,
+        body: text(p.excerpt) || (text(p.kind) === 'poll' ? 'New poll' : text(p.kind) === 'game' ? 'New game' : 'New post'),
+        href: text(p.circleId) ? `/circles/${text(p.circleId)}` : '/circles',
+      };
+    case 'circle_admin_added':
+      return { title: `You are now an admin of ${text(p.title)}`, body: 'You can post to the circle and manage members.', href: text(p.circleId) ? `/circles/${text(p.circleId)}` : '/circles' };
+    case 'creator_pending':
+      return { title: 'New creator application', body: `${text(p.title)} (@${text(p.handle)})`, href: '/admin/venues' };
+    case 'creator_application_reviewed':
+      return {
+        title: text(p.status) === 'approved' ? 'You are a Chabuka creator' : text(p.status) === 'suspended' ? 'Your creator page is suspended' : 'Your creator application was not approved',
+        body: text(p.note) || (text(p.status) === 'approved' ? 'Open the creator studio to publish your first post.' : ''),
+        href: text(p.status) === 'approved' ? '/studio' : '/you/settings#creator',
+      };
+    case 'creator_post':
+      return {
+        title: `${text(p.title)} ${text(p.kind) === 'article' ? 'published an article' : 'posted'}`,
+        body: text(p.excerpt),
+        href: text(p.handle) ? (text(p.kind) === 'article' && text(p.postId) ? `/c/${text(p.handle)}/${text(p.postId)}` : `/c/${text(p.handle)}`) : '/circles?tab=following',
+      };
+    case 'race_payment_mismatch':
+      return {
+        title: 'A race payment needs a look',
+        body: `${text(p.runner)} paid for "${text(p.tier)}", which matches no distance. Their entry is waiting for you.`,
+        href: text(p.competitionId) ? `/races/${text(p.competitionId)}?tab=manage` : '/competitions',
+      };
+    case 'race_official_appointed':
+      return {
+        title: text(p.role) === 'finish' ? 'You are on the finish line' : 'You are on race-pack check-in',
+        body: text(p.title),
+        href: text(p.competitionId) ? `/races/${text(p.competitionId)}?tab=manage` : '/competitions',
+      };
+    case 'booking_cancelled_by_venue':
+      return {
+        title: Number(p.count ?? 1) > 1 ? `The venue cancelled ${text(p.count)} of your bookings` : 'The venue cancelled your booking',
+        body: [text(p.title), text(p.reason)].filter(Boolean).join(' - '),
+        href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/explore',
+      };
+    case 'booking_cancelled_by_player':
+      return {
+        title: Number(p.count ?? 1) > 1 ? `${text(p.count)} bookings were cancelled` : 'A booking was cancelled',
+        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage` : '/venues/dashboard',
+      };
+    case 'venue_staff_added':
+      return { title: 'You were added as a venue manager', body: text(p.title), href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage` : '/venues/dashboard' };
+    case 'waitapp_reconnect_needed':
+      return {
+        title: 'Reconnect WaitApp to manage your venue here',
+        body: text(p.title),
+        href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage?tab=setup` : '/venues/dashboard',
+      };
+    case 'space_booking_declined':
+      return { title: 'The venue declined your booking', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/explore' };
     case 'ticket_refunded':
       return {
         title: 'Your ticket was refunded',
@@ -108,12 +232,14 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
       return { title: 'Your booking was cancelled', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
     case 'space_booking_paid_owner':
       return { title: 'A booking was paid', body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '), href: '/venues/dashboard' };
-    case 'booking_requested':
+    case 'booking_requested': {
+      const weeks = Number(p.weeks ?? 1);
       return {
-        title: 'New booking request',
-        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
-        href: '/venues/dashboard',
+        title: weeks > 1 ? `New booking request, every week for ${weeks} weeks` : 'New booking request',
+        body: [text(p.who), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage?tab=requests` : '/venues/dashboard',
       };
+    }
     case 'venue_claim_pending':
       return { title: 'Someone claimed a venue', body: text(p.title), href: '/admin/venues' };
     case 'venue_claim_approved':

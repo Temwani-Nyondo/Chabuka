@@ -173,7 +173,7 @@ export function useLiveBoard(code: string | undefined): LiveBoard {
     try {
       const sentAt = Date.now();
       const data = await fetchPublicBoard(code);
-      setOffset(data.board.serverNow - (sentAt + Date.now()) / 2);
+      setOffset(Math.round(data.board.serverNow - (sentAt + Date.now()) / 2));
       setBundle(data);
       setError(null);
     } catch (err) {

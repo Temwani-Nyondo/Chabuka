@@ -14,6 +14,8 @@ import {
   skipOccurrence,
   startKnockout,
   topUpSeries,
+  topUpAllSeries,
+  cronAllowed,
   updateCompetition,
   upsertSponsor,
   withdrawEntry,
@@ -35,6 +37,7 @@ function world(teams = 4) {
     competition_sponsors: new Map(),
     fixtures: new Map(),
     follows: new Map(),
+    user_follows: new Map(),
     teams: new Map(),
     team_members: new Map(),
     profiles: new Map(),
@@ -51,6 +54,7 @@ function world(teams = 4) {
     match_participants: (r) => `${String(r['match_id'])}:${String(r['user_id'])}`,
     series_regulars: (r) => `${String(r['series_id'])}:${String(r['user_id'])}`,
     follows: (r) => `${String(r['user_id'])}:${String(r['competition_id'])}`,
+    user_follows: (r) => `${String(r['user_id'])}:${String(r['subject_type'])}:${String(r['subject_id'])}`,
   };
   const client = {
     from(table: string) {
@@ -241,6 +245,31 @@ describe('weekly series', () => {
     expect(t.match_participants!.get(`${matchIds[0]}:${ORG}`)?.['status']).toBe('joined');
     expect((await joinSeries(client, captain(1), seriesId)).joined).toBe(4);
     expect(await topUpSeries(client, seriesId)).toEqual([]);
+  });
+
+  it('the daily job tops up every active series and skips ended ones', async () => {
+    const { t, client } = world();
+    const a = await createSeries(client, ORG, series);
+    const b = await createSeries(client, ORG, { ...series, title: 'Thursday 5s', weekday: 4 });
+    t.match_series!.get(b.seriesId)!['status'] = 'ended';
+    const later = new Date(Date.now() + 15 * 86400000);
+    const out = await topUpAllSeries(client, later);
+    expect(out.series).toBe(1);
+    expect(out.failed).toBe(0);
+    expect(out.created).toBeGreaterThan(0);
+    expect([...t.matches!.values()].filter((m) => m['series_id'] === b.seriesId)).toHaveLength(4);
+    expect([...t.matches!.values()].filter((m) => m['series_id'] === a.seriesId).length).toBeGreaterThan(4);
+  });
+
+  it('the job endpoint needs the scheduler secret', () => {
+    const before = process.env['CRON_SECRET'];
+    process.env['CRON_SECRET'] = 'a-long-cron-secret-123';
+    expect(cronAllowed('a-long-cron-secret-123')).toBe(true);
+    expect(cronAllowed('wrong')).toBe(false);
+    expect(cronAllowed(undefined)).toBe(false);
+    process.env['CRON_SECRET'] = 'short';
+    expect(cronAllowed('short')).toBe(false);
+    if (before === undefined) delete process.env['CRON_SECRET']; else process.env['CRON_SECRET'] = before;
   });
 
   it('skips a week without recreating it, and fills games only up to capacity', async () => {

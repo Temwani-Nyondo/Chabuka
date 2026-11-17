@@ -6,6 +6,8 @@ import {
   leaderboard,
   presetFor,
   reduceScoreboard,
+  rulesFor,
+  scoreboardEventInputSchema,
   scoreboardSportFor,
   validateScoreboardEvent,
 } from './scoreboard.js';
@@ -225,6 +227,48 @@ describe('period sports', () => {
 });
 
 // --- Racket sports -------------------------------------------------------------
+
+describe('each sport officiates its own way', () => {
+  it('basketball has fouls, not cards or own goals; football has cards, not fouls; netball has neither', () => {
+    expect(rulesFor('basketball')).toMatchObject({ scoreWord: 'Basket', startWord: 'Tip off', cards: false, ownGoal: false });
+    expect(rulesFor('football').fouls).toBeNull();
+    expect(rulesFor('netball')).toMatchObject({ cards: false, fouls: null, assists: false });
+    const live = reduceScoreboard(basketball, roster, [ev(1, 'period_start', 0)]);
+    expect(validateScoreboardEvent(basketball, roster, live, ev(2, 'card', 1, { side: 'home', playerId: 'H1', card: 'yellow' }))).toMatch(/no cards/);
+    expect(validateScoreboardEvent(basketball, roster, live, ev(2, 'goal', 1, { side: 'away', playerId: 'H1', ownGoal: true, points: 2 }))).toMatch(/no own goals/);
+    const flive = reduceScoreboard(football, roster, [ev(1, 'period_start', 0)]);
+    expect(validateScoreboardEvent(football, roster, flive, ev(2, 'foul', 1, { side: 'home', playerId: 'H1', foul: 'personal' }))).toMatch(/fouls/);
+    expect(validateScoreboardEvent(basketball, roster, live, ev(2, 'foul', 1, { side: 'home', playerId: 'H1', foul: 'personal' }))).toBeNull();
+  });
+
+  it('a basketball player fouls out on the fifth foul, team fouls reset each quarter, and the bench brings someone on', () => {
+    const fouls = [2, 3, 4, 5, 6].map((seq, i) => ev(seq, 'foul', 1 + i, { side: 'home', playerId: 'H1', foul: 'personal' }));
+    const st = reduceScoreboard(basketball, roster, [ev(1, 'period_start', 0), ...fouls]) as PeriodsState;
+    expect(st.stats['H1']!.fouls).toBe(5);
+    expect(st.fouledOut).toEqual(['H1']);
+    expect(st.onCourt.home).not.toContain('H1');
+    expect(st.teamFouls[0]).toEqual({ home: 5, away: 0 });
+    expect(st.sentOff).toEqual([]);
+    expect(validateScoreboardEvent(basketball, roster, st, ev(7, 'sub', 7, { side: 'home', outId: 'H2', inId: 'H1' }))).toMatch(/fouled out/);
+    expect(validateScoreboardEvent(basketball, roster, st, ev(7, 'sub', 7, { side: 'home', outId: 'H2', inId: 'H3' }))).toBeNull();
+    const q2 = reduceScoreboard(basketball, roster, [ev(1, 'period_start', 0), ...fouls, ev(7, 'period_end', 10), ev(8, 'period_start', 12), ev(9, 'foul', 13, { side: 'away', playerId: 'A1', foul: 'personal' })]) as PeriodsState;
+    expect(q2.teamFouls[1]).toEqual({ home: 0, away: 1 });
+  });
+
+  it('a half-millisecond timestamp is rounded, not refused', () => {
+    const parsed = scoreboardEventInputSchema.parse({ clientId: '00000000-0000-4000-8000-000000000999', type: 'timeout', side: 'home', at: 1_800_000_000_000.5 });
+    expect(parsed.at).toBe(1_800_000_000_001);
+  });
+
+  it('two technicals put a player out', () => {
+    const st = reduceScoreboard(basketball, roster, [
+      ev(1, 'period_start', 0),
+      ev(2, 'foul', 1, { side: 'away', playerId: 'A2', foul: 'technical' }),
+      ev(3, 'foul', 2, { side: 'away', playerId: 'A2', foul: 'technical' }),
+    ]) as PeriodsState;
+    expect(st.fouledOut).toEqual(['A2']);
+  });
+});
 
 const tennis = presetFor('tennis') as RacketConfig;
 const padel = presetFor('padel') as RacketConfig;

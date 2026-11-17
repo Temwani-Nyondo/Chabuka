@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState } from 'react';
+import { googleDirectEnabled, googleIdToken } from '../lib/googleSignIn';
 import type { ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { profileSchema } from '@chabuka/shared';
@@ -107,6 +108,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // (onboarding, the page they came from, or a pending invite).
   const signInWithOAuth = async (provider: 'facebook' | 'google') => {
     if (!supabase) throw new Error('Supabase is not configured.');
+    // Google on Chabuka's own page first (the chooser names Chabuka's site, not Supabase's); the redirect below when
+    // that isn't set up or the person closes it. See lib/googleSignIn.ts.
+    if (provider === 'google' && googleDirectEnabled()) {
+      const got = await googleIdToken();
+      if (got) {
+        const { error } = await supabase.auth.signInWithIdToken({ provider: 'google', token: got.token, nonce: got.nonce });
+        if (error) throw error;
+        return;
+      }
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {

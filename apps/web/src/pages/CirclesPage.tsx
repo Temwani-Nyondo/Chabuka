@@ -1,435 +1,354 @@
 import { useCallback, useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { useSearchParams } from 'react-router-dom';
-import EmptyState from '../components/EmptyState';
+import { Link, useNavigate, useSearchParams } from 'react-router-dom';
+import { Newspaper, Plus, Radio, Trophy } from 'lucide-react';
+import { AGE_BANDS, LEVEL_LABELS, circleEligibility } from '@chabuka/shared';
+import type { Circle, Level, Profile, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
-import { createCircleAction, joinCircleAction, leaveCircleAction, updateCircleAction } from '../lib/api';
+import { createCircleAction, joinCircleAction } from '../lib/api';
 import { uploadImage } from '../lib/upload';
-import { fetchCircleFeed, fetchCircles } from '../lib/circles';
-import type { CircleListing } from '../lib/circles';
 import { fetchSports } from '../lib/matches';
 import { supabase } from '../lib/supabase';
-import { AGE_BANDS, circleEligibility } from '@chabuka/shared';
-import type { Circle, Match, Profile, Sport } from '@chabuka/shared';
+import { fetchCircleList, fetchFollowing, timeAgo } from '../lib/social';
+import type { CircleSummary, FeedItem } from '../lib/social';
+import { sportLabel } from '../components/GameCard';
+import { ArticleView, PhotoGrid, ReactionBar } from '../components/Social';
+import { Avatar, Badge, Button, Card, Chip, CountBadge, EmptyState, ErrorNote, PageHeader, Segmented, Sheet, Skeleton } from '../components/ui';
+import { Field, fieldCls } from '../components/CompetitionForms';
 
-// Same rules the API enforces on join_circle (403): surface the reason on
-// the card instead of offering a Join button the server will refuse.
-function circleBlockReason(circle: Circle, profile: Profile | null, levels: Record<string, string>): string | null {
-  const reason = circleEligibility({
-    birthYear: profile?.birth_year ?? null,
-    gender: profile?.gender ?? null,
-    ageBands: circle.age_bands,
-    genders: circle.genders,
-  });
+// Circles hub: your channels (newest post first, with unread counts), the Following feed (creators, teams, events you
+// follow) and Discover. Circles are channels: their admins post, members read, react and vote.
+
+type Tab = 'yours' | 'following' | 'discover';
+
+// Same rules the API enforces on join_circle: show the reason instead of a Join button the server will refuse.
+function blockReason(circle: Circle, profile: Profile | null, levels: Record<string, string>): string | null {
+  const reason = circleEligibility({ birthYear: profile?.birth_year ?? null, gender: profile?.gender ?? null, ageBands: circle.age_bands, genders: circle.genders });
   if (reason) return reason;
   if (circle.sport_id && circle.levels.length > 0) {
     const level = levels[circle.sport_id];
-    if (!level || !(circle.levels as string[]).includes(level)) {
-      return `This circle is for ${circle.levels.join(', ')} players.`;
-    }
+    if (!level || !(circle.levels as string[]).includes(level)) return `For ${circle.levels.map((l) => LEVEL_LABELS[l as Level] ?? l).join(', ')} players.`;
   }
   return null;
 }
 
+function CircleAvatar({ circle, size = 48 }: { circle: Circle; size?: number }) {
+  return circle.photo_url ? (
+    <img src={circle.photo_url} alt="" className="shrink-0 rounded-2xl object-cover" style={{ width: size, height: size }} />
+  ) : (
+    <span className="flex shrink-0 items-center justify-center rounded-2xl bg-brand-soft text-brand-text" style={{ width: size, height: size }}>
+      <Radio size={size / 2.2} />
+    </span>
+  );
+}
+
 export default function CirclesPage() {
   const { session, user, profile } = useAuth();
-  const [list, setList] = useState<CircleListing[]>([]);
-  const [levels, setLevels] = useState<Record<string, string>>({});
+  const token = session?.access_token ?? '';
+  const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const tab = (params.get('tab') as Tab) || 'yours';
+  const [data, setData] = useState<{ yours: CircleSummary[]; discover: CircleSummary[] } | null>(null);
   const [sports, setSports] = useState<Sport[]>([]);
-  const [events, setEvents] = useState<Record<string, { match: Match; tagged: boolean }[]>>({});
-  const [loading, setLoading] = useState(true);
+  const [levels, setLevels] = useState<Record<string, string>>({});
   const [error, setError] = useState<string | null>(null);
-  // ?create=1 (from the Create sheet) opens the new-circle form.
-  const [searchParams] = useSearchParams();
-  const [showForm, setShowForm] = useState(() => searchParams.get('create') === '1');
-  const [busy, setBusy] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [creating, setCreating] = useState(() => params.get('create') === '1');
 
+  const load = useCallback(async () => {
+    if (!token) return;
+    try {
+      setData(await fetchCircleList(token));
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load circles.');
+    }
+  }, [token]);
+
+  useEffect(() => {
+    void load();
+    fetchSports().then(setSports).catch(() => setSports([]));
+  }, [load]);
+
+  useEffect(() => {
+    if (!user || !supabase) return;
+    void supabase
+      .from('user_sports')
+      .select('sport_id,level')
+      .eq('user_id', user.id)
+      .then(({ data: rows }) => setLevels(Object.fromEntries(((rows ?? []) as { sport_id: string; level: string }[]).map((r) => [r.sport_id, r.level]))));
+  }, [user]);
+
+  const setTab = (t: Tab) =>
+    setParams((p) => {
+      p.set('tab', t);
+      p.delete('create');
+      return p;
+    });
+  const sportName = (id: string | null | undefined) => (id ? sportLabel(sports.find((s) => s.id === id)?.name) : null);
+
+  return (
+    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4 px-4 pb-24 pt-4">
+      <PageHeader
+        title="Circles"
+        sub="Channels for your sport and area, and the people and teams you follow."
+        actions={<Button size="sm" icon={<Plus size={16} />} onClick={() => setCreating(true)}>New circle</Button>}
+      />
+      <Segmented<Tab>
+        label="Circles sections"
+        value={tab}
+        onChange={setTab}
+        options={[
+          { value: 'yours', label: `Your circles${data?.yours.some((c) => c.unread) ? ` (${data.yours.reduce((n, c) => n + c.unread, 0)})` : ''}` },
+          { value: 'following', label: 'Following' },
+          { value: 'discover', label: 'Discover' },
+        ]}
+      />
+      {error ? <ErrorNote>{error}</ErrorNote> : null}
+
+      {tab === 'yours' ? (
+        !data ? (
+          <Skeleton className="h-48" />
+        ) : data.yours.length === 0 ? (
+          <EmptyState icon={<Radio size={22} />} title="No circles yet" body="Join a circle for your sport and area to hear about its games and news." action={<Button variant="primary" onClick={() => setTab('discover')}>Find circles</Button>} />
+        ) : (
+          <Card className="overflow-hidden">
+            {data.yours.map((c) => (
+              <Link key={c.circle.id} to={`/circles/${c.circle.id}`} className="flex items-center gap-3 px-3.5 py-3 text-ink no-underline hover:bg-surface-2/60 [&+&]:border-t [&+&]:border-line">
+                <CircleAvatar circle={c.circle} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="flex items-baseline justify-between gap-2">
+                    <strong className="truncate">{c.circle.name}</strong>
+                    {c.last ? <span className="shrink-0 text-[12px] text-muted">{timeAgo(c.last.at)}</span> : null}
+                  </span>
+                  <span className="flex items-center justify-between gap-2">
+                    <span className="truncate text-[14px] text-muted">{c.last?.body || `${c.memberCount} member${c.memberCount === 1 ? '' : 's'}`}</span>
+                    {c.unread ? <CountBadge n={c.unread} className="static border-0" /> : c.notify === 'none' ? <Badge tone="muted">Muted</Badge> : null}
+                  </span>
+                </span>
+              </Link>
+            ))}
+          </Card>
+        )
+      ) : null}
+
+      {tab === 'following' ? <FollowingFeed token={token} /> : null}
+
+      {tab === 'discover' ? (
+        !data ? (
+          <Skeleton className="h-48" />
+        ) : data.discover.length === 0 ? (
+          <EmptyState icon={<Radio size={22} />} title="Nothing new to join" body="Start a circle for your sport and area." />
+        ) : (
+          <div className="grid gap-3 sm:grid-cols-2">
+            {data.discover.map((c) => {
+              const reason = blockReason(c.circle, profile, levels);
+              return (
+                <Card key={c.circle.id} className="flex flex-col gap-2 p-3.5">
+                  <Link to={`/circles/${c.circle.id}`} className="flex items-center gap-3 text-ink no-underline">
+                    <CircleAvatar circle={c.circle} size={44} />
+                    <span className="min-w-0">
+                      <strong className="block truncate">{c.circle.name}</strong>
+                      <span className="text-[13px] text-muted">{[sportName(c.circle.sport_id), c.circle.area, `${c.memberCount} members`].filter(Boolean).join(' · ')}</span>
+                    </span>
+                  </Link>
+                  {c.circle.description ? <p className="m-0 line-clamp-2 text-[14px] text-muted">{c.circle.description}</p> : null}
+                  {reason ? (
+                    <span className="text-[13px] text-muted">{reason}</span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      className="self-start"
+                      onClick={() =>
+                        void joinCircleAction(c.circle.id, token)
+                          .then(() => navigate(`/circles/${c.circle.id}`))
+                          .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not join.'))
+                      }
+                    >
+                      Join
+                    </Button>
+                  )}
+                </Card>
+              );
+            })}
+          </div>
+        )
+      ) : null}
+
+      <NewCircleSheet open={creating} sports={sports} token={token} userId={user?.id ?? 'me'} onClose={() => setCreating(false)} onCreated={(id) => navigate(`/circles/${id}`)} />
+    </div>
+  );
+}
+
+function FollowingFeed({ token }: { token: string }) {
+  const [feed, setFeed] = useState<{ items: FeedItem[]; follows: number } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    if (!token) return;
+    fetchFollowing(token)
+      .then(setFeed)
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : 'Could not load your feed.'));
+  }, [token]);
+  if (error) return <ErrorNote>{error}</ErrorNote>;
+  if (!feed) return <Skeleton className="h-48" />;
+  if (feed.items.length === 0) {
+    return (
+      <EmptyState
+        icon={<Newspaper size={22} />}
+        title={feed.follows ? 'Nothing new yet' : 'Follow teams, events and creators'}
+        body="Tap Follow on a team, a league or race, a venue or a creator's page. Their news shows up here."
+      />
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {feed.items.map((it, i) => <FeedCard key={i} item={it} />)}
+    </div>
+  );
+}
+
+export function FeedCard({ item }: { item: FeedItem }) {
+  if (item.type === 'creator_post') {
+    const p = item.post;
+    return (
+      <Card className="flex flex-col gap-2.5 p-3.5">
+        <Link to={`/c/${item.creator.handle}`} className="flex items-center gap-2 text-ink no-underline">
+          <Avatar name={item.creator.displayName} src={item.creator.avatarUrl} size={32} />
+          <strong className="text-[14px]">{item.creator.displayName}</strong>
+          <span className="text-[12px] text-muted">@{item.creator.handle} · {timeAgo(item.at)}</span>
+        </Link>
+        {p.kind === 'article' ? (
+          <Link to={`/c/${item.creator.handle}/${p.id}`} className="flex flex-col gap-2 text-ink no-underline">
+            {p.coverUrl ? <img src={p.coverUrl} alt="" className="max-h-56 w-full rounded-xl object-cover" /> : null}
+            <strong className="text-[17px]">{p.title}</strong>
+            <span className="text-[14px] text-muted">{p.excerpt}</span>
+          </Link>
+        ) : (
+          <>
+            {p.body ? <ArticleView body={p.body} /> : null}
+            <PhotoGrid images={p.images} />
+          </>
+        )}
+        <ReactionBar postType="creator" postId={p.id} counts={p.reactions} mine={p.myReactions} />
+      </Card>
+    );
+  }
+  if (item.type === 'team_result' || item.type === 'team_fixture') {
+    return (
+      <Link to={`/competitions/${item.competitionId}`} className="no-underline">
+        <Card className="flex items-center gap-3 p-3.5 text-ink">
+          <Trophy size={20} className="shrink-0 text-muted" />
+          <span className="flex-1 text-[14px]">
+            <strong>{item.home}</strong> {item.type === 'team_result' && item.homeScore != null ? `${item.homeScore}-${item.awayScore}` : 'v'} <strong>{item.away}</strong>
+          </span>
+          <span className="text-[12px] text-muted">{item.type === 'team_result' ? 'Result' : new Date(item.at).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}</span>
+        </Card>
+      </Link>
+    );
+  }
+  if (item.type === 'race_results') {
+    return (
+      <Link to={`/races/${item.competitionId}?tab=results`} className="no-underline">
+        <Card className="flex items-center gap-3 p-3.5 text-ink">
+          <Trophy size={20} className="shrink-0 text-muted" />
+          <span className="flex-1 text-[14px]">
+            <strong>{item.name}</strong>: {item.distance} results are out
+          </span>
+        </Card>
+      </Link>
+    );
+  }
+  return (
+    <Link to={item.kind === 'race' ? `/races/${item.competitionId}` : `/competitions/${item.competitionId}?tab=news`} className="no-underline">
+      <Card className="flex flex-col gap-1 p-3.5 text-ink">
+        <span className="text-[12px] font-semibold text-muted">
+          {item.name} · {timeAgo(item.at)}
+        </span>
+        <span className="text-[14px]">{item.text}</span>
+      </Card>
+    </Link>
+  );
+}
+
+function NewCircleSheet({ open, sports, token, userId, onClose, onCreated }: { open: boolean; sports: Sport[]; token: string; userId: string; onClose: () => void; onCreated: (id: string) => void }) {
   const [name, setName] = useState('');
   const [area, setArea] = useState('');
   const [sportId, setSportId] = useState('');
   const [description, setDescription] = useState('');
   const [ageBand, setAgeBand] = useState('');
   const [level, setLevel] = useState('');
-  const [photoFile, setPhotoFile] = useState<File | null>(null);
-  const [coverFile, setCoverFile] = useState<File | null>(null);
-  const [openId, setOpenId] = useState<string | null>(null);
-  const [previewId, setPreviewId] = useState<string | null>(null);
-  const [tab, setTab] = useState<'fixtures' | 'about'>('fixtures');
-  const [editingImages, setEditingImages] = useState<string | null>(null);
-  const [editPhoto, setEditPhoto] = useState<File | null>(null);
-  const [editCover, setEditCover] = useState<File | null>(null);
-
-  const token = session?.access_token;
-
-  const reload = useCallback(async () => {
-    if (!user) return;
-    setList(await fetchCircles(user.id));
-  }, [user]);
-
-  useEffect(() => {
-    if (!user) return;
-    Promise.all([reload(), fetchSports()])
-      .then(([, sportList]) => setSports(sportList))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load circles.'))
-      .finally(() => setLoading(false));
-  }, [reload, user]);
-
-  useEffect(() => {
-    if (!user || !supabase) return;
-    void (async () => {
-      const { data } = await supabase.from('user_sports').select('sport_id,level').eq('user_id', user.id);
-      const map: Record<string, string> = {};
-      for (const row of (data ?? []) as { sport_id: string; level: string }[]) {
-        map[row.sport_id] = row.level;
-      }
-      setLevels(map);
-    })();
-  }, [user]);
-
-  const run = async (fn: (t: string) => Promise<unknown>) => {
-    if (!token) {
-      setActionError('Not signed in.');
-      return;
-    }
+  const [photo, setPhoto] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
     setBusy(true);
-    setActionError(null);
+    setError(null);
     try {
-      await fn(token);
-      await reload();
+      const photoUrl = photo ? await uploadImage(`circle-photos/${userId}`, photo) : undefined;
+      const out = (await createCircleAction(
+        { name: name.trim(), area: area.trim(), sportId: sportId || undefined, description: description.trim() || undefined, ageBands: ageBand ? [ageBand] : [], levels: level ? [level] : [], photoUrl },
+        token,
+      )) as { circle?: { id: string } };
+      if (out.circle?.id) onCreated(out.circle.id);
+      onClose();
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
+      setError(err instanceof Error ? err.message : 'Could not create the circle.');
     } finally {
       setBusy(false);
     }
   };
-
-  // Open a joined circle: one at a time; fixtures load in the effect below.
-  const openCircle = (circle: Circle) => {
-    setTab('fixtures');
-    setEditingImages(null);
-    setOpenId((cur) => (cur === circle.id ? null : circle.id));
-  };
-
-  useEffect(() => {
-    if (!openId || !user || events[openId]) return;
-    const circle = list.find((l) => l.circle.id === openId)?.circle;
-    if (!circle) return;
-    fetchCircleFeed(circle, user.id)
-      .then((rows) => setEvents((prev) => ({ ...prev, [openId]: rows })))
-      .catch((err: unknown) => setActionError(err instanceof Error ? err.message : 'Could not load circle fixtures.'));
-  }, [openId, user, list, events]);
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!token) {
-      setActionError('Not signed in.');
-      return;
-    }
-    const accessToken = token;
-    void (async () => {
-      setBusy(true);
-      setActionError(null);
-      try {
-        let photoUrl: string | undefined;
-        let coverUrl: string | undefined;
-        if (photoFile) photoUrl = await uploadImage(`circle-photos/${user?.id ?? 'shared'}`, photoFile);
-        if (coverFile) coverUrl = await uploadImage(`circle-covers/${user?.id ?? 'shared'}`, coverFile);
-        await createCircleAction(
-          {
-            name: name.trim(),
-            area: area.trim(),
-            sportId: sportId || undefined,
-            description: description.trim() || undefined,
-            ageBands: ageBand ? [ageBand] : [],
-            levels: level ? [level] : [],
-            photoUrl,
-            coverUrl,
-          },
-          accessToken,
-        );
-        setShowForm(false);
-        setPhotoFile(null);
-        setCoverFile(null);
-        await reload();
-      } catch (err) {
-        setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
-      } finally {
-        setBusy(false);
-      }
-    })();
-  };
-
-  const saveImages = (circleId: string) => {
-    if (!token) {
-      setActionError('Not signed in.');
-      return;
-    }
-    const accessToken = token;
-    void (async () => {
-      setBusy(true);
-      setActionError(null);
-      try {
-        const patch: { circleId: string; photoUrl?: string; coverUrl?: string } = { circleId };
-        if (editPhoto) patch.photoUrl = await uploadImage(`circle-photos/${user?.id ?? 'shared'}`, editPhoto);
-        if (editCover) patch.coverUrl = await uploadImage(`circle-covers/${user?.id ?? 'shared'}`, editCover);
-        if (patch.photoUrl !== undefined || patch.coverUrl !== undefined) {
-          await updateCircleAction(patch, accessToken);
-          await reload();
-        }
-        setEditingImages(null);
-        setEditPhoto(null);
-        setEditCover(null);
-      } catch (err) {
-        setActionError(err instanceof Error ? err.message : 'Something went wrong. Try again.');
-      } finally {
-        setBusy(false);
-      }
-    })();
-  };
-
   return (
-    <div className="page">
-      <div className="page-head">
-        <span className="eyebrow">Your crowds</span>
-        <h1>Circles</h1>
-        <p>Groups around a sport and place. Events posted in your circles find you.</p>
-      </div>
-      {loading ? <p className="loading">Loading circles…</p> : null}
-      {error ? <p className="error">{error}</p> : null}
-      {!loading && list.length === 0 && !showForm ? (
-        <EmptyState
-          title="No circles yet"
-          hint="Create one for your sport and neighbourhood."
-          actionLabel="Create circle"
-          onAction={() => setShowForm(true)}
-        />
-      ) : null}
-      {showForm ? (
-        <div className="card">
-          <h2>Create circle</h2>
-          <form onSubmit={submit}>
-            <div className="field">
-              <label htmlFor="circle-name">Name</label>
-              <input id="circle-name" className="input" value={name} onChange={(e) => setName(e.target.value)} placeholder="Lusaka Hiking" maxLength={80} />
-            </div>
-            <div className="field">
-              <label htmlFor="circle-area">Area</label>
-              <input id="circle-area" className="input" value={area} onChange={(e) => setArea(e.target.value)} placeholder="Lusaka" maxLength={80} />
-            </div>
-            <div className="field">
-              <label htmlFor="circle-sport">Sport (optional)</label>
-              <select id="circle-sport" className="input" value={sportId} onChange={(e) => setSportId(e.target.value)}>
-                <option value="">Any sport</option>
-                {sports.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="circle-age">Age group prerequisite (optional)</label>
-              <select id="circle-age" className="input" value={ageBand} onChange={(e) => setAgeBand(e.target.value)}>
-                <option value="">Open to all ages</option>
-                {AGE_BANDS.map((b) => (
-                  <option key={b} value={b}>{b}</option>
-                ))}
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="circle-level">Level prerequisite (optional)</label>
-              <select id="circle-level" className="input" value={level} onChange={(e) => setLevel(e.target.value)}>
-                <option value="">Open to all levels</option>
-                <option value="recreational">Recreational</option>
-                <option value="intermediate">Intermediate</option>
-                <option value="competitive">Competitive</option>
-              </select>
-            </div>
-            <div className="field">
-              <label htmlFor="circle-desc">Description (optional)</label>
-              <input id="circle-desc" className="input" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Weekend hikes around Lusaka" maxLength={500} />
-            </div>
-            <div className="field">
-              <label htmlFor="circle-photo">Photo (optional)</label>
-              <input
-                id="circle-photo"
-                className="input"
-                type="file"
-                accept="image/*"
-                disabled={busy}
-                onChange={(e) => setPhotoFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-            <div className="field">
-              <label htmlFor="circle-cover">Cover (optional)</label>
-              <input
-                id="circle-cover"
-                className="input"
-                type="file"
-                accept="image/*"
-                disabled={busy}
-                onChange={(e) => setCoverFile(e.target.files?.[0] ?? null)}
-              />
-            </div>
-            {actionError ? <p className="error">{actionError}</p> : null}
-            <button className="btn btn-primary" type="submit" disabled={busy}>{busy ? 'Creating…' : 'Create circle'}</button>
-            <button className="btn btn-ghost" type="button" onClick={() => setShowForm(false)}>Cancel</button>
-          </form>
+    <Sheet open={open} onClose={onClose} title="New circle">
+      <form className="flex flex-col gap-3.5" onSubmit={(e) => void submit(e)}>
+        <p className="m-0 text-[13px] text-muted">A circle is a channel: you and the admins you choose post; members read, react and vote.</p>
+        <Field label="Name">
+          <input className={fieldCls} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} placeholder="Lusaka Sunday Runners" />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Area">
+            <input className={fieldCls} value={area} maxLength={80} onChange={(e) => setArea(e.target.value)} />
+          </Field>
+          <Field label="Sport (optional)">
+            <select className={fieldCls} value={sportId} onChange={(e) => setSportId(e.target.value)}>
+              <option value="">Any sport</option>
+              {sports.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {sportLabel(s.name)}
+                </option>
+              ))}
+            </select>
+          </Field>
         </div>
-      ) : (
-        <button className="btn btn-primary" type="button" onClick={() => setShowForm(true)}>Create circle</button>
-      )}
-      {actionError && !showForm ? <p className="error">{actionError}</p> : null}
-      {(() => {
-        const joined = list.filter((l) => l.isMember);
-        const others = list.filter((l) => !l.isMember);
-        const preview = others.find((l) => l.circle.id === previewId) ?? null;
-        const meta = (c: Circle) =>
-          [c.area, ...c.age_bands, ...c.levels, ...c.genders].filter(Boolean).join(' · ');
-        const initial = (c: Circle) => (c.name.trim()[0] ?? '?').toUpperCase();
-        return (
-          <>
-            {joined.length > 0 ? (
-              <section className="circle-section">
-                <h2 className="circle-section-title">Your circles</h2>
-                {joined.map(({ circle, memberCount }) => {
-                  const open = openId === circle.id;
-                  const rows = events[circle.id];
-                  return (
-                    <div className={`circle-card${open ? ' circle-card-open' : ''}`} key={circle.id}>
-                      <button
-                        type="button"
-                        className="circle-card-head"
-                        aria-expanded={open}
-                        onClick={() => openCircle(circle)}
-                      >
-                        {circle.photo_url ? (
-                          <img className="circle-photo" src={circle.photo_url} alt="" />
-                        ) : (
-                          <span className="circle-photo circle-photo-fallback" aria-hidden="true">{initial(circle)}</span>
-                        )}
-                        <span className="circle-card-text">
-                          <strong>{circle.name}</strong>
-                          <span className="muted">{memberCount} {memberCount === 1 ? 'member' : 'members'}{circle.area ? ` · ${circle.area}` : ''}</span>
-                        </span>
-                        <span className="circle-chevron" aria-hidden="true">{open ? '−' : '+'}</span>
-                      </button>
-                      {open ? (
-                        <div className="circle-card-body">
-                          {circle.cover_url ? <img className="cover-banner" src={circle.cover_url} alt="" /> : null}
-                          <div className="circle-tabs" role="tablist">
-                            <button type="button" role="tab" aria-selected={tab === 'fixtures'} className={`chip${tab === 'fixtures' ? ' chip-active' : ''}`} onClick={() => setTab('fixtures')}>Fixtures</button>
-                            <button type="button" role="tab" aria-selected={tab === 'about'} className={`chip${tab === 'about' ? ' chip-active' : ''}`} onClick={() => setTab('about')}>About</button>
-                          </div>
-                          {tab === 'fixtures' ? (
-                            rows === undefined ? (
-                              <p className="loading">Loading fixtures…</p>
-                            ) : rows.length === 0 ? (
-                              <p className="muted">No fixtures yet. Games in this circle&apos;s sport land here automatically.</p>
-                            ) : (
-                              <ul className="circle-fixtures">
-                                {rows.map(({ match: m, tagged }) => (
-                                  <li key={m.id}>
-                                    <strong>{m.title}</strong>
-                                    <span className="muted">
-                                      {new Date(m.starts_at).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                                      {tagged ? '' : ' · from Explore'}
-                                    </span>
-                                  </li>
-                                ))}
-                              </ul>
-                            )
-                          ) : (
-                            <div>
-                              {circle.description ? <p>{circle.description}</p> : null}
-                              {meta(circle) ? <p className="muted">{meta(circle)}</p> : null}
-                              {editingImages === circle.id ? (
-                                <div>
-                                  <div className="field">
-                                    <label htmlFor={`edit-photo-${circle.id}`}>Photo</label>
-                                    <input id={`edit-photo-${circle.id}`} className="input" type="file" accept="image/*" disabled={busy} onChange={(e) => setEditPhoto(e.target.files?.[0] ?? null)} />
-                                  </div>
-                                  <div className="field">
-                                    <label htmlFor={`edit-cover-${circle.id}`}>Cover</label>
-                                    <input id={`edit-cover-${circle.id}`} className="input" type="file" accept="image/*" disabled={busy} onChange={(e) => setEditCover(e.target.files?.[0] ?? null)} />
-                                  </div>
-                                  <div className="actions-row">
-                                    <button className="btn btn-primary" type="button" disabled={busy} onClick={() => saveImages(circle.id)}>{busy ? 'Saving…' : 'Save images'}</button>
-                                    <button className="btn btn-ghost" type="button" onClick={() => setEditingImages(null)}>Cancel</button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <div className="actions-row">
-                                  <button className="btn" type="button" onClick={() => setEditingImages(circle.id)}>Edit images</button>
-                                  <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => { setOpenId(null); void run((t) => leaveCircleAction(circle.id, t)); }}>Leave circle</button>
-                                </div>
-                              )}
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
-              </section>
-            ) : null}
-            {others.length > 0 ? (
-              <section className="circle-section">
-                <h2 className="circle-section-title">Discover circles</h2>
-                <div className="circle-tiles">
-                  {others.map(({ circle, memberCount }) => (
-                    <button
-                      type="button"
-                      key={circle.id}
-                      className={`circle-tile${previewId === circle.id ? ' circle-tile-active' : ''}`}
-                      aria-pressed={previewId === circle.id}
-                      onClick={() => setPreviewId(previewId === circle.id ? null : circle.id)}
-                    >
-                      {circle.photo_url ? (
-                        <img className="circle-tile-img" src={circle.photo_url} alt="" />
-                      ) : (
-                        <span className="circle-tile-img circle-photo-fallback" aria-hidden="true">{initial(circle)}</span>
-                      )}
-                      <strong>{circle.name}</strong>
-                      <span className="muted">{memberCount} {memberCount === 1 ? 'member' : 'members'}</span>
-                    </button>
-                  ))}
-                </div>
-                {preview ? (
-                  <div className="card circle-preview">
-                    <div className="row">
-                      <strong>{preview.circle.name}</strong>
-                      <span className="tag">{preview.memberCount} in</span>
-                    </div>
-                    {meta(preview.circle) ? <p className="muted">{meta(preview.circle)}</p> : null}
-                    {preview.circle.description ? <p>{preview.circle.description}</p> : null}
-                    {(() => {
-                      const reason = circleBlockReason(preview.circle, profile, levels);
-                      return reason ? (
-                        <span className="hint">{reason}</span>
-                      ) : (
-                        <button
-                          className="btn btn-primary"
-                          type="button"
-                          disabled={busy}
-                          onClick={() => {
-                            const id = preview.circle.id;
-                            void run((t) => joinCircleAction(id, t)).then(() => {
-                              setPreviewId(null);
-                              setOpenId(id);
-                            });
-                          }}
-                        >
-                          Join circle
-                        </button>
-                      );
-                    })()}
-                  </div>
-                ) : null}
-              </section>
-            ) : null}
-          </>
-        );
-      })()}
-    </div>
+        <Field label="About (optional)">
+          <textarea className={`${fieldCls} h-20 py-2`} value={description} maxLength={1000} onChange={(e) => setDescription(e.target.value)} />
+        </Field>
+        <div className="flex flex-col gap-1.5 text-[13px] font-semibold">
+          Who can join (optional)
+          <div className="flex flex-wrap gap-2">
+            {AGE_BANDS.map((b) => (
+              <Chip key={b} on={ageBand === b} onClick={() => setAgeBand(ageBand === b ? '' : b)}>
+                {b}
+              </Chip>
+            ))}
+          </div>
+          {sportId ? (
+            <div className="flex flex-wrap gap-2">
+              {(Object.keys(LEVEL_LABELS) as Level[]).map((l) => (
+                <Chip key={l} on={level === l} onClick={() => setLevel(level === l ? '' : l)}>
+                  {LEVEL_LABELS[l]}
+                </Chip>
+              ))}
+            </div>
+          ) : null}
+        </div>
+        <Field label="Photo (optional)">
+          <input type="file" accept="image/*" onChange={(e) => setPhoto(e.target.files?.[0] ?? null)} />
+        </Field>
+        {error ? <ErrorNote>{error}</ErrorNote> : null}
+        <Button type="submit" variant="primary" block disabled={busy || !name.trim() || !area.trim()}>
+          {busy ? 'Creating…' : 'Create circle'}
+        </Button>
+      </form>
+    </Sheet>
   );
 }

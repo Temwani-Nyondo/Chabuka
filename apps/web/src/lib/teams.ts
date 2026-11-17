@@ -106,7 +106,7 @@ export async function fetchTeamDetail(teamId: string, userId: string): Promise<T
   const ids = memberList.map((m) => m.user_id);
   if (ids.length > 0) {
     const { data: profileRows } = await supabase
-      .from('profiles')
+      .from('public_profiles')
       .select('id,name,photo_url')
       .in('id', ids);
     for (const p of (profileRows ?? []) as { id: string; name: string | null; photo_url: string | null }[]) {

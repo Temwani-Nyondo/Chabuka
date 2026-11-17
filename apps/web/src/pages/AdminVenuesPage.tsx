@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../auth/AuthContext';
+import AdminCreators from '../components/AdminCreators';
 import AdminClaims from '../components/AdminClaims';
 import EmptyState from '../components/EmptyState';
 import { fetchVenuesForReview, reviewVenueAction } from '../lib/admin';
@@ -13,7 +14,7 @@ type Tab = 'pending' | 'approved' | 'rejected';
 export default function AdminVenuesPage() {
   const { session } = useAuth();
   const token = session?.access_token;
-  const [view, setView] = useState<'venues' | 'claims' | 'add'>('venues');
+  const [view, setView] = useState<'venues' | 'claims' | 'add' | 'creators'>('venues');
   const [tab, setTab] = useState<Tab>('pending');
   const [rows, setRows] = useState<ReviewVenueRow[]>([]);
   const [notes, setNotes] = useState<Record<string, string>>({});
@@ -81,7 +82,7 @@ export default function AdminVenuesPage() {
         <p>A venue goes live only when you approve it.</p>
       </div>
       <div className="chips" role="tablist" aria-label="Admin sections">
-        {([['venues', 'Venues'], ['claims', 'Claims'], ['add', 'Add a venue']] as const).map(([key, label]) => (
+        {([['venues', 'Venues'], ['claims', 'Claims'], ['add', 'Add a venue'], ['creators', 'Creators']] as const).map(([key, label]) => (
           <button
             key={key}
             type="button"
@@ -94,7 +95,7 @@ export default function AdminVenuesPage() {
           </button>
         ))}
       </div>
-      {view !== 'venues' ? <AdminClaims token={token} view={view} /> : null}
+      {view === 'creators' && token ? <AdminCreators token={token} /> : view === 'claims' || view === 'add' ? <AdminClaims token={token} view={view} /> : null}
       <div className="chips" role="tablist" aria-label="Venue status" hidden={view !== 'venues'}>
         {(['pending', 'approved', 'rejected'] as Tab[]).map((t) => (
           <button

@@ -165,7 +165,7 @@ export async function fetchMatchDetail(matchId: string, userId: string): Promise
   const ids = [...new Set([...((parts ?? []) as { user_id: string }[]).map((p) => p.user_id), listing.match.organiser_id])];
   const people = new Map<string, MatchPerson>();
   if (ids.length > 0) {
-    const { data: profs } = await supabase.from('profiles').select('id,name,photo_url').in('id', ids);
+    const { data: profs } = await supabase.from('public_profiles').select('id,name,photo_url').in('id', ids);
     for (const p of (profs ?? []) as { id: string; name: string | null; photo_url: string | null }[]) {
       people.set(p.id, { id: p.id, name: p.name, photoUrl: p.photo_url });
     }

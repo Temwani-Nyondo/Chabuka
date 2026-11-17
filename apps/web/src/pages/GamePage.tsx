@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDataChanged } from '../lib/dataChanged';
 import type { FormEvent, ReactNode } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
@@ -31,6 +32,8 @@ import { checkoutLink, priceLabel, ticketLookupUrl } from '../lib/waitapp';
 import { useMatchActions } from '../lib/useMatchActions';
 import MatchFoundOverlay from '../components/MatchFoundOverlay';
 import TicketingPanel from '../components/TicketingPanel';
+import { BandBadge, FreeNearbyPanel } from '../components/Records';
+import { fetchVersus } from '../lib/records';
 import GameVenueBooking from '../components/GameVenueBooking';
 import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
 import { AvailabilityCard, LineupsPanel } from '../components/MatchDay';
@@ -44,6 +47,7 @@ import {
   Card,
   Crest,
   ErrorNote,
+  FormGuide,
   Meter,
   Section,
   Sheet,
@@ -95,6 +99,7 @@ export default function GamePage() {
     setDetail(d);
     if (!d) setError('This game does not exist or is private.');
   }, [id, user]);
+  useDataChanged(useCallback(() => { void reload().catch(() => undefined); }, [reload]));
 
   useEffect(() => {
     setLoading(true);
@@ -279,6 +284,8 @@ export default function GamePage() {
       )}
 
       <div className="flex flex-col gap-5 px-4">
+        {sides ? <VersusStrip home={sides.home.teamId} away={sides.away.teamId} /> : null}
+        {isOrganiser && !cancelled && !finished ? <FreeNearbyPanel matchId={match.id} /> : null}
         {cancelled ? (
           <Card className="border-live p-3.5 text-[14px]">
             <strong className="text-danger">This game was cancelled.</strong>
@@ -362,10 +369,12 @@ export default function GamePage() {
               ) : (
                 <ul className="m-0 grid list-none grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-3 p-0">
                   {players.map((p) => (
-                    <li key={p.id} className="flex flex-col items-center gap-1 text-center">
-                      <Avatar name={p.name} src={p.photoUrl} size={44} />
-                      <span className="w-full truncate text-[12px] font-semibold">{p.id === user?.id ? 'You' : (p.name ?? 'Player')}</span>
-                      {p.id === match.organiser_id ? <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-brand-text">Host</span> : null}
+                    <li key={p.id}>
+                      <Link to={`/players/${p.id}`} className="flex flex-col items-center gap-1 text-center text-ink no-underline">
+                        <Avatar name={p.name} src={p.photoUrl} size={44} />
+                        <span className="w-full truncate text-[12px] font-semibold">{p.id === user?.id ? 'You' : (p.name ?? 'Player')}</span>
+                        {p.id === match.organiser_id ? <span className="text-[10px] font-bold uppercase tracking-[0.06em] text-brand-text">Host</span> : null}
+                      </Link>
                     </li>
                   ))}
                 </ul>
@@ -753,6 +762,34 @@ function ReasonForm({
       <Button variant={kind === 'cancel' ? 'danger' : 'primary'} size="lg" block disabled={busy} onClick={() => onSubmit(reason.trim())}>
         {busy ? 'Saving…' : kind === 'cancel' ? 'Cancel game' : 'Postpone game'}
       </Button>
+    </div>
+  );
+}
+
+// Both teams' level bands and how they have done against each other.
+function VersusStrip({ home, away }: { home: string; away: string }) {
+  const { session } = useAuth();
+  const [v, setV] = useState<Awaited<ReturnType<typeof fetchVersus>> | null>(null);
+  useEffect(() => {
+    if (!session) return;
+    fetchVersus(session.access_token, home, away).then(setV).catch(() => setV(null));
+  }, [session, home, away]);
+  if (!v) return null;
+  const h = v.headToHead;
+  return (
+    <div className="flex items-center justify-between gap-2 rounded-2xl border border-line bg-surface px-3 py-2 text-[13px]">
+      <BandBadge band={v.home} />
+      <span className="flex items-center gap-2 text-muted">
+        {h.played ? (
+          <>
+            Head to head {h.won}-{h.drawn}-{h.lost}
+            <FormGuide results={h.last} size={16} />
+          </>
+        ) : (
+          'First meeting'
+        )}
+      </span>
+      <BandBadge band={v.away} />
     </div>
   );
 }

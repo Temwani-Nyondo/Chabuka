@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Plus, Trophy } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_CATEGORIES, COMPETITION_STATUS_LABELS, FORMAT_LABELS } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_CATEGORIES, COMPETITION_STATUS_LABELS, formatLabel } from '@chabuka/shared';
 import type { CompetitionCategory, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -19,7 +19,7 @@ export default function CompetitionsPage() {
   const [sports, setSports] = useState<Sport[]>([]);
   const [myTeamIds, setMyTeamIds] = useState<Set<string>>(new Set());
   const [following, setFollowing] = useState<Set<string>>(new Set());
-  const [category, setCategory] = useState<CompetitionCategory | 'all'>('all');
+  const [category, setCategory] = useState<CompetitionCategory | 'all' | 'races'>('all');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -48,7 +48,9 @@ export default function CompetitionsPage() {
       ),
     [list, user?.id, myTeamIds, following],
   );
-  const discover = list.filter((l) => l.competition.status !== 'cancelled' && (category === 'all' || l.competition.category === category));
+  const discover = list.filter(
+    (l) => l.competition.status !== 'cancelled' && (category === 'all' || (category === 'races' ? l.competition.kind === 'race' : l.competition.category === category)),
+  );
 
   const legacy = params.get('c');
   if (legacy) return <Navigate to={`/competitions/${legacy}`} replace />;
@@ -56,9 +58,10 @@ export default function CompetitionsPage() {
   const sportName = (id: string) => sportLabel(sports.find((s) => s.id === id)?.name);
   const tile = (l: CompetitionListing) => {
     const c = l.competition;
+    const isRace = c.kind === 'race';
     const role = c.organiser_id === user?.id ? 'Organising' : l.entryTeamIds.some((t) => myTeamIds.has(t)) ? 'Your team is in' : following.has(c.id) ? 'Following' : null;
     return (
-      <Link key={c.id} to={`/competitions/${c.id}`} className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface text-ink no-underline hover:border-line-strong">
+      <Link key={c.id} to={isRace ? `/races/${c.id}` : `/competitions/${c.id}`} className="flex flex-col overflow-hidden rounded-2xl border border-line bg-surface text-ink no-underline hover:border-line-strong">
         <span
           className="relative block h-28 bg-cover bg-center"
           style={{ backgroundImage: `url(${c.banner_url || sportBackdrop(sports.find((s) => s.id === c.sport_id)?.name)})` }}
@@ -71,13 +74,15 @@ export default function CompetitionsPage() {
         <span className="flex flex-col gap-1 p-3.5">
           <strong className="text-[16px]">{c.name}</strong>
           <span className="text-[13px] text-muted">
-            {[sportName(c.sport_id), FORMAT_LABELS[c.format], c.area].filter(Boolean).join(' · ')}
+            {[sportName(c.sport_id), formatLabel(c.format), c.area].filter(Boolean).join(' · ')}
           </span>
           <span className="mt-1 flex flex-wrap items-center gap-1.5">
             <Badge tone={c.status === 'registration' ? 'hl' : c.status === 'live' ? 'brand' : 'muted'}>{COMPETITION_STATUS_LABELS[c.status]}</Badge>
-            <span className="text-[12px] font-semibold text-muted">
-              {l.entryTeamIds.length}/{c.max_entries} teams
-            </span>
+            {isRace ? null : (
+              <span className="text-[12px] font-semibold text-muted">
+                {l.entryTeamIds.length}/{c.max_entries} teams
+              </span>
+            )}
             {role ? <Badge tone="neutral">{role}</Badge> : null}
           </span>
         </span>
@@ -88,12 +93,17 @@ export default function CompetitionsPage() {
   return (
     <div className="mx-auto flex max-w-[960px] flex-col gap-5 px-4 pt-4">
       <PageHeader
-        title="Leagues and tournaments"
+        title="Leagues, tournaments and races"
         sub="Community, charity, corporate and school events."
         actions={
-          <ButtonLink to="/competitions/new" variant="primary" size="sm" icon={<Plus size={16} />}>
-            Create
-          </ButtonLink>
+          <>
+            <ButtonLink to="/races/new" size="sm" icon={<Plus size={16} />}>
+              Race
+            </ButtonLink>
+            <ButtonLink to="/competitions/new" variant="primary" size="sm" icon={<Plus size={16} />}>
+              League or cup
+            </ButtonLink>
+          </>
         }
       />
       <ErrorNote>{error}</ErrorNote>
@@ -110,6 +120,9 @@ export default function CompetitionsPage() {
             <div className="no-scrollbar -mx-4 flex gap-2 overflow-x-auto px-4" role="group" aria-label="Category">
               <Chip on={category === 'all'} onClick={() => setCategory('all')}>
                 All
+              </Chip>
+              <Chip on={category === 'races'} onClick={() => setCategory('races')}>
+                Races
               </Chip>
               {COMPETITION_CATEGORIES.map((cat) => (
                 <Chip key={cat} on={category === cat} onClick={() => setCategory(cat)}>

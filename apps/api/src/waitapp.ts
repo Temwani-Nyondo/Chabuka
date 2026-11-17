@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ActionError, notifyUsers } from './actions.js';
+import { confirmRaceFromTicket, raceForEvent, raceTicketsRefunded } from './races.js';
+import { confirmGolfFromTicket, golfDayForEvent, golfTicketsRefunded } from './golfDays.js';
 
 // Ticketed games: WaitApp's ticket engine sells, issues, scans and settles the
 // tickets (the organiser's own WaitApp account is the payee). Chabuka links the
@@ -19,11 +21,11 @@ import { ActionError, notifyUsers } from './actions.js';
 const STATE_TTL_SECONDS = 15 * 60;
 const WEBHOOK_TOLERANCE_SECONDS = 5 * 60;
 
-function baseUrl(): string {
+export function baseUrl(): string {
   return (process.env.WAITAPP_BASE_URL || 'https://waitapp.online').replace(/\/+$/, '');
 }
 
-function partnerSecret(): string {
+export function partnerSecret(): string {
   const s = process.env.WAITAPP_PARTNER_SECRET;
   if (!s || s.length < 16) throw new ActionError(503, 'Ticket sales are not set up yet.');
   return s;
@@ -223,14 +225,13 @@ async function loadOwnMatch(service: SupabaseClient, userId: string, matchId: st
   return match;
 }
 
-export async function waitappCall(
-  service: SupabaseClient,
-  userId: string,
+// One call to a WaitApp partner route with a given link token.
+async function callWithToken(
+  token: string,
   path: string,
-  init: { method: 'GET' | 'POST'; body?: unknown },
-  deps: { fetch?: typeof fetch } = {},
+  init: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
+  deps: { fetch?: typeof fetch },
 ): Promise<{ status: number; data: Record<string, unknown> }> {
-  const token = await getLinkToken(service, userId);
   const fetchImpl = deps.fetch ?? fetch;
   let res: Response;
   try {
@@ -244,12 +245,60 @@ export async function waitappCall(
     throw new ActionError(502, 'Could not reach WaitApp. Try again.');
   }
   const data = ((await res.json().catch(() => ({}))) ?? {}) as Record<string, unknown>;
-  if (res.status === 401) {
+  return { status: res.status, data };
+}
+
+export async function waitappCall(
+  service: SupabaseClient,
+  userId: string,
+  path: string,
+  init: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
+  deps: { fetch?: typeof fetch } = {},
+): Promise<{ status: number; data: Record<string, unknown> }> {
+  const token = await getLinkToken(service, userId);
+  const out = await callWithToken(token, path, init, deps);
+  if (out.status === 401) {
     // The organiser removed the link on WaitApp's side: drop ours so the UI asks to reconnect.
     await removeLink(service, userId).catch(() => undefined);
     throw new ActionError(409, 'The WaitApp link is no longer valid. Connect your account again.');
   }
-  return { status: res.status, data };
+  return out;
+}
+
+// --- Venue links (the venue handshake) ------------------------------------------------
+// A venue linked through "Take paid bookings online" carries its OWN token (venue_waitapp_links), scoped to its own WaitApp
+// Bookable Venue account. Venues linked before that used the owner's personal link; they keep working through it until
+// the owner reconnects. A dead venue token unlinks only that venue.
+
+export async function venueLinkToken(service: SupabaseClient, venueId: string): Promise<string | null> {
+  const { data, error } = await service.from('venue_waitapp_links').select('token_enc').eq('venue_id', venueId).maybeSingle();
+  if (error) throw new ActionError(500, 'Could not read the venue link.');
+  return data ? decryptToken((data as { token_enc: string }).token_enc) : null;
+}
+
+export async function removeVenueLink(service: SupabaseClient, venueId: string): Promise<void> {
+  await service.from('venue_waitapp_links').delete().eq('venue_id', venueId);
+  await service.from('venues').update({ waitapp_restaurant_id: null }).eq('id', venueId);
+}
+
+export async function venueCall(
+  service: SupabaseClient,
+  venue: { id: string; owner_id: string | null },
+  path: string,
+  init: { method: 'GET' | 'POST' | 'PUT' | 'DELETE'; body?: unknown },
+  deps: { fetch?: typeof fetch } = {},
+): Promise<{ status: number; data: Record<string, unknown> }> {
+  const token = await venueLinkToken(service, venue.id);
+  if (!token) {
+    if (!venue.owner_id) throw new ActionError(409, 'This venue does not take online bookings.');
+    return waitappCall(service, venue.owner_id, path, init, deps);
+  }
+  const out = await callWithToken(token, path, init, deps);
+  if (out.status === 401) {
+    await removeVenueLink(service, venue.id).catch(() => undefined);
+    throw new ActionError(409, 'The WaitApp link for this venue is no longer valid. The owner can turn paid bookings on again under Setup.');
+  }
+  return out;
 }
 
 export async function createTicketing(
@@ -491,6 +540,14 @@ export async function handleWebhook(
   switch (envelope.type) {
     case 'ticket.issued': {
       const data = issuedSchema.parse(envelope.data);
+      // A race entry paid on WaitApp: the checkout carried ref "race:<entryId>".
+      // A golf day entry paid on WaitApp: ref "golf:<entryId>".
+      if (data.ref?.startsWith('golf:')) {
+        return confirmGolfFromTicket(service, { eventId: data.eventId, paymentId: data.paymentId, ticketIds: data.ticketIds, ref: data.ref });
+      }
+      if (data.ref?.startsWith('race:')) {
+        return confirmRaceFromTicket(service, { eventId: data.eventId, paymentId: data.paymentId, ticketIds: data.ticketIds, ref: data.ref, tierName: data.tierName ?? null });
+      }
       const matchId = await requireTicketedMatch(service, data.chabukaMatchId, data.eventId);
       await applyTicketsIssued(service, {
         matchId,
@@ -505,6 +562,10 @@ export async function handleWebhook(
     case 'ticket.used':
     case 'ticket.refunded': {
       const data = ticketsSchema.parse(envelope.data);
+      const race = await raceForEvent(service, data.eventId);
+      if (race) return envelope.type === 'ticket.refunded' ? raceTicketsRefunded(service, race, data.ticketIds) : { handled: true };
+      const golfDay = await golfDayForEvent(service, data.eventId);
+      if (golfDay) return envelope.type === 'ticket.refunded' ? golfTicketsRefunded(service, golfDay, data.ticketIds) : { handled: true };
       const matchId = await requireTicketedMatch(service, data.chabukaMatchId, data.eventId);
       await setTicketStatus(service, matchId, data.ticketIds, envelope.type === 'ticket.used' ? 'used' : 'refunded');
       return { handled: true };
@@ -537,7 +598,10 @@ export async function handleWebhook(
     case 'booking.accepted':
     case 'booking.paid':
     case 'booking.cancelled':
+    case 'booking.declined':
       return applyBookingEvent(service, envelope.type, envelope.data);
+    case 'booking.requested':
+      return applyBookingRequested(service, envelope.data);
     default:
       return { handled: false };
   }
@@ -558,20 +622,21 @@ const bookingEventSchema = z.object({
  */
 async function applyBookingEvent(
   service: SupabaseClient,
-  type: 'booking.accepted' | 'booking.paid' | 'booking.cancelled',
+  type: 'booking.accepted' | 'booking.paid' | 'booking.cancelled' | 'booking.declined',
   rawData: Record<string, unknown>,
 ): Promise<{ handled: boolean }> {
   const data = bookingEventSchema.parse(rawData);
-  const next = type === 'booking.paid' ? 'paid' : type === 'booking.cancelled' ? 'cancelled' : 'accepted';
+  const next =
+    type === 'booking.paid' ? 'paid' : type === 'booking.cancelled' ? 'cancelled' : type === 'booking.declined' ? 'declined' : 'accepted';
   const { data: row, error } = await service
     .from('waitapp_bookings')
     .select('id,venue_id,user_id,match_id,status,space_name,starts_at')
     .eq('waitapp_reservation_id', data.reservationId)
     .maybeSingle();
   if (error) throw new ActionError(500, 'Could not read the booking.');
-  const booking = row as { id: string; venue_id: string; user_id: string; match_id: string | null; status: string; space_name: string; starts_at: string } | null;
+  const booking = row as { id: string; venue_id: string; user_id: string | null; match_id: string | null; status: string; space_name: string; starts_at: string } | null;
   if (!booking) return { handled: false };
-  const rank: Record<string, number> = { pending: 0, accepted: 1, paid: 2, cancelled: 3 };
+  const rank: Record<string, number> = { pending: 0, accepted: 1, paid: 2, cancelled: 3, declined: 3 };
   // Same or older news than we already hold (a repeated or late webhook): nothing to do.
   if ((rank[next] ?? 0) <= (rank[booking.status] ?? 0)) return { handled: true };
   const patch: Record<string, unknown> = { status: next, updated_at: new Date().toISOString() };
@@ -582,12 +647,67 @@ async function applyBookingEvent(
   const { data: venue } = await service.from('venues').select('name,owner_id').eq('id', booking.venue_id).maybeSingle();
   const v = venue as { name: string; owner_id: string | null } | null;
   const payload = { bookingId: booking.id, venueId: booking.venue_id, title: v?.name ?? '', spaceName: booking.space_name, startsAt: booking.starts_at };
-  await notifyUsers([booking.user_id], `space_booking_${next}`, payload);
+  // Bookings made on WaitApp itself have no Chabuka player to tell.
+  if (booking.user_id) await notifyUsers([booking.user_id], `space_booking_${next}`, payload);
   if (next === 'paid' && v?.owner_id) await notifyUsers([v.owner_id], 'space_booking_paid_owner', payload);
   // A game's space is now paid for: the players hear that the venue is secured.
   if (next === 'paid' && booking.match_id) {
     const players = (await participantIds(service, booking.match_id)).filter((id) => id !== booking.user_id);
     await notifyUsers(players, 'game_venue_booked', { matchId: booking.match_id, title: await gameTitle(service, booking.match_id), venue: v?.name ?? '', spaceName: booking.space_name, startsAt: booking.starts_at });
+  }
+  return { handled: true };
+}
+
+const bookingRequestedSchema = z.object({
+  reservationId: z.string().min(1),
+  restaurantId: z.string().min(1),
+  typeId: z.string().min(1),
+  spaceName: z.string().default('Space'),
+  startsAt: z.string(),
+  endsAt: z.string(),
+  status: z.string().default('pending'),
+  customerName: z.string().nullable().optional(),
+  bookingCode: z.string().nullable().optional(),
+  total: z.number().nullable().optional(),
+  currency: z.string().nullable().optional(),
+  instant: z.boolean().optional(),
+  partnerRef: z.string().nullable().optional(),
+});
+
+/**
+ * A booking was made on WaitApp's side (its /book page, the front desk, a walk-in) for a venue linked to Chabuka.
+ * Store it so the Chabuka calendar and inbox show it, and tell the venue's managers. Bookings Chabuka made itself
+ * already have a row and are skipped.
+ */
+async function applyBookingRequested(service: SupabaseClient, rawData: Record<string, unknown>): Promise<{ handled: boolean }> {
+  const data = bookingRequestedSchema.parse(rawData);
+  const { data: existing } = await service.from('waitapp_bookings').select('id').eq('waitapp_reservation_id', data.reservationId).maybeSingle();
+  if (existing) return { handled: true };
+  const { data: venueRow } = await service.from('venues').select('id,name,owner_id').eq('waitapp_restaurant_id', data.restaurantId).maybeSingle();
+  const venue = venueRow as { id: string; name: string; owner_id: string | null } | null;
+  if (!venue) return { handled: false };
+  const status = data.status === 'accepted' || data.status === 'paid' ? data.status : 'pending';
+  const { error } = await service.from('waitapp_bookings').insert({
+    venue_id: venue.id,
+    user_id: null,
+    source: 'waitapp',
+    customer_name: data.customerName ?? null,
+    waitapp_reservation_id: data.reservationId,
+    booking_code: data.bookingCode ?? null,
+    space_id: data.typeId,
+    space_name: data.spaceName,
+    starts_at: data.startsAt,
+    ends_at: data.endsAt,
+    total: data.total ?? null,
+    currency: data.currency ?? null,
+    instant: data.instant === true,
+    status,
+  });
+  if (error) throw new ActionError(500, 'Could not store the booking.');
+  const { data: staff } = await service.from('venue_staff').select('user_id').eq('venue_id', venue.id);
+  const managers = [venue.owner_id, ...((staff ?? []) as { user_id: string }[]).map((s) => s.user_id)].filter((x): x is string => !!x);
+  if (status === 'pending') {
+    await notifyUsers(managers, 'booking_requested', { venueId: venue.id, title: venue.name, startsAt: data.startsAt, weeks: 1, who: data.customerName ?? 'A guest', spaceName: data.spaceName, source: 'waitapp' });
   }
   return { handled: true };
 }

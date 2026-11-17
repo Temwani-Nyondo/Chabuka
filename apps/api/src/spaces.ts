@@ -1,12 +1,12 @@
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ActionError, notifyUsers } from './actions.js';
-import { getLinkSummary, waitappCall } from './waitapp.js';
+import { venueCall } from './waitapp.js';
 
 // Linked venues: a Chabuka venue whose owner connected a WaitApp "Bookable Venue" account. WaitApp holds the spaces, the
 // calendar and the money; Chabuka reads them, lets a player book, and keeps the booking here, current through WaitApp's
-// signed booking webhooks (see applyBookingEvent in waitapp.ts). The owner's own WaitApp link token is used for every call,
-// and a token can only ever reach its own venue, so a player can never read or book another venue through this.
+// signed booking webhooks (see applyBookingEvent in waitapp.ts). The venue's own WaitApp link token is used for every call
+// (venueCall), and a token can only ever reach its own venue, so a player can never read or book another venue through this.
 
 interface LinkedVenue {
   id: string;
@@ -30,37 +30,27 @@ async function loadLinkedVenue(service: SupabaseClient, venueId: string): Promis
   return venue as LinkedVenue;
 }
 
-// --- Owner: link or unlink the venue's WaitApp calendar ------------------------------
+// --- Owner: unlink the venue's WaitApp account ---------------------------------------
+// Linking is the venue handshake (venueHandshake.ts: "Take paid bookings online"), which links the venue to its own WaitApp
+// venue account. The older "link using my personal WaitApp connection" path is gone; only unlinking is left here.
 
 export async function setVenueCalendarLink(
   service: SupabaseClient,
   userId: string,
   venueId: string,
   link: boolean,
-  deps: { fetch?: typeof fetch } = {},
 ): Promise<{ linked: boolean; spaceCount: number }> {
   const { data, error } = await service.from('venues').select('id,owner_id').eq('id', venueId).maybeSingle();
   if (error) throw new ActionError(500, 'Could not load the venue.');
   const venue = data as { id: string; owner_id: string | null } | null;
   if (!venue) throw new ActionError(404, 'Venue not found.');
   if (venue.owner_id !== userId) throw new ActionError(403, 'Only the venue owner can do that.');
-
-  if (!link) {
-    const { error: updErr } = await service.from('venues').update({ waitapp_restaurant_id: null }).eq('id', venueId);
-    if (updErr) throw new ActionError(500, 'Could not unlink the venue.');
-    return { linked: false, spaceCount: 0 };
-  }
-
-  const summary = await getLinkSummary(service, userId);
-  if (!summary) throw new ActionError(409, 'Connect your WaitApp account first.');
-  // Prove the linked WaitApp account really is a Bookable Venue, and that it has something to book.
-  const { status, data: body } = await waitappCall(service, userId, '/api/partner/chabuka/spaces', { method: 'GET' }, deps);
-  if (status === 409) throw new ActionError(409, 'The WaitApp account you connected is not a Bookable Venue. Connect the right business.');
-  if (status >= 400) throw new ActionError(502, 'WaitApp could not list your spaces. Try again.');
-  const spaces = Array.isArray(body['spaces']) ? (body['spaces'] as unknown[]) : [];
-  const { error: updErr } = await service.from('venues').update({ waitapp_restaurant_id: summary.restaurantId }).eq('id', venueId);
-  if (updErr) throw new ActionError(500, 'Could not link the venue.');
-  return { linked: true, spaceCount: spaces.length };
+  if (link) throw new ActionError(400, 'Use "Take paid bookings online" on the venue to link it to WaitApp.');
+  const { error: delErr } = await service.from('venue_waitapp_links').delete().eq('venue_id', venueId);
+  if (delErr) throw new ActionError(500, 'Could not unlink the venue.');
+  const { error: updErr } = await service.from('venues').update({ waitapp_restaurant_id: null }).eq('id', venueId);
+  if (updErr) throw new ActionError(500, 'Could not unlink the venue.');
+  return { linked: false, spaceCount: 0 };
 }
 
 // --- Players: spaces, availability, booking ------------------------------------------
@@ -71,7 +61,7 @@ export async function getVenueSpaces(
   deps: { fetch?: typeof fetch } = {},
 ): Promise<Record<string, unknown>> {
   const venue = await loadLinkedVenue(service, venueId);
-  const { status, data } = await waitappCall(service, venue.owner_id, '/api/partner/chabuka/spaces', { method: 'GET' }, deps);
+  const { status, data } = await venueCall(service, venue, '/api/partner/chabuka/spaces', { method: 'GET' }, deps);
   if (status >= 400) throw new ActionError(502, 'The venue calendar is not available right now. Try again soon.');
   return data;
 }
@@ -86,7 +76,7 @@ export async function getVenueAvailability(
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ActionError(400, 'Choose a date.');
   const venue = await loadLinkedVenue(service, venueId);
   const q = `?typeId=${encodeURIComponent(typeId)}&date=${date}`;
-  const { status, data } = await waitappCall(service, venue.owner_id, `/api/partner/chabuka/availability${q}`, { method: 'GET' }, deps);
+  const { status, data } = await venueCall(service, venue, `/api/partner/chabuka/availability${q}`, { method: 'GET' }, deps);
   if (status === 404) throw new ActionError(404, 'That space is not available.');
   if (status >= 400) throw new ActionError(502, 'The venue calendar is not available right now. Try again soon.');
   return data;
@@ -172,9 +162,9 @@ export async function bookSpace(
     if (match.organiser_id !== userId) throw new ActionError(403, 'Only the game organiser can book its venue.');
     if (match.venue_id !== venue.id) throw new ActionError(409, 'This game is at a different venue.');
   }
-  const { status, data } = await waitappCall(
+  const { status, data } = await venueCall(
     service,
-    venue.owner_id,
+    venue,
     '/api/partner/chabuka/bookings',
     {
       method: 'POST',

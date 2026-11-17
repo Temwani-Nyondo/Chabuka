@@ -1,3 +1,8 @@
+import * as vb from './venueBooking.js';
+import * as races from './races.js';
+import * as social from './social.js';
+import * as records from './records.js';
+import * as handshake from './venueHandshake.js';
 import {
   acceptChallengeSchema,
   addDisciplineSchema,
@@ -225,8 +230,10 @@ export async function createMatch(
   userId: string,
   input: CreateMatchInput,
 ): Promise<ActionResult & { matchId: string }> {
+  let venueName: string | null = null;
   if (input.venueId) {
     const venue = await loadVenue(db, input.venueId);
+    venueName = venue.name;
     const { data: sportRow } = await db.from('sports').select('name').eq('id', input.sportId).maybeSingle();
     const sportName = (sportRow as { name?: string } | null)?.name ?? '';
     if (!venueSupportsSport(venue.sports, sportName)) {
@@ -280,15 +287,21 @@ export async function createMatch(
   }
   const match = await loadMatch(db, matchId);
   const count = await joinedCount(db, matchId);
+  // A game in a circle is a post in that channel (members are told by their notification level).
   if (input.circleId) {
-    const { data: memberRows } = await db
-      .from('circle_members')
-      .select('user_id')
-      .eq('circle_id', input.circleId);
-    const memberIds = ((memberRows ?? []) as { user_id: string }[])
-      .map((r) => r.user_id)
-      .filter((id) => id !== userId);
-    await notifyUsers(memberIds, 'circle_event', { matchId, title: input.title });
+    const when = new Date(match.starts_at).toLocaleString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', timeZone: 'Africa/Lusaka' });
+    await social.autoPost(privilegedClient(db), input.circleId, 'game', { type: 'match', id: matchId }, `New game: ${input.title}, ${when}.`, userId);
+  }
+  // A public game at a venue: people who follow that venue hear about it (not the organiser).
+  if (input.venueId && input.visibility === 'public') {
+    const followers = await social.followersOf(privilegedClient(db), 'venue', input.venueId).catch(() => [] as string[]);
+    await notifyUsers(followers.filter((id) => id !== userId), 'venue_new_game', {
+      matchId,
+      venueId: input.venueId,
+      title: venueName ?? 'A venue you follow',
+      game: input.title,
+      startsAt: match.starts_at,
+    });
   }
   return { matchId, ...resultFor(match, userId, true, count, 'organiser'), ...(booking ? { booking } : {}) };
 }
@@ -326,7 +339,8 @@ export async function joinMatch(
   const existing = await participantStatus(db, matchId, userId);
   const before = await joinedCount(db, matchId);
   if (existing === 'joined') {
-    return resultFor(match, userId, true, before, 'joined');
+    // Already in (the organiser always is): a clear state, so Gaffer and the app don't report a fresh join.
+    return resultFor(match, userId, true, before, match.organiser_id === userId ? 'already_organiser' : 'already_joined');
   }
   if (before >= match.capacity) {
     throw new ActionError(409, 'This match is full.');
@@ -1073,6 +1087,18 @@ export async function updateVenue(
   const { error } = await db.from('venues').update(patch).eq('id', venue.id);
   if (error) throw dbError(error);
   const updated = await loadVenue(db, venue.id);
+  // Linked to its own WaitApp venue account: the same name, contact and photos land there too (best effort).
+  if (updated.waitapp_restaurant_id && (input.name !== undefined || input.contact !== undefined || input.photos !== undefined)) {
+    await handshake.pushVenueProfile(
+      privilegedClient(db),
+      { id: venue.id, owner_id: userId, waitapp_restaurant_id: updated.waitapp_restaurant_id },
+      {
+        ...(input.name !== undefined ? { name: input.name } : {}),
+        ...(input.contact !== undefined ? { contact: input.contact || null } : {}),
+        ...(input.photos !== undefined ? { photos: input.photos } : {}),
+      },
+    ).catch(() => false);
+  }
   // A new name sends an approved venue back to review (database trigger): say so.
   return {
     state: updated.status === 'pending' && venue.status === 'approved' ? 'pending_review' : 'saved',
@@ -1361,9 +1387,9 @@ export async function recordFixtureResult(
     draw: competition.points_draw,
     loss: competition.points_loss,
   });
-  const { data: followerRows } = await db.from('follows').select('user_id').eq('competition_id', competition.id);
+  const followerIds = await social.competitionFollowers(privilegedClient(db), competition.id);
   await notifyUsers(
-    ((followerRows ?? []) as { user_id: string }[]).map((r) => r.user_id).filter((id) => id !== actorId),
+    followerIds.filter((id) => id !== actorId),
     'result_posted',
     { competitionId: competition.id, fixtureId: fixture.id },
   );
@@ -1378,6 +1404,8 @@ export async function recordFixtureResult(
       name: competition.name,
     });
   }
+  await records.onGameFinished(privilegedClient(db), 'fixture', fixture.id);
+  if (finished) await social.eventNewsToCircle(privilegedClient(db), competition.id, `${competition.name} is over. See the final table and results.`);
   if (finished) {
     const { error: finishErr } = await db.from('competitions').update({ status: 'finished' }).eq('id', competition.id);
     if (finishErr) throw dbError(finishErr);
@@ -1464,6 +1492,8 @@ export async function followCompetition(
   competitionId: string,
 ): Promise<unknown> {
   await loadCompetition(db, competitionId);
+  // One follow system (Phase 5); the old table is kept in step until it is retired.
+  await social.follow(privilegedClient(db), userId, { subjectType: 'competition', subjectId: competitionId });
   const { data: existing } = await db
     .from('follows')
     .select('user_id')
@@ -1532,6 +1562,8 @@ export async function createCircle(
     .from('circle_members')
     .insert({ circle_id: circle.id, user_id: userId });
   if (memberErr) throw dbError(memberErr);
+  // The creator owns the channel: only owner and admins post.
+  await privilegedClient(db).from('circle_admins').upsert({ circle_id: circle.id, user_id: userId, role: 'owner' });
   return { state: 'created', actions: ['join_circle'], circle };
 }
 
@@ -1566,12 +1598,13 @@ export async function joinCircle(
       throw new ActionError(403, `This circle is for ${circle.levels.join(', ')} players.`);
     }
   }
-  const { data: existing } = await db
+  const { data: existing } = await privilegedClient(db)
     .from('circle_members')
-    .select('user_id')
+    .select('user_id,removed_at')
     .eq('circle_id', circle.id)
     .eq('user_id', userId)
     .maybeSingle();
+  if ((existing as { removed_at?: string | null } | null)?.removed_at) throw new ActionError(403, 'The admins removed you from this circle.');
   if (existing) return { state: 'joined', actions: ['leave_circle'], circle };
   const { error } = await db.from('circle_members').insert({ circle_id: circle.id, user_id: userId });
   if (error) throw dbError(error);
@@ -1584,6 +1617,10 @@ export async function leaveCircle(
   circleId: string,
 ): Promise<unknown> {
   const circle = await loadCircle(db, circleId);
+  if ((await social.circleRole(privilegedClient(db), circle.id, userId)) === 'owner') {
+    throw new ActionError(409, 'Hand the circle over to another member before you leave.');
+  }
+  await privilegedClient(db).from('circle_admins').delete().eq('circle_id', circle.id).eq('user_id', userId);
   const { error } = await db
     .from('circle_members')
     .delete()
@@ -1599,19 +1636,16 @@ export async function updateCircle(
   input: UpdateCircleInput,
 ): Promise<unknown> {
   const circle = await loadCircle(db, input.circleId);
-  const { data: membership, error: memberError } = await db
-    .from('circle_members')
-    .select('user_id')
-    .eq('circle_id', circle.id)
-    .eq('user_id', userId)
-    .maybeSingle();
-  if (memberError) throw dbError(memberError);
-  if (!membership) throw new ActionError(403, 'Only circle members can update it.');
+  // Admins only (Phase 5): circles are channels run by their owner and admins.
+  if (!(await social.circleRole(privilegedClient(db), circle.id, userId))) throw new ActionError(403, 'Only the circle admins can change it.');
   const patch: Record<string, unknown> = {};
+  if (input.name !== undefined) patch.name = input.name;
+  if (input.description !== undefined) patch.description = input.description;
+  if (input.area !== undefined) patch.area = input.area;
   if (input.photoUrl !== undefined) patch.photo_url = input.photoUrl;
   if (input.coverUrl !== undefined) patch.cover_url = input.coverUrl;
   if (Object.keys(patch).length === 0) throw new ActionError(400, 'Nothing to update.');
-  const { data, error } = await db
+  const { data, error } = await privilegedClient(db)
     .from('circles')
     .update(patch)
     .eq('id', circle.id)
@@ -1990,7 +2024,7 @@ export async function reportUser(
   input: ReportUserInput,
 ): Promise<unknown> {
   if (input.userId === userId) throw new ActionError(400, 'You cannot report yourself.');
-  const { data: target } = await db.from('profiles').select('id').eq('id', input.userId).maybeSingle();
+  const { data: target } = await db.from('public_profiles').select('id').eq('id', input.userId).maybeSingle();
   if (!target) throw new ActionError(404, 'Profile not found.');
   const { data, error } = await db
     .from('reports')
@@ -2058,6 +2092,19 @@ async function topUpAfter(db: SupabaseClient, matchId: string | undefined): Prom
 // HTTP entry points: parse once with the shared schema, then dispatch.
 // Notifications land with the Day 5 board; the matches migrations have
 // no notifications table yet, so no notification rows are written here.
+/** A finished game in a circle gets a result post in that channel (once). */
+async function resultToCircle(db: SupabaseClient, matchId: string | undefined): Promise<void> {
+  if (!matchId) return;
+  const svc = privilegedClient(db);
+  const { data } = await svc.from('matches').select('id,title,circle_id,status,home_score,away_score').eq('id', matchId).maybeSingle();
+  const m = data as { id: string; title: string; circle_id: string | null; status: string; home_score: number | null; away_score: number | null } | null;
+  if (!m?.circle_id || m.status !== 'finished') return;
+  const { data: already } = await svc.from('circle_posts').select('id').eq('circle_id', m.circle_id).eq('link_id', m.id).eq('kind', 'result').maybeSingle();
+  if (already) return;
+  const score = m.home_score != null && m.away_score != null ? ` ${m.home_score}-${m.away_score}` : '';
+  await social.autoPost(svc, m.circle_id, 'result', { type: 'match', id: m.id }, `Final: ${m.title}${score}.`);
+}
+
 export async function runAction(
   db: SupabaseClient,
   userId: string,
@@ -2109,6 +2156,117 @@ export async function runAction(
       return cancelBooking(db, userId, bookingIdSchema.parse(body).bookingId);
     case 'check_in_ticket':
       return checkInTicket(db, userId, ticketIdSchema.parse(body).ticketId);
+    // Venue spaces (Phase 4): one model for Chabuka-only and WaitApp-linked venues (see venueBooking.ts).
+    case 'upsert_space':
+      return vb.upsertSpace(privilegedClient(db), userId, body);
+    case 'delete_space':
+      return vb.deleteSpace(privilegedClient(db), userId, body);
+    case 'set_hours':
+      return vb.setHours(privilegedClient(db), userId, body);
+    case 'add_closure':
+      return vb.addClosure(privilegedClient(db), userId, body);
+    case 'remove_closure':
+      return vb.removeClosure(privilegedClient(db), userId, body);
+    case 'walk_in_booking':
+      return vb.walkInBooking(privilegedClient(db), userId, body);
+    case 'request_space':
+      return vb.requestSpace(privilegedClient(db), userId, body);
+    case 'respond_space_booking':
+      return vb.respondSpaceBooking(privilegedClient(db), userId, body);
+    case 'cancel_space_booking':
+      return vb.cancelSpaceBooking(privilegedClient(db), userId, body);
+    case 'check_in_space_booking':
+      return vb.checkInSpaceBooking(privilegedClient(db), userId, body);
+    case 'add_venue_staff':
+      return vb.addStaff(privilegedClient(db), userId, body);
+    case 'remove_venue_staff':
+      return vb.removeStaff(privilegedClient(db), userId, body);
+    // Race events (marathons, fun runs): see races.ts.
+    case 'create_race':
+      return races.createRace(privilegedClient(db), userId, body);
+    case 'update_race_settings':
+      return races.updateRaceSettings(privilegedClient(db), userId, body);
+    case 'upsert_distance':
+      return races.upsertDistance(privilegedClient(db), userId, body);
+    case 'remove_distance':
+      return races.removeDistance(privilegedClient(db), userId, body);
+    case 'save_route':
+      return races.saveRoute(privilegedClient(db), userId, body);
+    case 'open_race_entries':
+      return races.openRaceEntries(privilegedClient(db), userId, body);
+    case 'enter_race':
+      return races.enterRace(privilegedClient(db), userId, body);
+    case 'cancel_race_entry':
+      return races.cancelRaceEntry(privilegedClient(db), userId, body);
+    case 'move_race_entry':
+      return races.moveRaceEntry(privilegedClient(db), userId, body);
+    case 'check_in_runner':
+      return races.checkInRunner(privilegedClient(db), userId, body);
+    case 'start_gun':
+      return races.startGun(privilegedClient(db), userId, body);
+    case 'finish_mark':
+      return races.finishMark(privilegedClient(db), userId, body);
+    case 'void_mark':
+      return races.voidMark(privilegedClient(db), userId, body);
+    case 'resolve_mark':
+      return races.resolveMark(privilegedClient(db), userId, body);
+    case 'import_results':
+      return races.importResults(privilegedClient(db), userId, body);
+    case 'set_result':
+      return races.setResult(privilegedClient(db), userId, body);
+    case 'publish_results':
+      return races.publishResults(privilegedClient(db), userId, body);
+    case 'appoint_race_official':
+      return races.appointRaceOfficial(privilegedClient(db), userId, body);
+    // Phase 5: channels, creators, following, privacy (social.ts).
+    case 'post_to_circle':
+      return social.postToCircle(privilegedClient(db), userId, body);
+    case 'edit_circle_post':
+      return social.editCirclePost(privilegedClient(db), userId, body);
+    case 'delete_circle_post':
+      return social.deleteCirclePost(privilegedClient(db), userId, body);
+    case 'pin_circle_post':
+      return social.pinCirclePost(privilegedClient(db), userId, body);
+    case 'react':
+      return social.react(privilegedClient(db), userId, body);
+    case 'vote_poll':
+      return social.votePoll(privilegedClient(db), userId, body);
+    case 'set_circle_notify':
+      return social.setCircleNotify(privilegedClient(db), userId, body);
+    case 'mark_circle_read':
+      return social.markCircleRead(privilegedClient(db), userId, body);
+    case 'add_circle_admin':
+      return social.addCircleAdmin(privilegedClient(db), userId, body);
+    case 'remove_circle_admin':
+      return social.removeCircleAdmin(privilegedClient(db), userId, body);
+    case 'remove_circle_member':
+      return social.removeCircleMember(privilegedClient(db), userId, body);
+    case 'transfer_circle_ownership':
+      return social.transferCircleOwnership(privilegedClient(db), userId, body);
+    case 'publish_to_circle':
+      return social.publishToCircle(privilegedClient(db), userId, body);
+    case 'apply_creator':
+      return social.applyCreator(privilegedClient(db), userId, body);
+    case 'review_creator':
+      return social.reviewCreator(privilegedClient(db), userId, body);
+    case 'update_creator_profile':
+      return social.updateCreatorProfile(privilegedClient(db), userId, body);
+    case 'save_creator_post':
+      return social.saveCreatorPost(privilegedClient(db), userId, body);
+    case 'delete_creator_post':
+      return social.deleteCreatorPost(privilegedClient(db), userId, body);
+    case 'follow':
+      return social.follow(privilegedClient(db), userId, body);
+    case 'unfollow':
+      return social.unfollow(privilegedClient(db), userId, body);
+    case 'set_visibility':
+      return social.setVisibility(privilegedClient(db), userId, body);
+    case 'set_free_tonight':
+      return records.setFreeTonight(privilegedClient(db), userId, body);
+    case 'clear_free_tonight':
+      return records.clearFreeTonight(privilegedClient(db), userId);
+    case 'notify_free_players':
+      return records.notifyFreePlayers(privilegedClient(db), userId, body);
     case 'create_competition':
       return createCompetitionV2(privilegedClient(db), userId, createCompetitionV2Schema.parse(body));
     case 'register_entry':
@@ -2153,11 +2311,18 @@ export async function runAction(
     case 'report_score': {
       const out = await reportScore(db, userId, reportScoreSchema.parse(body));
       await topUpAfter(db, (body as { matchId?: string }).matchId);
+      await resultToCircle(db, (body as { matchId?: string }).matchId);
+      if ((body as { matchId?: string }).matchId) await records.onGameFinished(privilegedClient(db), 'match', (body as { matchId: string }).matchId);
       return out;
     }
     case 'update_match': {
       const out = await updateMatch(db, userId, updateMatchSchema.parse(body));
       await topUpAfter(db, (body as { matchId?: string }).matchId);
+      // Finishing (or reopening) a game updates records and ratings; a cancelled game drops out of them.
+      if ((body as { matchId?: string }).matchId) {
+        await resultToCircle(db, (body as { matchId: string }).matchId);
+        await records.onGameFinished(privilegedClient(db), 'match', (body as { matchId: string }).matchId);
+      }
       return out;
     }
     case 'create_poll':

@@ -2,6 +2,8 @@ import type { Team, TeamRole } from '@chabuka/shared';
 import { supabase } from './supabase';
 import { fetchMyTeams, isCaptainRole } from './teams';
 import { fetchMyVenues, fetchVenueBookings } from './venues';
+import { fetchMyVenues as fetchRunVenues } from './venueBooking';
+import { fetchMyRaces } from './races';
 import { fetchCircles, fetchCircleEvents } from './circles';
 import type { CircleListing } from './circles';
 import type { MatchListing } from './matches';
@@ -155,7 +157,7 @@ export async function fetchTeamSummaries(userId: string): Promise<TeamSummary[]>
 }
 
 // Everything waiting on this player, most urgent first.
-export async function fetchNeedsYou(userId: string, past: MatchListing[], teams: TeamSummary[]): Promise<NeedsItem[]> {
+export async function fetchNeedsYou(userId: string, past: MatchListing[], teams: TeamSummary[], token?: string): Promise<NeedsItem[]> {
   const db = supabase;
   if (!db) return [];
   const items: NeedsItem[] = [];
@@ -276,8 +278,39 @@ export async function fetchNeedsYou(userId: string, past: MatchListing[], teams:
     }
   }
 
-  // 3. Booking requests at venues I run.
-  const venues = await fetchMyVenues(userId).catch(() => []);
+  // 2b. A race this week: bib, start time, and a nudge to look at the course.
+  if (token) {
+    const races = await fetchMyRaces(token).catch(() => []);
+    const soon = races.filter((r) => r.distance && r.status === 'confirmed' && new Date(r.distance.startsAt).getTime() - Date.now() < 7 * 86_400_000 && new Date(r.distance.startsAt).getTime() > Date.now());
+    for (const r of soon.slice(0, 2)) {
+      items.push({
+        id: `race-${r.entryId}`,
+        kind: 'week',
+        title: `${r.race?.name ?? 'Race'}: bib ${r.bib ?? ''}`,
+        sub: `${r.distance!.name}, ${new Date(r.distance!.startsAt).toLocaleString(undefined, { weekday: 'short', hour: '2-digit', minute: '2-digit' })}${r.wave ? `, wave ${r.wave}` : ''}`,
+        to: r.race ? `/races/${r.race.id}?tab=route` : '/competitions',
+        cta: 'Course',
+      });
+    }
+  }
+
+  // 3. Booking requests at venues I own or manage (single and weekly requests, from Chabuka and WaitApp).
+  const run = token ? await fetchRunVenues(token).catch(() => null) : null;
+  if (run) {
+    const waitingAt = run.filter((v) => v.waiting > 0);
+    const total = waitingAt.reduce((n, v) => n + v.waiting, 0);
+    if (total > 0) {
+      items.push({
+        id: 'bookings',
+        kind: 'booking',
+        title: `${total} booking request${total === 1 ? '' : 's'} to answer`,
+        sub: waitingAt.length === 1 ? (waitingAt[0]?.name ?? '') : `${waitingAt.length} venues`,
+        to: waitingAt.length === 1 ? `/venues/${waitingAt[0]!.id}/manage?tab=requests` : '/venues/dashboard',
+        cta: 'Review',
+      });
+    }
+  }
+  const venues = run ? [] : await fetchMyVenues(userId).catch(() => []);
   if (venues.length > 0) {
     const bookings = await fetchVenueBookings(venues.map((v) => v.id)).catch(() => []);
     const pending = bookings.filter((b) => b.status === 'requested');

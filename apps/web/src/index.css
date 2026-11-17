@@ -2397,3 +2397,24 @@ button.sheet-item {
   white-space: nowrap;
 }
 }
+
+/* Race route planner and course map (Leaflet). */
+.route-anchor {
+  background: #ffffff;
+  border: 3px solid #0b6b3a;
+  border-radius: 9999px;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.35);
+  cursor: grab;
+}
+.leaflet-tooltip.km-label {
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #ffffff;
+  font-size: 10px;
+  font-weight: 800;
+  padding: 0;
+}
+.leaflet-tooltip.km-label::before {
+  display: none;
+}

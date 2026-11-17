@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Building, List, Map as MapIcon, Radio, Search, Swords, Trophy, Volleyball } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, FORMAT_LABELS } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, formatLabel } from '@chabuka/shared';
 import type { Competition, Sport, Venue } from '@chabuka/shared';
 import ChallengeCard from '../components/ChallengeCard';
+import TeamSuggestions from '../components/TeamSuggestions';
 import ExploreMap from '../components/ExploreMap';
 import GameCard, { sportLabel } from '../components/GameCard';
 import MatchFoundOverlay from '../components/MatchFoundOverlay';
@@ -20,6 +21,7 @@ import { fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
 import { useMatchActions } from '../lib/useMatchActions';
 import { fetchForYouProfile, pickForYou } from '../lib/forYou';
+import { fetchGamesForYou } from '../lib/records';
 import type { ForYouProfile } from '../lib/forYou';
 
 type Tab = 'games' | 'teams' | 'competitions' | 'venues' | 'circles';
@@ -55,7 +57,7 @@ function matches(text: (string | null | undefined)[], q: string): boolean {
 type CompetitionRow = Awaited<ReturnType<typeof fetchCompetitions>>[number];
 
 export default function ExplorePage() {
-  const { user, profile } = useAuth();
+  const { user, profile, session } = useAuth();
   const [params, setParams] = useSearchParams();
   const tab = (TABS.some((t) => t.value === params.get('tab')) ? params.get('tab') : 'games') as Tab;
   const setTab = (t: Tab) => {
@@ -77,6 +79,13 @@ export default function ExplorePage() {
   const [sport, setSport] = useState<string>('all');
   const [when, setWhen] = useState<When>('any');
   const [forYou, setForYou] = useState(false);
+  const [ranking, setRanking] = useState<Map<string, { score: number; reasons: string[] }> | null>(null);
+  useEffect(() => {
+    if (!forYou || ranking || !session) return;
+    fetchGamesForYou(session.access_token)
+      .then((list) => setRanking(new Map(list.map((r) => [r.matchId, { score: r.score, reasons: r.reasons }]))))
+      .catch(() => setRanking(new Map()));
+  }, [forYou, ranking, session]);
   const [view, setView] = useState<'list' | 'map'>('list');
   const [selected, setSelected] = useState<MatchListing | null>(null);
 
@@ -117,10 +126,15 @@ export default function ExplorePage() {
         inWindow(l.match.starts_at, when) &&
         matches([l.match.title, l.match.area, l.sport?.name, l.venue?.name, l.match.venue_name], q),
     );
-    if (!forYou || !tuned) return base;
+    if (!forYou) return base;
+    // Ranked on the server (sport, level, distance, your free times, spots left); the local ranking is the fallback.
+    if (ranking && ranking.size > 0) {
+      return [...base].filter((l) => !l.isParticipant).sort((a, b) => (ranking.get(b.match.id)?.score ?? -1) - (ranking.get(a.match.id)?.score ?? -1));
+    }
+    if (!tuned) return base;
     const joined = new Set(base.filter((l) => l.isParticipant).map((l) => l.match.id));
     return pickForYou(base, tuned, (profile?.area ?? '').toLowerCase(), joined, 100);
-  }, [games, sport, when, q, forYou, tuned, profile?.area]);
+  }, [games, sport, when, q, forYou, tuned, profile?.area, ranking]);
 
   // Sports that actually have games, so the chips never lead to nothing.
   const gameSports = useMemo(() => {
@@ -276,7 +290,12 @@ export default function ExplorePage() {
           ) : (
             <div className="flex flex-col gap-2.5">
               {visibleGames.map((l) => (
-                <GameCard key={l.match.id} listing={l} onJoin={(x) => onJoin(x.match.id, x.joinedCount, x.match.title)} busy={busyId === l.match.id} />
+                <div key={l.match.id} className="flex flex-col gap-1">
+                  <GameCard listing={l} onJoin={(x) => onJoin(x.match.id, x.joinedCount, x.match.title)} busy={busyId === l.match.id} />
+                  {forYou && ranking?.get(l.match.id)?.reasons.length ? (
+                    <span className="px-1 text-[12px] font-semibold text-brand-text">{ranking.get(l.match.id)!.reasons.join(' · ')}</span>
+                  ) : null}
+                </div>
               ))}
             </div>
           )}
@@ -285,6 +304,7 @@ export default function ExplorePage() {
 
       {tab === 'teams' ? (
         <>
+          <TeamSuggestions />
           <p className="m-0 text-[14px] text-muted">Teams looking for an opponent. Captains can accept for their side or propose another time.</p>
           {loading ? (
             <Skeleton className="h-40" />
@@ -409,5 +429,5 @@ export default function ExplorePage() {
 
 function compSub(c: Competition, entries: number, sports: Sport[]): string {
   const sport = sportLabel(sports.find((s) => s.id === c.sport_id)?.name) || null;
-  return [CATEGORY_LABELS[c.category], sport, FORMAT_LABELS[c.format], `${entries}/${c.max_entries} teams`, c.area].filter(Boolean).join(' · ');
+  return [CATEGORY_LABELS[c.category], sport, formatLabel(c.format), `${entries}/${c.max_entries} teams`, c.area].filter(Boolean).join(' · ');
 }

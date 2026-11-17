@@ -85,5 +85,3 @@ export async function fetchMySpaceBookings(token: string): Promise<SpaceBooking[
   return (await call<{ bookings: SpaceBooking[] }>('/api/my/space-bookings', 'GET', token)).bookings;
 }
 
-export const setVenueCalendarLink = (token: string, venueId: string, link: boolean) =>
-  call<{ linked: boolean; spaceCount: number }>(`/api/venues/${venueId}/waitapp-calendar`, 'POST', token, { link });

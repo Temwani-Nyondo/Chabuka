@@ -10,6 +10,9 @@ import NotificationsPage from './pages/NotificationsPage';
 import { CommunityPage, DataDeletionPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
 import OnboardingPage from './pages/OnboardingPage';
 import WaitAppConnectPage from './pages/WaitAppConnectPage';
+import VenueWaitAppReturnPage from './pages/VenueWaitAppReturnPage';
+import GolfDayCreatePage from './pages/GolfDayCreatePage';
+import GolfDayPage from './pages/GolfDayPage';
 import ScoreboardViewPage from './pages/ScoreboardViewPage';
 import ScoreboardControlPage from './pages/ScoreboardControlPage';
 import AdminVenuesPage from './pages/AdminVenuesPage';
@@ -23,12 +26,21 @@ import TeamsPage from './pages/TeamsPage';
 import ProfilePage from './pages/ProfilePage';
 import VenueProfilePage from './pages/VenueProfilePage';
 import VenueDashboardPage from './pages/VenueDashboardPage';
+import VenueManagePage from './pages/VenueManagePage';
 import GamePage from './pages/GamePage';
 import SettingsPage from './pages/SettingsPage';
 import LineupPage from './pages/LineupPage';
 import RulesPage from './pages/RulesPage';
 import CompetitionPage from './pages/CompetitionPage';
 import CompetitionCreatePage from './pages/CompetitionCreatePage';
+import RaceCreatePage from './pages/RaceCreatePage';
+import CircleChannelPage from './pages/CircleChannelPage';
+import CreatorPage, { CreatorPostPage } from './pages/CreatorPage';
+import CreatorStudioPage from './pages/CreatorStudioPage';
+import PlayerPage from './pages/PlayerPage';
+import RacePage from './pages/RacePage';
+import RaceEnterPage from './pages/RaceEnterPage';
+import FinishLinePage from './pages/FinishLinePage';
 import CompetitionRegisterPage from './pages/CompetitionRegisterPage';
 
 function LandingGate() {
@@ -59,6 +71,7 @@ export default function App() {
       <Route element={<ProtectedRoute />}>
         <Route path="/onboarding" element={<OnboardingPage />} />
         <Route path="/connect/waitapp" element={<WaitAppConnectPage />} />
+        <Route path="/venues/waitapp/return" element={<VenueWaitAppReturnPage />} />
         <Route path="/scoreboard/:id/control" element={<ScoreboardControlPage />} />
         <Route element={<AppShell />}>
           <Route path="today" element={<HomePage />} />
@@ -73,6 +86,17 @@ export default function App() {
           <Route path="board" element={<CompetitionsPage />} />
           <Route path="competitions" element={<CompetitionsPage />} />
           <Route path="competitions/new" element={<CompetitionCreatePage />} />
+          <Route path="races/new" element={<RaceCreatePage />} />
+          <Route path="circles/:id" element={<CircleChannelPage />} />
+          <Route path="c/:handle" element={<CreatorPage />} />
+          <Route path="c/:handle/:postId" element={<CreatorPostPage />} />
+          <Route path="studio" element={<CreatorStudioPage />} />
+          <Route path="players/:id" element={<PlayerPage />} />
+          <Route path="races/:id" element={<RacePage />} />
+          <Route path="golf/new" element={<GolfDayCreatePage />} />
+          <Route path="golf/:id" element={<GolfDayPage />} />
+          <Route path="races/:id/enter" element={<RaceEnterPage />} />
+          <Route path="races/:id/line" element={<FinishLinePage />} />
           <Route path="competitions/:id" element={<CompetitionPage />} />
           <Route path="competitions/:id/register" element={<CompetitionRegisterPage />} />
           <Route path="circles" element={<CirclesPage />} />
@@ -83,6 +107,7 @@ export default function App() {
           <Route path="venues/dashboard" element={<VenueDashboardPage />} />
           <Route path="admin/venues" element={<AdminVenuesPage />} />
           <Route path="venues/:venueId" element={<VenueProfilePage />} />
+          <Route path="venues/:venueId/manage" element={<VenueManagePage />} />
         </Route>
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

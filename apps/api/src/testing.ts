@@ -5,7 +5,7 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
   private filters: { col: string; val: unknown }[] = [];
   private inFilters: { col: string; vals: unknown[] }[] = [];
   private nullFilters: string[] = [];
-  private ranges: { col: string; op: 'lt' | 'gt'; val: string }[] = [];
+  private ranges: { col: string; op: 'lt' | 'gt' | 'lte' | 'gte'; val: string }[] = [];
   private take: number | null = null;
   private op: 'select' | 'insert' | 'upsert' | 'update' | 'delete' = 'select';
   private payload: Row | Row[] | null = null;
@@ -40,6 +40,16 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
 
   gt(col: string, val: string): this {
     this.ranges.push({ col, op: 'gt', val });
+    return this;
+  }
+
+  lte(col: string, val: string): this {
+    this.ranges.push({ col, op: 'lte', val });
+    return this;
+  }
+
+  gte(col: string, val: string): this {
+    this.ranges.push({ col, op: 'gte', val });
     return this;
   }
 
@@ -107,7 +117,7 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
       this.ranges.every((r) => {
         const a = new Date(String(row[r.col])).getTime();
         const b = new Date(r.val).getTime();
-        return r.op === 'lt' ? a < b : a > b;
+        return r.op === 'lt' ? a < b : r.op === 'gt' ? a > b : r.op === 'lte' ? a <= b : a >= b;
       })
     );
   }

@@ -35,6 +35,11 @@ import {
   reportResultSchema,
   fixtureIdSchema,
   seriesIdSchema,
+  requestSpaceSchema,
+  cancelSpaceBookingSchema,
+  enterRaceSchema,
+  followSchema,
+  freeTonightSchema,
 } from '@chabuka/shared';
 import { chatOnce, chatStream, type ModelMessage, type ModelResult } from './model.js';
 import { ActionError, runAction, toHttpError } from './actions.js';
@@ -102,26 +107,35 @@ async function readMySchedule(db: SupabaseClient, userId: string): Promise<unkno
     .eq('user_id', userId)
     .eq('status', 'joined');
   if (error) throw new Error(error.message);
-  const ids = ((data ?? []) as { match_id: string }[]).map((r) => r.match_id);
-  if (ids.length === 0) return [];
-  const { data: matches, error: matchesError } = await db
-    .from('matches')
-    .select('id,title,sport_id,starts_at,area,venue_name,level,status')
-    .in('id', ids)
-    .gte('starts_at', new Date().toISOString())
-    .order('starts_at');
-  if (matchesError) throw new Error(matchesError.message);
-  return (matches ?? []) as unknown[];
+  const joined = new Set(((data ?? []) as { match_id: string }[]).map((r) => r.match_id));
+  const now = new Date().toISOString();
+  const cols = 'id,title,sport_id,starts_at,area,venue_name,level,status,organiser_id';
+  const [mine, theirs] = await Promise.all([
+    db.from('matches').select(cols).eq('organiser_id', userId).gte('starts_at', now).order('starts_at'),
+    joined.size ? db.from('matches').select(cols).in('id', [...joined]).gte('starts_at', now).order('starts_at') : Promise.resolve({ data: [], error: null }),
+  ]);
+  if (mine.error) throw new Error(mine.error.message);
+  if (theirs.error) throw new Error(theirs.error.message);
+  const byId = new Map<string, Record<string, unknown>>();
+  for (const m of [...((mine.data ?? []) as Record<string, unknown>[]), ...((theirs.data ?? []) as Record<string, unknown>[])]) byId.set(String(m['id']), m);
+  return [...byId.values()]
+    .filter((m) => m['status'] !== 'cancelled')
+    .sort((a, b) => String(a['starts_at']).localeCompare(String(b['starts_at'])))
+    .map(({ organiser_id, ...m }) => ({
+      ...m,
+      // organiser: the player made this game (they are already in it). player: they joined someone else's.
+      you: organiser_id === userId ? 'organiser' : 'player',
+    }));
 }
 
 async function readSearchMatches(
   db: SupabaseClient,
-  _userId: string,
+  userId: string,
   args: Record<string, unknown>,
 ): Promise<unknown> {
   let query = db
     .from('matches')
-    .select('id,title,sport_id,starts_at,area,venue_name,level,status')
+    .select('id,title,sport_id,starts_at,area,venue_name,level,status,organiser_id')
     .eq('status', 'open')
     // Only games still to come: a past game can keep its "open" status, and sorted by
     // start time it would otherwise be the first thing Gaffer finds.
@@ -141,7 +155,15 @@ async function readSearchMatches(
   if (level) query = query.eq('level', level);
   const { data, error } = await query;
   if (error) throw new Error(error.message);
-  return (data ?? []) as unknown[];
+  const rows = (data ?? []) as Record<string, unknown>[];
+  const { data: mine } = rows.length
+    ? await db.from('match_participants').select('match_id').eq('user_id', userId).eq('status', 'joined').in('match_id', rows.map((r) => String(r['id'])))
+    : { data: [] };
+  const joined = new Set(((mine ?? []) as { match_id: string }[]).map((r) => r.match_id));
+  return rows.map(({ organiser_id, ...r }) => ({
+    ...r,
+    ...(organiser_id === userId ? { youOrganise: true } : joined.has(String(r['id'])) ? { youJoined: true } : {}),
+  }));
 }
 
 async function readSearchVenues(
@@ -354,7 +376,7 @@ async function readPollStatus(
   const ids = [...new Set(list.map((r) => r.user_id))];
   let names: Record<string, string> = {};
   if (ids.length > 0) {
-    const { data: profiles } = await db.from('profiles').select('id,name').in('id', ids);
+    const { data: profiles } = await db.from('public_profiles').select('id,name').in('id', ids);
     names = Object.fromEntries(((profiles ?? []) as { id: string; name: string | null }[]).map((p) => [p.id, p.name ?? 'A teammate']));
   }
   return {
@@ -382,6 +404,99 @@ async function readMyVenues(db: SupabaseClient, userId: string): Promise<unknown
     .limit(READ_LIMIT);
   if (pendingError) throw new Error(pendingError.message);
   return { venues: rows, pendingBookings: (pending ?? []) as unknown[] };
+}
+
+// --- Circles, records, matchmaking and follows (Phases 5 and 6): read-only for Gaffer -------------
+// Each goes through the same permission-checked functions the app uses, on the service client, cut down to what Gaffer
+// needs to talk about it (no photo URLs, no long bodies).
+
+const cut = (v: unknown, n = 300) => String(v ?? '').replace(/\s+/g, ' ').trim().slice(0, n);
+
+async function svcClient(): Promise<SupabaseClient> {
+  const { createServiceClient } = await import('./supabase.js');
+  return createServiceClient();
+}
+
+async function readMyCircles(_db: SupabaseClient, userId: string): Promise<unknown> {
+  const { listCircles } = await import('./social.js');
+  const { yours, discover } = await listCircles(await svcClient(), userId);
+  const row = (c: (typeof yours)[number]) => ({
+    circleId: c.circle.id,
+    name: cut((c.circle as { name?: string }).name, 80),
+    members: c.memberCount,
+    unread: c.unread,
+    lastPost: c.last ? { text: cut(c.last.body, 120), at: c.last.at } : null,
+  });
+  return { yours: yours.slice(0, 20).map(row), discover: discover.slice(0, 10).map(row) };
+}
+
+async function readCirclePostsTool(_db: SupabaseClient, userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const circleId = strArg(args, 'circleId');
+  if (!circleId) throw new Error('circleId is required (from get_my_circles).');
+  const { getCirclePosts } = await import('./social.js');
+  const { posts } = await getCirclePosts(await svcClient(), userId, circleId);
+  return posts.slice(0, 15).map((p) => ({
+    kind: p.kind,
+    by: p.author?.name ?? 'Admin',
+    at: p.createdAt,
+    text: cut(p.body, 400),
+    important: p.important || undefined,
+    pinned: p.pinned || undefined,
+    poll: p.poll ? { options: p.poll.options, tally: p.poll.tally } : undefined,
+  }));
+}
+
+async function readMyRecordTool(_db: SupabaseClient, userId: string): Promise<unknown> {
+  const { recordFor } = await import('./records.js');
+  const r = await recordFor(await svcClient(), userId);
+  return { record: r.record, weekStreak: r.streak, season: r.season, recent: r.recent };
+}
+
+async function readTeamRecordTool(_db: SupabaseClient, _userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const teamId = strArg(args, 'teamId');
+  if (!teamId) throw new Error('teamId is required (from get_my_teams).');
+  const { getTeamRecord } = await import('./records.js');
+  return getTeamRecord(await svcClient(), teamId);
+}
+
+async function readHeadToHeadTool(_db: SupabaseClient, _userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const teamId = strArg(args, 'teamId');
+  const opponentId = strArg(args, 'opponentId');
+  if (!teamId || !opponentId) throw new Error('teamId and opponentId are required.');
+  const { versus } = await import('./records.js');
+  return versus(await svcClient(), teamId, opponentId);
+}
+
+async function readSuggestOpponentsTool(_db: SupabaseClient, userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const teamId = strArg(args, 'teamId');
+  if (!teamId) throw new Error('teamId is required (from get_my_teams).');
+  const { suggestOpponents } = await import('./records.js');
+  const { suggestions } = await suggestOpponents(await svcClient(), userId, teamId);
+  return suggestions.map((x) => ({ teamId: x.team.id, name: x.team.name, area: x.team.area, band: x.band?.label ?? null, sharedFreeSlots: x.sharedSlots, score: x.score }));
+}
+
+async function readGamesForYouTool(_db: SupabaseClient, userId: string): Promise<unknown> {
+  const { gamesForYou } = await import('./records.js');
+  return gamesForYou(await svcClient(), userId);
+}
+
+async function readMyGolfTool(_db: SupabaseClient, userId: string): Promise<unknown> {
+  const { myGolf } = await import('./golf.js');
+  return myGolf(await svcClient(), userId);
+}
+
+async function readFollowingTool(_db: SupabaseClient, userId: string): Promise<unknown> {
+  const { getFollowingFeed } = await import('./social.js');
+  const { items } = await getFollowingFeed(await svcClient(), userId);
+  return items.slice(0, 20).map((i) => {
+    if (i.type === 'creator_post') {
+      const post = i['post'] as { title?: string; body?: string } | undefined;
+      const creator = i['creator'] as { displayName?: string } | undefined;
+      return { type: i.type, at: i.at, creator: creator?.displayName, title: cut(post?.title, 120), text: cut(post?.body, 200) };
+    }
+    if (i.type === 'event_news') return { type: i.type, at: i.at, event: i['name'], text: cut(i['text'], 200) };
+    return i;
+  });
 }
 
 type ToolParameters = { type: 'object'; properties?: Record<string, unknown>; required?: string[] };
@@ -479,6 +594,55 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn; parameters?
     parameters: { type: 'object', properties: { pollId: str('Poll UUID.') }, required: ['pollId'] },
   },
   {
+    name: 'get_my_circles',
+    description: 'Circles (community channels) the user is in, with unread counts and the last post, plus a few to discover. No arguments.',
+    read: readMyCircles,
+  },
+  {
+    name: 'circle_posts',
+    description: 'The latest posts in one circle (announcements, photos, polls with tallies). Required: circleId from get_my_circles. Summarise, never read out whole posts.',
+    read: readCirclePostsTool,
+    parameters: { type: 'object', properties: { circleId: str('Circle UUID from get_my_circles.') }, required: ['circleId'] },
+  },
+  {
+    name: 'get_my_record',
+    description: "The user's own playing record: wins, draws, losses, goals, assists and MVPs per sport, weekly streak, season recap and recent games. No arguments.",
+    read: readMyRecordTool,
+  },
+  {
+    name: 'team_record',
+    description: "A team's record, its rating band (how strong it plays) and head-to-heads with recent opponents. Required: teamId.",
+    read: readTeamRecordTool,
+    parameters: { type: 'object', properties: { teamId: str('Team UUID.') }, required: ['teamId'] },
+  },
+  {
+    name: 'head_to_head',
+    description: 'Head-to-head between two teams of the same sport plus both rating bands. Required: teamId, opponentId.',
+    read: readHeadToHeadTool,
+    parameters: { type: 'object', properties: { teamId: str('Team UUID.'), opponentId: str('Opponent team UUID.') }, required: ['teamId', 'opponentId'] },
+  },
+  {
+    name: 'suggest_opponents',
+    description: "Good opponents for one of the user's teams: similar level, nearby, free at the same times, not played recently. Required: teamId (a team the user belongs to). Use before post_challenge.",
+    read: readSuggestOpponentsTool,
+    parameters: { type: 'object', properties: { teamId: str('Team UUID from get_my_teams.') }, required: ['teamId'] },
+  },
+  {
+    name: 'games_for_you',
+    description: 'Open games picked for the user by sport, level, distance and when they are usually free. Prefer this over search_matches when they just want a game. No arguments.',
+    read: readGamesForYouTool,
+  },
+  {
+    name: 'get_my_golf',
+    description: "The user's golf: rounds played, best gross, net and Stableford scores, recent rounds, upcoming tee times and golf days. No arguments.",
+    read: readMyGolfTool,
+  },
+  {
+    name: 'get_following',
+    description: "News from what the user follows: creators' posts, followed teams' fixtures and results, event news and race results. No arguments.",
+    read: readFollowingTool,
+  },
+  {
     name: 'get_my_venues',
     description: 'Venues I own plus pending booking requests. For the venue-owner side. No arguments.',
     read: (db, userId) => readMyVenues(db, userId),
@@ -566,6 +730,14 @@ const GENERAL_PROMPT = [
   'Post-game: when a joined game just passed, ask for the score. Tournament fixtures go through',
   'post_result; casual matches the user organised go through report_score. Then recap briefly',
   'from get_my_results — never from memory.',
+  'Before join_match, check the game is not already theirs: get_my_schedule marks games they organise (you: organiser)',
+  'and search_matches marks youOrganise or youJoined. Never join the player to a game they made or already joined;',
+  'say it is already on their schedule instead. A game they create already counts them in.',
+  'After create_match or join_match, say which game, when and where; the app shows a link to it under your reply.',
+  'Records and form: answer "how am I doing" or "how good are they" from get_my_record, team_record and',
+  'head_to_head, never from memory. When a captain wants a game, suggest_opponents first, then offer post_challenge.',
+  'When a player just wants a game, games_for_you before search_matches. Circles and follows: get_my_circles,',
+  'circle_posts and get_following, summarised in a line or two.',
   'Venue owners: pull get_my_venues to surface pending booking requests. Occupancy questions get',
   'real slot and booking data, never guesses.',
   'You arrange for the player — you never run venues, tournaments or moderation. You have no tool',
@@ -679,6 +851,12 @@ const CONFIRM_REQUIRED: ReadonlySet<string> = new Set([
   'report_result',
   'confirm_result',
   'join_series',
+  'request_space',
+  'cancel_space_booking',
+  'enter_race',
+  'follow',
+  'unfollow',
+  'set_free_tonight',
 ]);
 
 const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
@@ -716,6 +894,12 @@ const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
   report_result: reportResultSchema,
   confirm_result: fixtureIdSchema,
   join_series: seriesIdSchema,
+  request_space: requestSpaceSchema,
+  cancel_space_booking: cancelSpaceBookingSchema,
+  enter_race: enterRaceSchema,
+  follow: followSchema,
+  unfollow: followSchema,
+  set_free_tonight: freeTonightSchema,
 };
 
 // Hand-written shapes for the two actions the model uses most.
@@ -803,10 +987,13 @@ export interface HelperActionTaken {
 
 // Pulls a linkable id out of a successful write so the client can show
 // a real step ("Game created — view it") instead of a bare checkmark.
-function actionDetail(name: string, outcome: unknown): string | undefined {
+function actionDetail(name: string, outcome: unknown, args?: unknown): string | undefined {
   if (typeof outcome !== 'object' || outcome === null) return undefined;
   const row = outcome as Record<string, unknown>;
   if (name === 'create_match' && typeof row.matchId === 'string') return `match:${row.matchId}`;
+  // Joining, leaving, inviting, reporting a score...: any action about one game links to that game.
+  const input = (args ?? {}) as Record<string, unknown>;
+  if (name !== 'request_booking' && typeof input.matchId === 'string' && /^[0-9a-f-]{36}$/i.test(input.matchId)) return `match:${input.matchId}`;
   if (name === 'request_booking') {
     const booking = row.booking as Record<string, unknown> | undefined;
     if (booking && typeof booking.id === 'string') return `booking:${booking.id as string}`;
@@ -1198,7 +1385,7 @@ export async function runHelperTurn(
           ? await read(call.name, (args ?? {}) as Record<string, unknown>)
           : await execute(call.name, args);
         payload = truncateResult(outcome);
-        if (ok) detail = actionDetail(call.name, outcome);
+        if (ok) detail = actionDetail(call.name, outcome, args);
       } catch (err) {
         ok = false;
         const { message } = toHttpError(err);

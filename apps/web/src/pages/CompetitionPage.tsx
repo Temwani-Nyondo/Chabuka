@@ -15,7 +15,7 @@ import {
   Trophy,
   Users,
 } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, FORMAT_LABELS, SPONSOR_TIERS, SPONSOR_TIER_LABELS, roundName } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, formatLabel, SPONSOR_TIERS, SPONSOR_TIER_LABELS, roundName } from '@chabuka/shared';
 import type { Fixture } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { followCompetitionAction, runAction } from '../lib/api';
@@ -23,6 +23,7 @@ import { fetchCompetitionView, fetchOrganiserEntries } from '../lib/competitions
 import type { CompetitionView, PrivateEntry } from '../lib/competitions';
 import { sportBackdrop, sportLabel } from '../components/GameCard';
 import Bracket from '../components/Bracket';
+import SpacePicker from '../components/SpacePicker';
 import {
   EventDetailsFields,
   Field,
@@ -34,6 +35,7 @@ import {
 } from '../components/CompetitionForms';
 import type { EventDetails, RegistrationSettings } from '../components/CompetitionForms';
 import { Badge, Button, ButtonLink, Card, Crest, EmptyState, ErrorNote, Section, Segmented, Sheet, Skeleton, cx } from '../components/ui';
+import PublishToCircle from '../components/PublishToCircle';
 
 type Tab = 'overview' | 'table' | 'fixtures' | 'teams' | 'news' | 'manage';
 
@@ -75,6 +77,12 @@ export default function CompetitionPage() {
   useEffect(() => {
     reload().catch((err: unknown) => setError(err instanceof Error ? err.message : 'Could not load this competition.'));
   }, [reload]);
+
+  // Races have their own page (distances, courses, finish line, results).
+  useEffect(() => {
+    if (view?.competition.kind === 'race') navigate(`/races/${view.competition.id}`, { replace: true });
+    if ((view?.competition.kind as string) === 'golf_day') navigate(`/golf/${view!.competition.id}`, { replace: true });
+  }, [view, navigate]);
 
   const tabParam = params.get('tab') as Tab | null;
   const setTab = (t: Tab) => {
@@ -170,7 +178,7 @@ export default function CompetitionPage() {
           </div>
           <div className="mt-8 flex flex-wrap gap-1.5">
             <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-[12px] font-bold text-[#0e1411]">{CATEGORY_LABELS[c.category]}</span>
-            <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{FORMAT_LABELS[c.format]}</span>
+            <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{formatLabel(c.format)}</span>
             {view.sport ? <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{sportLabel(view.sport.name)}</span> : null}
             <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{COMPETITION_STATUS_LABELS[c.status]}</span>
           </div>
@@ -300,6 +308,7 @@ export default function CompetitionPage() {
             key={scheduleFor.id}
             f={scheduleFor}
             busy={busy}
+            venueId={view.competition.venue_id ?? null}
             onSubmit={async (patch) => {
               if (await act((t) => runAction('schedule_fixture', { fixtureId: scheduleFor.id, ...patch }, t), 'Saved. Both squads are told.')) setScheduleFor(null);
             }}
@@ -313,7 +322,7 @@ export default function CompetitionPage() {
 function Overview({ view, open, closesAt }: { view: CompetitionView; open: boolean; closesAt: Date | null }) {
   const c = view.competition;
   const facts: [string, ReactNode][] = [
-    ['Format', FORMAT_LABELS[c.format]],
+    ['Format', formatLabel(c.format)],
     ['Teams', `Up to ${c.max_entries}`],
     ...(c.team_size_min || c.team_size_max ? ([['Squad size', `${c.team_size_min ?? 1}–${c.team_size_max ?? 'any'} players`]] as [string, ReactNode][]) : []),
     ...(c.entry_fee_note ? ([['Entry fee', c.entry_fee_note]] as [string, ReactNode][]) : []),
@@ -678,12 +687,23 @@ function ResultForm({
   );
 }
 
-function ScheduleForm({ f, busy, onSubmit }: { f: Fixture; busy: boolean; onSubmit: (patch: Record<string, unknown>) => void }) {
+function ScheduleForm({ f, busy, venueId, onSubmit }: { f: Fixture; busy: boolean; venueId?: string | null; onSubmit: (patch: Record<string, unknown>) => void }) {
   const [when, setWhen] = useState(toLocalInput(f.starts_at));
   const [venue, setVenue] = useState(f.venue_name ?? '');
   const [status, setStatus] = useState<'scheduled' | 'postponed' | 'cancelled'>(f.status === 'postponed' || f.status === 'cancelled' ? f.status : 'scheduled');
+  const [booking, setBooking] = useState(false);
   return (
     <div className="flex flex-col gap-3.5">
+      {venueId ? (
+        booking ? (
+          <Card className="flex flex-col gap-2 p-3">
+            <strong className="text-[14px]">Book a pitch at the event venue</strong>
+            <SpacePicker venueId={venueId} fixed={{ fixtureId: f.id, date: when ? when.slice(0, 10) : undefined }} onBooked={() => setBooking(false)} />
+          </Card>
+        ) : (
+          <Button onClick={() => setBooking(true)}>Book a pitch at the event venue</Button>
+        )
+      ) : null}
       <Field label="Date and time">
         <input className={fieldCls} type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
       </Field>
@@ -944,6 +964,12 @@ function Manage({
           </Link>
         </Card>
       </Section>
+
+      {token ? (
+        <Section title="Circle">
+          <PublishToCircle competitionId={c.id} circleId={c.circle_id} token={token} onChanged={() => void reload()} />
+        </Section>
+      ) : null}
 
       {c.status !== 'finished' && c.status !== 'cancelled' ? (
         <Section title="Cancel">

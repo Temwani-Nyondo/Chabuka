@@ -17,10 +17,11 @@ beforeEach(() => {
   process.env.WAITAPP_BASE_URL = 'https://waitapp.test';
 });
 
-function world(opts: { linked?: boolean; approved?: boolean; waitappLink?: boolean } = {}) {
+function world(opts: { linked?: boolean; approved?: boolean; waitappLink?: boolean; venueLink?: boolean } = {}) {
   const t = {
     venues: new Map<string, Row>(),
     links: new Map<string, Row>(),
+    vlinks: new Map<string, Row>(),
     bookings: new Map<string, Row>(),
     matches: new Map<string, Row>(),
     participants: new Map<string, Row>(),
@@ -32,8 +33,12 @@ function world(opts: { linked?: boolean; approved?: boolean; waitappLink?: boole
   if (opts.waitappLink !== false) {
     t.links.set(OWNER, { user_id: OWNER, restaurant_id: 'rest-1', token_enc: encryptToken('cbk_ownertoken'), organiser_name: 'Matero', currency: 'ZMW' });
   }
+  if (opts.venueLink) {
+    t.vlinks.set(VENUE, { venue_id: VENUE, restaurant_id: 'rest-9', token_enc: encryptToken('cbk_venuetoken'), booking_page: null });
+  }
   const client = {
     from(table: string) {
+      if (table === 'venue_waitapp_links') return new FakeQuery(t.vlinks, (r) => String(r['venue_id']));
       if (table === 'venues') return new FakeQuery(t.venues, (r) => String(r['id']));
       if (table === 'waitapp_links') return new FakeQuery(t.links, (r) => String(r['user_id']));
       if (table === 'matches') return new FakeQuery(t.matches, (r) => String(r['id']));
@@ -47,31 +52,47 @@ function world(opts: { linked?: boolean; approved?: boolean; waitappLink?: boole
 
 const json = (status: number, body: unknown) => new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-describe('linking a venue to its WaitApp calendar', () => {
-  it('only the owner can, and only with a connected WaitApp account', async () => {
-    const w = world({ linked: false });
-    await expect(setVenueCalendarLink(w.client, STRANGER, VENUE, true)).rejects.toMatchObject({ status: 403 });
-    const none = world({ linked: false, waitappLink: false });
-    await expect(setVenueCalendarLink(none.client, OWNER, VENUE, true)).rejects.toMatchObject({ status: 409 });
+describe('unlinking a venue from WaitApp', () => {
+  it('only the owner can, and linking now goes through the venue handshake', async () => {
+    const w = world();
+    await expect(setVenueCalendarLink(w.client, STRANGER, VENUE, false)).rejects.toMatchObject({ status: 403 });
+    await expect(setVenueCalendarLink(w.client, OWNER, VENUE, true)).rejects.toMatchObject({ status: 400 });
   });
 
-  it('refuses a WaitApp account that is not a bookable venue', async () => {
-    const w = world({ linked: false });
-    const fetch = vi.fn(async () => json(409, { error: 'This account is not a bookable venue.' }));
-    await expect(setVenueCalendarLink(w.client, OWNER, VENUE, true, { fetch: fetch as never })).rejects.toMatchObject({ status: 409 });
+  it('removes the venue link and clears the linked flag', async () => {
+    const w = world({ venueLink: true });
+    expect(await setVenueCalendarLink(w.client, OWNER, VENUE, false)).toEqual({ linked: false, spaceCount: 0 });
     expect(w.t.venues.get(VENUE)!['waitapp_restaurant_id']).toBeNull();
+    expect(w.t.vlinks.has(VENUE)).toBe(false);
+    // The owner's personal (ticketing) link is untouched.
+    expect(w.t.links.has(OWNER)).toBe(true);
+  });
+});
+
+describe('which WaitApp token a venue uses', () => {
+  it("uses the venue's own token when it has one", async () => {
+    const w = world({ venueLink: true });
+    const fetch = vi.fn(async () => json(200, { spaces: [] }));
+    await getVenueSpaces(w.client, VENUE, { fetch: fetch as never });
+    const sent = (fetch.mock.calls[0] as unknown as [string, { headers: Record<string, string> }])[1];
+    expect(sent.headers['authorization']).toBe('Bearer cbk_venuetoken');
   });
 
-  it('links a real bookable venue and can unlink again', async () => {
-    const w = world({ linked: false });
-    const fetch = vi.fn(async () => json(200, { spaces: [{ id: 's1' }, { id: 's2' }] }));
-    const r = await setVenueCalendarLink(w.client, OWNER, VENUE, true, { fetch: fetch as never });
-    expect(r).toEqual({ linked: true, spaceCount: 2 });
-    expect(w.t.venues.get(VENUE)!['waitapp_restaurant_id']).toBe('rest-1');
+  it("falls back to the owner's personal link for a venue linked the old way", async () => {
+    const w = world();
+    const fetch = vi.fn(async () => json(200, { spaces: [] }));
+    await getVenueSpaces(w.client, VENUE, { fetch: fetch as never });
     const sent = (fetch.mock.calls[0] as unknown as [string, { headers: Record<string, string> }])[1];
     expect(sent.headers['authorization']).toBe('Bearer cbk_ownertoken');
-    await setVenueCalendarLink(w.client, OWNER, VENUE, false);
+  });
+
+  it('a revoked venue token unlinks only that venue', async () => {
+    const w = world({ venueLink: true });
+    const fetch = vi.fn(async () => json(401, { error: 'Unauthorized' }));
+    await expect(getVenueSpaces(w.client, VENUE, { fetch: fetch as never })).rejects.toMatchObject({ status: 409 });
+    expect(w.t.vlinks.has(VENUE)).toBe(false);
     expect(w.t.venues.get(VENUE)!['waitapp_restaurant_id']).toBeNull();
+    expect(w.t.links.has(OWNER)).toBe(true);
   });
 });
 

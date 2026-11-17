@@ -5,6 +5,11 @@ import { ChevronLeft, Copy, Crown, ScrollText, Settings2, Shirt as ShirtIcon, Us
 import { JOIN_POLICY_LABELS, TEAM_CATEGORY_LABELS } from '@chabuka/shared';
 import type { JoinPolicy, Team, TeamRole } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
+import { FollowButton } from '../components/Social';
+import { BandBadge, OpponentSuggestions } from '../components/Records';
+import FindOpponentForm from '../components/FindOpponentForm';
+import { fetchTeamRecord } from '../lib/records';
+import type { TeamRecordView } from '../lib/records';
 import { supabase } from '../lib/supabase';
 import { fetchTeamDetail, isCaptainRole } from '../lib/teams';
 import type { TeamDetail, TeamFixture, TeamMemberDetail } from '../lib/teams';
@@ -75,6 +80,12 @@ export default function TeamDetailPage() {
   const [editOpen, setEditOpen] = useState(false);
   const [invite, setInvite] = useState<{ code: string; expires_at: string | null } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [teamRec, setTeamRec] = useState<TeamRecordView | null>(null);
+  const [challengeFor, setChallengeFor] = useState<{ teamId: string; area: string | null } | null>(null);
+  useEffect(() => {
+    if (!session || !id) return;
+    fetchTeamRecord(session.access_token, id).then(setTeamRec).catch(() => setTeamRec(null));
+  }, [session, id]);
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const tabParam = params.get('tab');
@@ -211,6 +222,11 @@ export default function TeamDetailPage() {
           </div>
           {description ? <p className="m-0 mt-3 max-w-[60ch] text-[14px] text-white/90">{description}</p> : null}
           {!myRole ? (
+            <div className="mt-3">
+              <FollowButton subjectType="team" subjectId={team.id} />
+            </div>
+          ) : null}
+          {!myRole ? (
             <div className="mt-4 flex flex-wrap items-center gap-2">
               {admin?.myRequest ? (
                 <Badge tone="hl">Request sent</Badge>
@@ -267,7 +283,7 @@ export default function TeamDetailPage() {
               )}
             </Section>
 
-            <Section title="Record">
+            <Section title="Record" action={<BandBadge band={teamRec?.band} />}>
               <div className="grid grid-cols-4 gap-2">
                 <StatTile value={record.p} label="Played" />
                 <StatTile value={record.w} label="Won" />
@@ -281,6 +297,29 @@ export default function TeamDetailPage() {
                 </p>
               ) : null}
             </Section>
+
+            {teamRec && teamRec.record.played ? (
+              <Section title="Head to head">
+                <Card>
+                  {teamRec.headToHead.map((h) => (
+                    <ListRow key={h.teamId} to={`/teams/${h.teamId}`} title={h.name} sub={`${h.played} played: ${h.won} won, ${h.drawn} drawn, ${h.lost} lost`} trailing={<FormGuide results={h.last} />} chevron={false} />
+                  ))}
+                </Card>
+                <p className="m-0 text-[13px] text-muted">
+                  Home {teamRec.record.home.won}-{teamRec.record.home.drawn}-{teamRec.record.home.lost} · Away {teamRec.record.away.won}-{teamRec.record.away.drawn}-{teamRec.record.away.lost}
+                  {teamRec.record.biggestWin ? ` · Biggest win ${Math.max(teamRec.record.biggestWin.homeScore, teamRec.record.biggestWin.awayScore)}-${Math.min(teamRec.record.biggestWin.homeScore, teamRec.record.biggestWin.awayScore)} v ${teamRec.record.biggestWin.opponent}` : ''}
+                </p>
+              </Section>
+            ) : null}
+
+            {isLeader ? (
+              <Section title="Find a game">
+                <OpponentSuggestions teamId={team.id} onChallenge={(s) => setChallengeFor({ teamId: team.id, area: s.team.area })} />
+              </Section>
+            ) : null}
+            <Sheet open={challengeFor !== null} onClose={() => setChallengeFor(null)} title="Post a challenge">
+              {challengeFor ? <FindOpponentForm prefill={challengeFor} onDone={() => { setChallengeFor(null); setNotice('Challenge posted. Teams nearby can take it.'); }} /> : null}
+            </Sheet>
 
             {results.length ? (
               <Section title="Latest results" action={<button type="button" className="cursor-pointer border-0 bg-transparent text-[13px] font-semibold text-brand-text" onClick={() => setTab('fixtures')}>All</button>}>
@@ -337,7 +376,8 @@ export default function TeamDetailPage() {
                   <ListRow
                     key={m.userId}
                     onClick={canOpen ? () => setMember(m) : undefined}
-                    chevron={canOpen}
+                    to={canOpen ? undefined : `/players/${m.userId}`}
+                    chevron
                     leading={
                       <span className="relative">
                         <Avatar name={m.name} src={m.photoUrl} size={40} />

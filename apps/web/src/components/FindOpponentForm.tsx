@@ -8,7 +8,7 @@ import { postChallengeAction } from '../lib/api';
 import { fetchMyTeams, isCaptainRole } from '../lib/teams';
 import type { MyTeam } from '../lib/teams';
 
-export default function FindOpponentForm({ onDone }: { onDone: () => void }) {
+export default function FindOpponentForm({ onDone, prefill }: { onDone: () => void; prefill?: { teamId?: string; area?: string | null } }) {
   const { session, user, profile } = useAuth();
   const navigate = useNavigate();
   const [teams, setTeams] = useState<MyTeam[]>([]);
@@ -16,7 +16,7 @@ export default function FindOpponentForm({ onDone }: { onDone: () => void }) {
   const [level, setLevel] = useState<Level>('recreational');
   const [windowStart, setWindowStart] = useState('');
   const [windowEnd, setWindowEnd] = useState('');
-  const [area, setArea] = useState(profile?.area ?? '');
+  const [area, setArea] = useState(prefill?.area ?? profile?.area ?? '');
   const [radiusKm, setRadiusKm] = useState(10);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -27,7 +27,9 @@ export default function FindOpponentForm({ onDone }: { onDone: () => void }) {
       .then((list) => {
         const mine = list.filter((t) => isCaptainRole(t.role));
         setTeams(mine);
-        if (mine[0]) setTeamId(mine[0].team.id);
+        const wanted = prefill?.teamId ? mine.find((t) => t.team.id === prefill.teamId) : undefined;
+        if (wanted) setTeamId(wanted.team.id);
+        else if (mine[0]) setTeamId(mine[0].team.id);
       })
       .catch((err: unknown) =>
         setError(err instanceof Error ? err.message : 'Could not load your teams.'),

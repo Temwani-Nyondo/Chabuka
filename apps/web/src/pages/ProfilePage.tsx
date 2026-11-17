@@ -1,19 +1,27 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useDataChanged } from '../lib/dataChanged';
 import { Link } from 'react-router-dom';
 import { Building, CalendarDays, Plus, Radio, Settings, Shield } from 'lucide-react';
 import { LEVEL_LABELS, ageBand } from '@chabuka/shared';
 import type { Level } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
-import { fetchMyMatches, fetchMyPastMatches } from '../lib/matches';
+import { fetchMyMatches, fetchMyPastMatches, fetchSports } from '../lib/matches';
 import type { MatchListing } from '../lib/matches';
 import { fetchMyTeams } from '../lib/teams';
 import type { MyTeam } from '../lib/teams';
 import { fetchCircles } from '../lib/circles';
 import type { CircleListing } from '../lib/circles';
-import { fetchMyBookings, fetchMyVenues, fetchVenues } from '../lib/venues';
-import type { Booking } from '../lib/venues';
-import type { Venue } from '@chabuka/shared';
+import { fetchMyBookingsAll, fetchMyVenues as fetchRunVenues } from '../lib/venueBooking';
+import type { MyBooking, MyVenue } from '../lib/venueBooking';
+import { fetchMyRaces } from '../lib/races';
+import { fetchMyRecord } from '../lib/records';
+import type { MyRecordView } from '../lib/records';
+import { FreeTonightCard, RecordCard } from '../components/Records';
+import { GolfRecord } from '../components/golf/GolfRecord';
+import type { Sport } from '@chabuka/shared';
+import type { MyRace } from '../lib/races';
+import { formatDuration, pace } from '@chabuka/shared';
 import { dayShort, sportLabel, statusBadge, timeLabel } from '../components/GameCard';
 import { requestCreate } from '../components/AppShell';
 import { Avatar, Badge, ButtonLink, Card, Crest, EmptyState, ListRow, Section, SectionLink, Skeleton, StatTile, cx } from '../components/ui';
@@ -33,40 +41,47 @@ function weekStart(t: number): number {
 const WEEKS = 16;
 
 export default function ProfilePage() {
-  const { profile, user } = useAuth();
+  const { profile, user, session } = useAuth();
+  const token = session?.access_token;
   const [upcoming, setUpcoming] = useState<MatchListing[]>([]);
   const [past, setPast] = useState<MatchListing[]>([]);
-  const [bookings, setBookings] = useState<Booking[]>([]);
-  const [venueNames, setVenueNames] = useState<Map<string, string>>(new Map());
+  const [bookings, setBookings] = useState<MyBooking[]>([]);
   const [teams, setTeams] = useState<MyTeam[]>([]);
   const [circles, setCircles] = useState<CircleListing[]>([]);
-  const [myVenues, setMyVenues] = useState<Venue[]>([]);
+  const [myVenues, setMyVenues] = useState<MyVenue[]>([]);
+  const [myRaces, setMyRaces] = useState<MyRace[]>([]);
+  const [myRecord, setMyRecord] = useState<MyRecordView | null>(null);
+  const [allSports, setAllSports] = useState<Sport[]>([]);
   const [sports, setSports] = useState<SportLevel[]>([]);
   const [loading, setLoading] = useState(true);
+  // Bumped when Gaffer (or anything else) changes the player's games, so the schedule reloads.
+  const [version, setVersion] = useState(0);
+  useDataChanged(useCallback(() => setVersion((v) => v + 1), []));
 
   useEffect(() => {
     const db = supabase;
     if (!user || !db) return;
     void (async () => {
-      const [up, pa, bk, allVenues, tm, cs, mv, us] = await Promise.all([
+      const [up, pa, bk, tm, cs, mv, us] = await Promise.all([
         fetchMyMatches(user.id).catch(() => []),
         fetchMyPastMatches(user.id, 100).catch(() => []),
-        fetchMyBookings(user.id).catch(() => []),
-        fetchVenues().catch(() => []),
+        token ? fetchMyBookingsAll(token).catch(() => [] as MyBooking[]) : Promise.resolve([] as MyBooking[]),
         fetchMyTeams(user.id).catch(() => []),
         fetchCircles(user.id).catch(() => []),
-        fetchMyVenues(user.id).catch(() => []),
+        token ? fetchRunVenues(token).catch(() => [] as MyVenue[]) : Promise.resolve([] as MyVenue[]),
         db.from('user_sports').select('sport_id,level,sports(name)').eq('user_id', user.id),
       ]);
       setUpcoming(up.filter((l) => l.match.status !== 'cancelled'));
       setPast(pa);
       setBookings(
         bk
-          .filter((b) => (b.status === 'requested' || b.status === 'confirmed') && (!b.requested_starts_at || new Date(b.requested_starts_at).getTime() > Date.now()))
-          .sort((a, b) => (a.requested_starts_at ?? '').localeCompare(b.requested_starts_at ?? '')),
+          .filter((b) => (b.status === 'requested' || b.status === 'confirmed') && new Date(b.endsAt).getTime() > Date.now())
+          .sort((a, b) => a.startsAt.localeCompare(b.startsAt)),
       );
-      setVenueNames(new Map(allVenues.map((v) => [v.id, v.name])));
       setTeams(tm);
+      if (token) fetchMyRaces(token).then(setMyRaces).catch(() => setMyRaces([]));
+      if (token) fetchMyRecord(token).then(setMyRecord).catch(() => setMyRecord(null));
+      fetchSports().then(setAllSports).catch(() => setAllSports([]));
       setCircles(cs.filter((c) => c.isMember));
       setMyVenues(mv);
       const rows = (us.data ?? []) as unknown as { level: Level | null; sports: { name: string } | { name: string }[] | null }[];
@@ -77,7 +92,7 @@ export default function ProfilePage() {
       );
       setLoading(false);
     })();
-  }, [user]);
+  }, [user, token, version]);
 
   const record = useMemo(() => {
     const played = past.filter((l) => l.isParticipant && l.match.status === 'finished');
@@ -136,6 +151,10 @@ export default function ProfilePage() {
               ))}
             </div>
           ) : null}
+          {myRecord ? (
+            <RecordCard data={myRecord} />
+          ) : (
+          <>
           <div className="grid grid-cols-4 gap-2">
             <StatTile value={loading ? '–' : record.played} label="Played" />
             <StatTile value={loading ? '–' : record.hosted} label="Hosted" />
@@ -159,10 +178,16 @@ export default function ProfilePage() {
               ))}
             </div>
           </div>
+          </>
+          )}
         </div>
       </section>
 
       <div className="flex flex-col gap-6 px-4">
+        <FreeTonightCard sports={allSports} />
+        {/* Golf: shown once there is golf in their life here (or golf among their sports, to start logging rounds). */}
+        <GolfRecord always={sports.some((sp) => sp.name.toLowerCase() === 'golf')} />
+
         <Section title="Schedule" count={upcoming.length + bookings.length} action={<SectionLink to="/explore">Find games</SectionLink>}>
           <span id="schedule" className="sr-only" />
           {loading ? (
@@ -183,10 +208,17 @@ export default function ProfilePage() {
               {bookings.map((b) => (
                 <ListRow
                   key={b.id}
-                  to={`/venues/${b.venue_id}`}
-                  leading={b.requested_starts_at ? <DateBlock iso={b.requested_starts_at} /> : <Building size={20} />}
-                  title={venueNames.get(b.venue_id) ?? 'Court booking'}
-                  sub={b.status === 'confirmed' ? 'Booking confirmed' : 'Booking requested'}
+                  to={`/venues/${b.venueId}`}
+                  leading={<DateBlock iso={b.startsAt} />}
+                  title={`${b.venueName} · ${b.spaceName}`}
+                  sub={[
+                    `${timeLabel(b.startsAt)}`,
+                    b.status === 'confirmed' ? (b.checkoutUrl ? 'Accepted, payment due' : 'Booked') : 'Waiting for the venue',
+                    b.code ? `code ${b.code}` : null,
+                    b.groupId ? 'weekly' : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
                 />
               ))}
             </Card>
@@ -212,6 +244,8 @@ export default function ProfilePage() {
             </Card>
           </Section>
         ) : null}
+
+        {myRaces.length > 0 ? <RacesSection races={myRaces} /> : null}
 
         <Section title="Teams" count={teams.length} action={<SectionLink to="/teams">Manage</SectionLink>}>
           {teams.length === 0 ? (
@@ -277,15 +311,21 @@ export default function ProfilePage() {
               {myVenues.map((v) => (
                 <ListRow
                   key={v.id}
-                  to={`/venues/${v.id}`}
+                  to={`/venues/${v.id}/manage`}
                   leading={
                     <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2">
                       <Building size={20} />
                     </span>
                   }
                   title={v.name}
-                  sub={v.area ?? ''}
-                  trailing={v.status !== 'approved' ? <Badge tone={v.status === 'pending' ? 'hl' : 'live'}>{v.status === 'pending' ? 'In review' : 'Not approved'}</Badge> : undefined}
+                  sub={[v.area, v.role === 'manager' ? 'Manager' : null].filter(Boolean).join(' · ')}
+                  trailing={
+                    v.waiting > 0 ? (
+                      <Badge tone="live">{v.waiting} waiting</Badge>
+                    ) : v.status !== 'approved' ? (
+                      <Badge tone={v.status === 'pending' ? 'hl' : 'live'}>{v.status === 'pending' ? 'In review' : 'Not approved'}</Badge>
+                    ) : undefined
+                  }
                 />
               ))}
             </Card>
@@ -302,5 +342,52 @@ function DateBlock({ iso }: { iso: string }) {
       <span className="text-[10px] font-bold uppercase text-brand-text">{dayShort(iso)}</span>
       <span className="tnum text-[13px] font-extrabold">{timeLabel(iso)}</span>
     </span>
+  );
+}
+
+// Races entered and run, newest first, with personal bests per distance (from organised races only: no self-logging).
+function RacesSection({ races }: { races: MyRace[] }) {
+  const finished = races.filter((r) => r.result?.status === 'finished' && r.result.seconds != null && r.distance);
+  const pbs = new Map<string, MyRace>();
+  for (const r of finished) {
+    const key = r.distance!.name;
+    const best = pbs.get(key);
+    if (!best || (r.result!.seconds ?? Infinity) < (best.result!.seconds ?? Infinity)) pbs.set(key, r);
+  }
+  return (
+    <Section title="Races" count={races.length}>
+      {pbs.size > 0 ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+          {[...pbs.entries()].map(([name, r]) => (
+            <StatTile key={name} value={formatDuration(r.result!.seconds)} label={`${name} best`} />
+          ))}
+        </div>
+      ) : null}
+      <Card className="overflow-hidden">
+        {races.slice(0, 8).map((r) => (
+          <ListRow
+            key={r.entryId}
+            to={r.race ? `/races/${r.race.id}` : undefined}
+            leading={r.distance ? <DateBlock iso={r.distance.startsAt} /> : undefined}
+            title={r.race?.name ?? 'Race'}
+            sub={[
+              r.distance?.name,
+              r.runner,
+              r.result?.status === 'finished'
+                ? `${formatDuration(r.result.seconds)}${r.result.overall ? `, #${r.result.overall} overall` : ''}${r.distance ? `, ${pace(r.result.seconds, r.distance.km)}` : ''}`
+                : r.result
+                  ? r.result.status.toUpperCase()
+                  : r.status === 'pending_payment'
+                    ? 'Waiting for payment'
+                    : r.bib
+                      ? `Bib ${r.bib}`
+                      : null,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          />
+        ))}
+      </Card>
+    </Section>
   );
 }

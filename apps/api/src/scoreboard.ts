@@ -1,3 +1,4 @@
+import { onGameFinished } from './records.js';
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -153,6 +154,7 @@ function toRecord(row: EventRow): ScoreboardEventRecord {
     ...(p['inId'] ? { inId: String(p['inId']) } : {}),
     ...(p['outId'] ? { outId: String(p['outId']) } : {}),
     ...(p['card'] ? { card: p['card'] as 'yellow' | 'red' } : {}),
+    ...(p['foul'] ? { foul: p['foul'] as 'personal' | 'technical' | 'unsportsmanlike' } : {}),
     ...(typeof p['points'] === 'number' ? { points: p['points'] } : {}),
     ...(p['ownGoal'] ? { ownGoal: true } : {}),
     ...(p['note'] ? { note: String(p['note']) } : {}),
@@ -664,7 +666,7 @@ export interface AddEventsResult {
 
 function payloadOf(e: ScoreboardEventInput): Record<string, unknown> {
   const p: Record<string, unknown> = {};
-  for (const k of ['side', 'playerId', 'assistId', 'inId', 'outId', 'card', 'points', 'ownGoal', 'note'] as const) {
+  for (const k of ['side', 'playerId', 'assistId', 'inId', 'outId', 'card', 'foul', 'points', 'ownGoal', 'note'] as const) {
     if (e[k] !== undefined) p[k] = e[k];
   }
   return p;
@@ -831,7 +833,8 @@ export async function finishScoreboard(
     }
     await recordFixtureResult(service, board.fixture_id, score.home, score.away, userId);
   } else if (board.match_id) {
-    const { error } = await service.from('matches').update({ home_score: score.home, away_score: score.away }).eq('id', board.match_id);
+    // The board ended, so the game is over: close it out so it counts in records and ratings.
+    const { error } = await service.from('matches').update({ home_score: score.home, away_score: score.away, status: 'finished' }).eq('id', board.match_id);
     if (error) throw new ActionError(500, 'Could not save the score on the game.');
     const recipients = players.map((p) => p.user_id).filter((id): id is string => !!id && id !== userId);
     await notifyUsers(recipients, 'game_result', {
@@ -848,6 +851,8 @@ export async function finishScoreboard(
     .update({ result_posted: true, home_score: score.home, away_score: score.away, mvp_player_id: opts.mvpPlayerId ?? null })
     .eq('id', board.id);
   if (error) throw new ActionError(500, 'Could not save the result.');
+  // Goals, assists, cards and the best player now count in everyone's record (and the rating, for team games).
+  await onGameFinished(service, board.match_id ? 'match' : 'fixture', (board.match_id ?? board.fixture_id)!);
   const fresh = await loadBoard(service, { id: board.id });
   await broadcast(service, board.share_code, { board: await publicBoard(service, fresh), add: [], voided: [] });
   return { homeScore: score.home, awayScore: score.away };

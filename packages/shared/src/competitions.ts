@@ -18,10 +18,16 @@ export const FORMAT_HELP: Record<CompetitionFormat, string> = {
   groups_knockout: 'Teams play in small groups first; the top teams go into a knockout.',
 };
 
-export const COMPETITION_CATEGORIES = ['community', 'charity', 'corporate', 'school', 'social'] as const;
+/** Label for any competition format, including 'race' (a race event has no team format). */
+export function formatLabel(format: string): string {
+  return format === 'race' ? 'Race' : (FORMAT_LABELS[format as CompetitionFormat] ?? format);
+}
+
+export const COMPETITION_CATEGORIES = ['community', 'competitive', 'charity', 'corporate', 'school', 'social'] as const;
 export type CompetitionCategory = (typeof COMPETITION_CATEGORIES)[number];
 export const CATEGORY_LABELS: Record<CompetitionCategory, string> = {
   community: 'Community',
+  competitive: 'Competitive',
   charity: 'Charity',
   corporate: 'Corporate',
   school: 'School',
@@ -318,7 +324,7 @@ export const registrationQuestionSchema = z.object({
 });
 export type RegistrationQuestion = z.infer<typeof registrationQuestionSchema>;
 
-const competitionDetails = {
+export const competitionDetails = {
   description: optText(4000),
   bannerUrl: url.nullable().optional(),
   location: optText(160),

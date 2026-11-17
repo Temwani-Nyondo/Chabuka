@@ -97,7 +97,7 @@ export async function fetchCompetitionView(id: string, userId: string): Promise<
     db.from('announcements').select('*').eq('competition_id', id).order('created_at', { ascending: false }),
     db.from('follows').select('user_id').eq('competition_id', id).eq('user_id', userId).maybeSingle(),
     db.from('sports').select('id,name,formats').eq('id', competition.sport_id),
-    db.from('profiles').select('name').eq('id', competition.organiser_id).maybeSingle(),
+    db.from('public_profiles').select('name').eq('id', competition.organiser_id).maybeSingle(),
     fetchMyTeams(userId).catch(() => []),
     competition.venue_id ? db.from('venues').select('name').eq('id', competition.venue_id).maybeSingle() : Promise.resolve({ data: null }),
   ]);

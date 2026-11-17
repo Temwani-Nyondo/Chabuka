@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { useDataChanged } from '../lib/dataChanged';
 import { Link } from 'react-router-dom';
 import { CalendarDays, Radio, Shield, Ticket } from 'lucide-react';
 import GameCard, { dayLabel, dayShort, timeLabel } from '../components/GameCard';
@@ -12,6 +13,9 @@ import { fetchForYouProfile, pickForYou } from '../lib/forYou';
 import { peekPendingInvite } from '../lib/pendingInvite';
 import { useMatchActions } from '../lib/useMatchActions';
 import { fetchCircleUpdates, fetchNeedsYou, fetchTeamSummaries } from '../lib/today';
+import { fetchFollowing } from '../lib/social';
+import type { FeedItem } from '../lib/social';
+import { FeedCard } from './CirclesPage';
 import type { CircleUpdate, NeedsItem, TeamSummary } from '../lib/today';
 
 function greeting(): string {
@@ -22,7 +26,8 @@ function greeting(): string {
 const longDate = new Intl.DateTimeFormat(undefined, { weekday: 'long', day: 'numeric', month: 'long' });
 
 export default function HomePage() {
-  const { user, profile } = useAuth();
+  const { user, profile, session } = useAuth();
+  const token = session?.access_token;
   const firstName = profile?.name ? profile.name.split(' ')[0] : null;
   const [upcoming, setUpcoming] = useState<MatchListing[]>([]);
   const [nearby, setNearby] = useState<MatchListing[]>([]);
@@ -66,11 +71,12 @@ export default function HomePage() {
       setCirclesLoading(false);
     });
     const needsDone = Promise.all([pastP, teamsP])
-      .then(([past, rows]) => fetchNeedsYou(user.id, past, rows))
+      .then(([past, rows]) => fetchNeedsYou(user.id, past, rows, token))
       .then(setNeeds)
       .catch(() => undefined);
     await Promise.all([upcomingDone, nearbyDone, teamsDone, circlesDone, needsDone]);
-  }, [user, profile?.area]);
+  }, [user, profile?.area, token]);
+  useDataChanged(useCallback(() => { void reload().catch(() => undefined); }, [reload]));
 
   useEffect(() => {
     reload()
@@ -195,6 +201,8 @@ export default function HomePage() {
         </Section>
       )}
 
+      {token ? <TodayFollowing token={token} /> : null}
+
       {circlesLoading ? null : (
         <Section title="From your circles" action={<SectionLink to="/circles">{inCircles > 0 ? 'Circles' : 'Find circles'}</SectionLink>}>
           {circleUpdates.length === 0 ? (
@@ -254,4 +262,24 @@ export default function HomePage() {
 function resultWord(us: number | null, them: number | null): string {
   if (us == null || them == null) return '';
   return us > them ? 'Won' : us < them ? 'Lost' : 'Drew';
+}
+
+// The latest three things from the creators, teams and events you follow. Hidden until you follow something.
+function TodayFollowing({ token }: { token: string }) {
+  const [items, setItems] = useState<FeedItem[] | null>(null);
+  useEffect(() => {
+    fetchFollowing(token)
+      .then((f) => setItems(f.items.slice(0, 3)))
+      .catch(() => setItems([]));
+  }, [token]);
+  if (!items || items.length === 0) return null;
+  return (
+    <Section title="Following" action={<SectionLink to="/circles?tab=following">All</SectionLink>}>
+      <div className="flex flex-col gap-3">
+        {items.map((it, i) => (
+          <FeedCard key={i} item={it} />
+        ))}
+      </div>
+    </Section>
+  );
 }

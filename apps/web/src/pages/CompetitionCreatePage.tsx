@@ -21,6 +21,7 @@ import type { EventDetails, RegistrationSettings } from '../components/Competiti
 
 const CATEGORIES: { value: CompetitionCategory; icon: typeof Users; blurb: string }[] = [
   { value: 'community', icon: Users, blurb: 'Neighbourhood leagues and open tournaments' },
+  { value: 'competitive', icon: Trophy, blurb: 'Serious leagues and cups for experienced teams' },
   { value: 'charity', icon: HandHeart, blurb: 'Raise money or awareness for a cause' },
   { value: 'corporate', icon: Building, blurb: 'Company and inter-office leagues and fun days' },
   { value: 'school', icon: GraduationCap, blurb: 'Schools, colleges and age groups' },

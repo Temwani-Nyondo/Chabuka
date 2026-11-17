@@ -37,7 +37,7 @@ export default function LinkedVenueOwnerPanel({ venueId }: { venueId: string }) 
       setRows(list);
       const ids = [...new Set(list.map((r) => r.user_id))];
       if (ids.length > 0) {
-        const { data: profiles } = await client.from('profiles').select('id,name').in('id', ids);
+        const { data: profiles } = await client.from('public_profiles').select('id,name').in('id', ids);
         setNames(Object.fromEntries(((profiles ?? []) as { id: string; name: string | null }[]).map((p) => [p.id, p.name ?? 'Player'])));
       }
     })();

@@ -64,6 +64,7 @@ function world() {
         case 'match_participants': return new FakeQuery(t.participants, (r) => `${String(r['match_id'])}:${String(r['user_id'])}`);
         case 'challenges': return new FakeQuery(t.challenges, (r) => String(r['id']));
         case 'follows': return new FakeQuery(t.follows, (r) => `${String(r['user_id'])}:${String(r['competition_id'])}`);
+        case 'user_follows': return new FakeQuery(new Map<string, Row>(), (r) => `${String(r['user_id'])}:${String(r['subject_type'])}:${String(r['subject_id'])}`);
         case 'competition_entries': return new FakeQuery(t.entries, (r) => `${String(r['competition_id'])}:${String(r['team_id'])}`);
         default: throw new Error(`unexpected table ${table}`);
       }

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { reduceScoreboard, validateScoreboardEvent } from '@chabuka/shared';
+import { reduceScoreboard, rulesFor, validateScoreboardEvent } from '@chabuka/shared';
 import type { PeriodsConfig, PeriodsState, RosterPlayer, ScoreSide, ScoreboardEventInput, ScoreboardEventRecord } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { Lineups, ScoreFace, Timeline, playerLabel } from '../components/scoreboard/ScoreFace';
@@ -30,6 +30,7 @@ type Picker =
   | { kind: 'goal'; side: ScoreSide; points: number; step: 'points' | 'scorer' | 'assist' | 'own'; playerId?: string }
   | { kind: 'sub'; side: ScoreSide; outId?: string }
   | { kind: 'card'; side: ScoreSide; playerId?: string }
+  | { kind: 'foul'; side: ScoreSide; playerId?: string }
   | null;
 
 const queueKey = (id: string) => `chabuka:sb-queue:${id}`;
@@ -84,7 +85,7 @@ export default function ScoreboardControlPage() {
     try {
       const sentAt = Date.now();
       const data = await fetchControlBoard(token, id);
-      setOffset(data.board.serverNow - (sentAt + Date.now()) / 2);
+      setOffset(Math.round(data.board.serverNow - (sentAt + Date.now()) / 2));
       setBundle(data);
       setLoadError(null);
     } catch (err) {
@@ -190,7 +191,7 @@ export default function ScoreboardControlPage() {
   const isOfficial = bundle.isOfficial;
 
   const emit = (partial: Omit<ScoreboardEventInput, 'clientId' | 'at'>): boolean => {
-    const event: ScoreboardEventInput = { ...partial, clientId: crypto.randomUUID(), at: Date.now() + offset };
+    const event: ScoreboardEventInput = { ...partial, clientId: crypto.randomUUID(), at: Math.round(Date.now() + offset) };
     const problem = validateScoreboardEvent(cfg, roster, state, event);
     if (problem) {
       setNotice(problem);
@@ -230,10 +231,18 @@ export default function ScoreboardControlPage() {
 
   const periodsState = state.kind === 'periods' ? (state as PeriodsState) : null;
   const periodsCfg = cfg.kind === 'periods' ? (cfg as PeriodsConfig) : null;
+  // What this sport's officiating has: cards and own goals (football), fouls (basketball), neither (netball).
+  const rules = rulesFor(cfg.sport);
   const sideName = (s: ScoreSide) => (s === 'home' ? board.homeName : board.awayName);
   const onCourt = (side: ScoreSide) => (periodsState ? periodsState.onCourt[side] : []).map((pid) => byId.get(pid)).filter((p): p is NonNullable<typeof p> => !!p);
   const bench = (side: ScoreSide) =>
-    bundle.roster.filter((p) => p.side === side && !(periodsState?.onCourt[side] ?? []).includes(p.id) && !(periodsState?.sentOff ?? []).includes(p.id));
+    bundle.roster.filter(
+      (p) =>
+        p.side === side &&
+        !(periodsState?.onCourt[side] ?? []).includes(p.id) &&
+        !(periodsState?.sentOff ?? []).includes(p.id) &&
+        !(periodsState?.fouledOut ?? []).includes(p.id),
+    );
 
   const pickList = (players: { id: string; side: ScoreSide; name: string; number: number | null }[], onPick: (pid: string) => void, extra?: { label: string; onClick: () => void }) => (
     <div className="sb-pick">
@@ -278,10 +287,12 @@ export default function ScoreboardControlPage() {
             <strong>Who scored for {sideName(side)}?</strong>
             {pickList(
               onCourt(side),
-              (pid) => setPicker({ ...picker, playerId: pid, step: 'assist' }),
+              (pid) => (rules.assists ? setPicker({ ...picker, playerId: pid, step: 'assist' }) : void emit({ type: 'goal', side, playerId: pid, points: picker.points })),
               { label: 'Unknown scorer', onClick: () => void emit({ type: 'goal', side, points: picker.points }) },
             )}
-            <button className="btn btn-ghost" type="button" onClick={() => setPicker({ ...picker, step: 'own' })}>Own goal</button>
+            {rules.ownGoal ? (
+              <button className="btn btn-ghost" type="button" onClick={() => setPicker({ ...picker, step: 'own' })}>Own goal</button>
+            ) : null}
           </div>
         );
       }
@@ -319,6 +330,32 @@ export default function ScoreboardControlPage() {
         <div className="card sb-panel">
           <strong>Who comes on for {playerLabel(byId.get(picker.outId))}?</strong>
           {pickList(bench(side), (pid) => void emit({ type: 'sub', side, outId: picker.outId, inId: pid }))}
+        </div>
+      );
+    }
+    if (picker.kind === 'foul') {
+      const { side } = picker;
+      if (!picker.playerId) {
+        return (
+          <div className="card sb-panel">
+            <strong>{sideName(side)}: foul by whom?</strong>
+            {pickList(onCourt(side), (pid) => setPicker({ ...picker, playerId: pid }), {
+              label: 'Bench or coach (team foul)',
+              onClick: () => void emit({ type: 'foul', side, foul: 'technical' }),
+            })}
+          </div>
+        );
+      }
+      const count = periodsState?.stats[picker.playerId]?.fouls ?? 0;
+      return (
+        <div className="card sb-panel">
+          <strong>Foul on {playerLabel(byId.get(picker.playerId))} ({count} so far)</strong>
+          <div className="sb-pick">
+            <button className="btn btn-primary sb-pick-btn" type="button" onClick={() => void emit({ type: 'foul', side, playerId: picker.playerId, foul: 'personal' })}>Personal</button>
+            <button className="btn sb-pick-btn" type="button" onClick={() => void emit({ type: 'foul', side, playerId: picker.playerId, foul: 'technical' })}>Technical</button>
+            <button className="btn sb-pick-btn" type="button" onClick={() => void emit({ type: 'foul', side, playerId: picker.playerId, foul: 'unsportsmanlike' })}>Unsportsmanlike</button>
+            <button className="btn btn-ghost sb-pick-btn" type="button" onClick={() => setPicker(null)}>Cancel</button>
+          </div>
         </div>
       );
     }
@@ -375,7 +412,7 @@ export default function ScoreboardControlPage() {
     }
     switch (state.status) {
       case 'setup':
-        return <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'period_start' })}>Kick off</button>;
+        return <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'period_start' })}>{rules.startWord}</button>;
       case 'break':
         return <button className="btn btn-primary sb-big" type="button" onClick={() => void emit({ type: 'period_start' })}>Start {periodsCfg?.periodNames[state.period] ?? 'next period'}</button>;
       case 'ended':
@@ -383,11 +420,23 @@ export default function ScoreboardControlPage() {
       default:
         return (
           <>
-            {sideButtons('Goal', startGoal, true)}
+            {sideButtons(rules.scoreWord, startGoal, true)}
             <div className="sb-two">
               {sideButtons('Sub', (side) => setPicker({ kind: 'sub', side }))}
             </div>
-            {sideButtons('Card', (side) => setPicker({ kind: 'card', side }))}
+            {rules.cards ? sideButtons('Card', (side) => setPicker({ kind: 'card', side })) : null}
+            {rules.fouls ? sideButtons('Foul', (side) => setPicker({ kind: 'foul', side })) : null}
+            {rules.fouls && periodsState ? (
+              <p className="hint">
+                Team fouls this {periodsCfg?.periods === 2 ? 'half' : 'quarter'}:{' '}
+                {(['home', 'away'] as const)
+                  .map((sd) => {
+                    const n = periodsState.teamFouls[Math.max(0, periodsState.period - 1)]?.[sd] ?? 0;
+                    return `${sideName(sd)} ${n}${n >= rules.fouls!.teamBonusAt ? ' (bonus)' : ''}`;
+                  })
+                  .join(' · ')}
+              </p>
+            ) : null}
             {periodsCfg && periodsCfg.timeoutsPerSide > 0 ? sideButtons('Timeout', (side) => void emit({ type: 'timeout', side })) : null}
             <div className="sb-two">
               {state.status === 'live' ? (
@@ -656,7 +705,7 @@ function SetupPanel({ bundle, token, userId, busy, run }: SetupProps) {
     }
     const t = window.setTimeout(() => {
       void supabase!
-        .from('profiles')
+        .from('public_profiles')
         .select('id,name')
         .ilike('name', `%${q}%`)
         .limit(6)

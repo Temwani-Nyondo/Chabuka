@@ -15,6 +15,8 @@ import {
   Shield,
   Swords,
   Trophy,
+  Flag,
+  Footprints,
   Users,
   Volleyball,
 } from 'lucide-react';
@@ -87,7 +89,7 @@ export default function AppShell() {
   }, [gafferOpen]);
 
   // Detail screens carry their own bottom action bar.
-  const detail = /^\/(games|lineup|rules)\/[^/]+/.test(pathname) || /^\/competitions\/(new|[^/]+\/register)$/.test(pathname);
+  const detail = /^\/(games|lineup|rules)\/[^/]+/.test(pathname) || /^\/competitions\/(new|[^/]+\/register)$/.test(pathname) || /^\/races\/(new|[^/]+\/(enter|line))$/.test(pathname);
 
   const openCreate = () => {
     setMode('menu');
@@ -216,6 +218,8 @@ export default function AppShell() {
             <CreateGroup label="Organise">
               <CreateItem icon={<Shield size={20} />} title="Start a team" sub="Squad, captains and fixtures" onClick={() => setMode('team')} />
               <CreateItem icon={<Trophy size={20} />} title="Run a league or tournament" sub="Entries, fixtures and a live table" onClick={() => go('/competitions/new')} />
+              <CreateItem icon={<Footprints size={20} />} title="Organise a race" sub="Marathons, fun runs, a mapped course and results" onClick={() => go('/races/new')} />
+              <CreateItem icon={<Flag size={20} />} title="Organise a golf day" sub="Flights, tee times, live Stableford or stroke play scores" onClick={() => go('/golf/new')} />
               <CreateItem icon={<Users size={20} />} title="Start a circle" sub="A channel for a sport and a place" onClick={() => go('/circles?create=1')} />
             </CreateGroup>
             <CreateGroup label="Venue">

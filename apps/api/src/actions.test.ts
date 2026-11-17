@@ -74,6 +74,9 @@ function fakeDb() {
   const blocks = new Map<string, Row>();
   const ticketing = new Map<string, Row>();
   const claims = new Map<string, Row>();
+  const circleAdmins = new Map<string, Row>();
+  const circlePosts = new Map<string, Row>();
+  const userFollows = new Map<string, Row>();
   const client = {
     from(table: string) {
       if (table === 'matches') return new FakeQuery(matches, (r) => String(r['id']));
@@ -117,10 +120,16 @@ function fakeDb() {
       if (table === 'blocks') {
         return new FakeQuery(blocks, (r) => `${String(r['blocker_id'])}:${String(r['blocked_user_id'])}`);
       }
+      // public_profiles is a view over profiles (name and photo only).
+      if (table === 'public_profiles') return new FakeQuery(profiles, (r) => String(r['id']));
+      if (table === 'circle_admins') return new FakeQuery(circleAdmins, (r) => `${String(r['circle_id'])}:${String(r['user_id'])}`);
+      if (table === 'circle_posts') return new FakeQuery(circlePosts, (r) => String(r['id']));
+      if (table === 'user_follows') return new FakeQuery(userFollows, (r) => `${String(r['user_id'])}:${String(r['subject_type'])}:${String(r['subject_id'])}`);
+      if (table === 'notifications') return new FakeQuery(new Map<string, Row>(), (r) => String(r['id']));
       throw new Error(`unexpected table ${table}`);
     },
   };
-  return { client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, userSports, invites, reports, blocks, entries, circles, circleMembers, ticketing, claims };
+  return { circleAdmins, circlePosts, userFollows, client: client as never, matches, participants, teams, members, challenges, venues, slots, bookings, tickets, polls, pollResponses, profiles, availability, places, gameTypes, sports, userSports, invites, reports, blocks, entries, circles, circleMembers, ticketing, claims };
 }
 
 const ORGANISER = '11111111-1111-4111-8111-111111111111';
