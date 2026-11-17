@@ -1467,14 +1467,12 @@ button.sheet-item {
 .brand-mark {
   width: 30px;
   height: 30px;
-  border-radius: 8px;
-  object-fit: cover;
+  object-fit: contain;
 }
 
 .brand-mark-lg {
   width: 56px;
   height: 56px;
-  border-radius: 14px;
 }
 
 /* Wizard: one thing per screen, step dots, back/next. */

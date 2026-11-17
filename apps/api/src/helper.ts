@@ -40,6 +40,10 @@ import {
   enterRaceSchema,
   followSchema,
   freeTonightSchema,
+  shareLinkSchema,
+  inviteToMatchSchema,
+  enterGolfDaySchema,
+  logRoundSchema,
 } from '@chabuka/shared';
 import { chatOnce, chatStream, type ModelMessage, type ModelResult } from './model.js';
 import { ActionError, runAction, toHttpError } from './actions.js';
@@ -195,8 +199,37 @@ async function readVenueSpacesTool(_db: SupabaseClient, _userId: string, args: R
   const venueId = strArg(args, 'venueId');
   if (!venueId) throw new Error('venueId is required.');
   const { createServiceClient } = await import('./supabase.js');
-  const { getVenueSpaces } = await import('./spaces.js');
-  return getVenueSpaces(createServiceClient(), venueId);
+  // Both kinds of venue: linked to WaitApp (paid, on WaitApp) and Chabuka-only (requests, tee sheets).
+  const { listSpaces } = await import('./venueBooking.js');
+  return listSpaces(createServiceClient(), venueId);
+}
+
+// Tournaments, leagues, races and golf days open for entry (the same public list WaitApp Discover shows).
+async function readFindEventsTool(_db: SupabaseClient, _userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const sport = strArg(args, 'sport');
+  const area = strArg(args, 'area')?.toLowerCase();
+  const daysRaw = Number(args['days']);
+  const days = Number.isFinite(daysRaw) && daysRaw > 0 ? Math.min(30, Math.round(daysRaw)) : 30;
+  const { readSportFeed } = await import('./sportFeed.js');
+  const feed = await readSportFeed(await svcClient(), { sport, days });
+  const typeOf = (url: string) => (url.includes('/golf/') ? 'golf_day' : url.includes('/races/') ? 'race' : 'tournament_or_league');
+  const events = feed.items
+    .filter((i) => i.kind === 'event' || i.kind === 'race')
+    .filter((i) => !area || [i.area, i.placeName].some((p) => (p ?? '').toLowerCase().includes(area)))
+    .slice(0, 15)
+    .map((i) => ({
+      competitionId: i.id,
+      type: typeOf(i.chabukaUrl),
+      sport: i.sport,
+      title: i.title,
+      area: i.area,
+      place: i.placeName,
+      startsAt: i.startsAt,
+      price: i.priceLabel,
+      spotsLeft: i.spotsLeft,
+      link: i.chabukaUrl,
+    }));
+  return { events, note: events.length ? undefined : 'Nothing open for entry in that window.' };
 }
 
 async function readSpaceAvailabilityTool(_db: SupabaseClient, _userId: string, args: Record<string, unknown>): Promise<unknown> {
@@ -205,8 +238,8 @@ async function readSpaceAvailabilityTool(_db: SupabaseClient, _userId: string, a
   const date = strArg(args, 'date');
   if (!venueId || !spaceId || !date) throw new Error('venueId, spaceId and date (YYYY-MM-DD) are required.');
   const { createServiceClient } = await import('./supabase.js');
-  const { getVenueAvailability } = await import('./spaces.js');
-  return getVenueAvailability(createServiceClient(), venueId, spaceId, date);
+  const { getAvailability } = await import('./venueBooking.js');
+  return getAvailability(createServiceClient(), venueId, spaceId, date);
 }
 
 async function readVenueSlots(
@@ -480,6 +513,13 @@ async function readGamesForYouTool(_db: SupabaseClient, userId: string): Promise
   return gamesForYou(await svcClient(), userId);
 }
 
+async function readGolfCoursesTool(_db: SupabaseClient, userId: string, args: Record<string, unknown>): Promise<unknown> {
+  const golf = await import('./golf.js');
+  const venueId = strArg(args, 'venueId');
+  const courses = venueId ? await golf.venueCourses(await svcClient(), venueId) : await golf.pickableCourses(await svcClient(), userId);
+  return { courses };
+}
+
 async function readMyGolfTool(_db: SupabaseClient, userId: string): Promise<unknown> {
   const { myGolf } = await import('./golf.js');
   return myGolf(await svcClient(), userId);
@@ -542,13 +582,13 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn; parameters?
   },
   {
     name: 'venue_spaces',
-    description: 'For a venue with bookedThroughWaitApp true: its real bookable spaces (pitches, courts, halls) with prices and whether each is instant or request-to-book. Required: venueId.',
+    description: "A venue's bookable spaces (pitches, courts, halls, golf tee sheets) with prices. linked true means it books and pays on WaitApp; a space with booking_kind 'tee' is a golf tee sheet (price per player). Required: venueId.",
     read: readVenueSpacesTool,
     parameters: { type: 'object', properties: { venueId: str('Venue UUID from search_venues.') }, required: ['venueId'] },
   },
   {
     name: 'space_availability',
-    description: 'The real free start times of one of those spaces on one day (the longest booking that fits from each). Required: venueId, spaceId (from venue_spaces), date (YYYY-MM-DD).',
+    description: 'The real free start times of one of those spaces on one day. For a tee sheet each slot is a tee time and unitsFree is golfer spots left. Required: venueId, spaceId (from venue_spaces), date (YYYY-MM-DD).',
     read: readSpaceAvailabilityTool,
     parameters: {
       type: 'object',
@@ -638,6 +678,21 @@ const READ_TOOLS: { name: string; description: string; read: ReadFn; parameters?
     read: readMyGolfTool,
   },
   {
+    name: 'golf_courses',
+    description: 'Golf course cards (holes, par) with their ids, for log_round. Optional venueId for one venue; without it, the courses the user can pick.',
+    read: readGolfCoursesTool,
+    parameters: { type: 'object', properties: { venueId: str('Venue UUID, optional.') } },
+  },
+  {
+    name: 'find_events',
+    description: 'Tournaments, leagues, races and golf days open for entry in the next weeks. Optional: sport name, area, days (1-30). Use enter_race or enter_golf_day with competitionId to enter; for a tournament or league, share the link (teams register there).',
+    read: readFindEventsTool,
+    parameters: {
+      type: 'object',
+      properties: { sport: str('Sport name, e.g. football or golf.'), area: str('Area or place name.'), days: { type: 'integer', description: 'How many days ahead, 1-30.' } },
+    },
+  },
+  {
     name: 'get_following',
     description: "News from what the user follows: creators' posts, followed teams' fixtures and results, event news and race results. No arguments.",
     read: readFollowingTool,
@@ -709,7 +764,10 @@ const GENERAL_PROMPT = [
   'A "yes", "sure", "go ahead" or "do it" answering your own concrete proposal',
   '(named venue plus day and time) IS that confirmation: call request_booking at',
   'once instead of asking again.',
-  'Venues with bookedThroughWaitApp true take real bookings and payment on WaitApp: read their spaces with venue_spaces and free times with space_availability, never use request_booking or venue_slots for them, and never invent a time. You cannot book or take payment: tell the player the space, day and time that suits them and that they book and pay on that venue\'s page in Chabuka (tap the venue, then Book a space); if the game is theirs, they can book it from the game card.',
+  'Bookable spaces: read them with venue_spaces and free times with space_availability, never use request_booking or venue_slots for them, and never invent a time. When venue_spaces says linked true, the venue books and pays on WaitApp: you cannot take payment, so tell the player the space, day and time that suits them and that they book and pay on that venue\'s page in Chabuka (tap the venue, then Book a space). When linked is false, you may send the booking with request_space after the player says yes; the owner confirms it.',
+  'Golf: a tee sheet is a space with booking_kind tee. To book a tee time, read space_availability for the day, then request_space with venueId, spaceId, date, startTime, hours 1 and players (1-4) after a yes; tee times are paid at the course. Golf days are entered with enter_golf_day (competitionId, playerName, handicapIndex, phone) after a yes; a paid entry returns a checkoutUrl the player opens to pay. log_round saves a round they played (courseId from the venue\'s golf courses, playedOn, a total or hole scores) after a yes. Never guess a handicap or phone number: ask.',
+  'Finding events: find_events lists tournaments, leagues, races and golf days open for entry. Races and golf days can be entered here; for a tournament or league, give the link.',
+  'Inviting: share_link gives a link to one of their games (matchId) or, with no matchId, their personal link that brings friends onto Chabuka; say the url in full so they can send it. invite_to_match tells one of their circles or teams about a game they are in (exactly one circleId or teamId, after a yes; each circle or team once per game). Never claim you messaged anyone outside Chabuka: they share the link themselves.',
   'A venue with no listed slots is NOT unbookable: venue_slots rows are optional. When a listed',
   'venue hosts the sport but shows no slots, offer a direct booking request for the user\'s time',
   'via request_booking with requestedStartsAt and no slot — the owner confirms. Only say "fully',
@@ -857,6 +915,9 @@ const CONFIRM_REQUIRED: ReadonlySet<string> = new Set([
   'follow',
   'unfollow',
   'set_free_tonight',
+  'invite_to_match',
+  'enter_golf_day',
+  'log_round',
 ]);
 
 const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
@@ -900,6 +961,10 @@ const ACTION_INPUT_SCHEMAS: Partial<Record<ActionName, z.ZodType>> = {
   follow: followSchema,
   unfollow: followSchema,
   set_free_tonight: freeTonightSchema,
+  share_link: shareLinkSchema,
+  invite_to_match: inviteToMatchSchema,
+  enter_golf_day: enterGolfDaySchema,
+  log_round: logRoundSchema,
 };
 
 // Hand-written shapes for the two actions the model uses most.

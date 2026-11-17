@@ -29,6 +29,18 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         body: text(p.title),
         href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
+    case 'game_invite':
+      return {
+        title: `${text(p.from) || 'A player'} invited ${text(p.via) || 'you'} to a game`,
+        body: text(p.title),
+        href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    case 'invite_joined':
+      return {
+        title: `${text(p.name) || 'A friend'} joined Chabuka from your link`,
+        body: 'Invite them to your next game.',
+        href: '/today',
+      };
     case 'player_joined':
       return {
         title: 'A player joined your match',

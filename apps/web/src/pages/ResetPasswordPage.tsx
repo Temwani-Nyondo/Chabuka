@@ -36,7 +36,7 @@ export default function ResetPasswordPage() {
 
   return (
     <div className="auth-page">
-      <img className="brand-mark brand-mark-lg" src="/brand/logo-mark.png" alt="Chabuka" width={56} height={56} />
+      <img className="brand-mark brand-mark-lg" src="/brand/logo-whistle-120.png" alt="Chabuka" width={56} height={56} />
       <h1>Choose a new password</h1>
       <div className="card">
         {loading ? (

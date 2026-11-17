@@ -63,7 +63,8 @@ describe('the public sport feed', () => {
     w.t.competition_entries!.set('e2', { competition_id: id(201), team_id: 't2', status: 'rejected' });
     const feed = await readSportFeed(w.client, {}, NOW);
     const race = feed.items.find((i) => i.kind === 'race')!;
-    expect(race).toMatchObject({ priceLabel: 'From K100', checkoutUrl: 'https://waitapp.test/checkout/event/e1/', startsAt: '2026-11-28T05:00:00Z', image: 'https://img.test/r.jpg' });
+    // Never a bare ticket link: a race is entered through the form (date of birth for the age rule).
+    expect(race).toMatchObject({ priceLabel: 'From K100', checkoutUrl: null, entry: 'race', startsAt: '2026-11-28T05:00:00Z', image: 'https://img.test/r.jpg' });
     expect(feed.items.find((i) => i.kind === 'event')).toMatchObject({ spotsLeft: 7, checkoutUrl: null });
   });
 
@@ -98,7 +99,7 @@ describe('the public sport feed', () => {
     w.t.venues!.set(id(310), { id: id(310), name: 'Lusaka Golf Club', area: 'Lusaka', lat: -15.4, lng: 28.3, sports: ['golf'], photos: [], price_note: null, status: 'approved' });
     w.t.venue_spaces!.set('tee', { id: 'tee', venue_id: id(310), hourly_price: null, currency: 'ZMW', active: true, booking_kind: 'tee', tee: { intervalMin: 10, playersPerSlot: 4, pricePerPlayer: 250 } });
     const feed = await readSportFeed(w.client, { sport: 'golf' }, NOW);
-    expect(feed.items.find((i) => i.title === 'Charity Golf Day')).toMatchObject({ kind: 'event', priceLabel: 'K500', spotsLeft: 71, checkoutUrl: 'https://waitapp.test/checkout/event/g1/' });
+    expect(feed.items.find((i) => i.title === 'Charity Golf Day')).toMatchObject({ kind: 'event', priceLabel: 'K500', spotsLeft: 71, checkoutUrl: null, entry: 'golf_day' });
     expect(feed.items.find((i) => i.title === 'Lusaka Golf Club')).toMatchObject({ kind: 'venue', priceLabel: 'K250 per player, pay at the course' });
     expect(feed.items.find((i) => i.title === 'Charity Golf Day')!.chabukaUrl).toMatch(/\/golf\//);
   });

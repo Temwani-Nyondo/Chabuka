@@ -3,6 +3,9 @@ import * as races from './races.js';
 import * as social from './social.js';
 import * as records from './records.js';
 import * as handshake from './venueHandshake.js';
+import * as invites from './invites.js';
+import * as golf from './golf.js';
+import * as golfDays from './golfDays.js';
 import {
   acceptChallengeSchema,
   addDisciplineSchema,
@@ -1518,15 +1521,17 @@ async function loadCircle(db: SupabaseClient, circleId: string): Promise<Circle>
 }
 
 export async function notifyUsers(
-  userIds: string[],
+  userIds: (string | null | undefined)[],
   type: string,
   payload: Record<string, unknown>,
 ): Promise<void> {
   // Best-effort: a failed notification must never fail the game action.
   // Written with the service client because recipients are other users —
   // the actor's own JWT cannot insert their rows under RLS.
-  if (userIds.length === 0) return;
-  const rows = userIds.map((user_id) => ({ user_id, type, payload }));
+  // Guest entries (made from WaitApp, no Chabuka account) have no user to tell.
+  const ids = userIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+  if (ids.length === 0) return;
+  const rows = ids.map((user_id) => ({ user_id, type, payload }));
   try {
     const { error } = await createServiceClient().from('notifications').insert(rows);
     if (error) console.error('notification failed', type, error.message);
@@ -2362,7 +2367,16 @@ export async function runAction(
     case 'revoke_invite_link':
       return revokeInviteLink(db, userId, inviteCodeSchema.parse(body).code);
     case 'claim_invite_link':
-      return claimInviteLink(db, userId, inviteCodeSchema.parse(body).code);
+      // Service client: the link row belongs to its creator under RLS, so the claimer's own client can't mark it used.
+      return invites.claimInvite(privilegedClient(db), userId, body);
+    case 'share_link':
+      return invites.shareLink(privilegedClient(db), userId, body);
+    case 'invite_to_match':
+      return invites.inviteToMatch(privilegedClient(db), userId, body);
+    case 'enter_golf_day':
+      return golfDays.enterGolfDay(privilegedClient(db), userId, body);
+    case 'log_round':
+      return golf.logRound(privilegedClient(db), userId, body);
     case 'report_user':
       return reportUser(db, userId, reportUserSchema.parse(body));
     case 'report_team':

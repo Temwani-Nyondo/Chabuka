@@ -3,6 +3,7 @@ import type {
   ActionResult,
   CreateInviteLinkInput,
   CreateMatchInput,
+  InvitePreview,
   OnboardingProgress,
   CreateTeamInput,
   PostChallengeInput,
@@ -316,11 +317,49 @@ export function createInviteLinkAction(
   return runAction('create_invite_link', input, accessToken);
 }
 
-export function claimInviteLinkAction(
-  code: string,
-  accessToken: string,
-): Promise<{ state: string; teamId: string | null }> {
+export interface ClaimInviteResult {
+  state: string;
+  teamId: string | null;
+  matchId?: string | null;
+  /** 'joined', 'already_joined', 'already_organiser' when a game link added (or found) them. */
+  joined?: string | null;
+  /** Why a game link couldn't add them (full, started, paid game...). */
+  joinError?: string | null;
+}
+
+export function claimInviteLinkAction(code: string, accessToken: string): Promise<ClaimInviteResult> {
   return runAction('claim_invite_link', { code }, accessToken);
+}
+
+export interface ShareLinkResult {
+  code: string;
+  url: string;
+  /** Ready-to-send message with the link in it. */
+  text: string;
+  matchId: string | null;
+  uses: number;
+}
+
+/** A reusable link to one game, or (no matchId) the player's own "join Chabuka" link. Same link every time. */
+export function shareLinkAction(matchId: string | null, accessToken: string): Promise<ShareLinkResult> {
+  return runAction('share_link', matchId ? { matchId } : {}, accessToken);
+}
+
+export function inviteToMatchAction(
+  input: { matchId: string; circleId?: string; teamId?: string },
+  accessToken: string,
+): Promise<{ state: string; audience: string; recipients: number; url: string }> {
+  return runAction('invite_to_match', input, accessToken);
+}
+
+/** What a share link shows before sign-in. Public: no token. */
+export async function fetchInvitePreview(code: string): Promise<InvitePreview> {
+  const res = await fetch(`${API_BASE}/api/public/invite/${encodeURIComponent(code)}`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(body.error ?? 'Could not open this invite.');
+  }
+  return (await res.json()) as InvitePreview;
 }
 
 export function revokeInviteLinkAction(code: string, accessToken: string): Promise<unknown> {

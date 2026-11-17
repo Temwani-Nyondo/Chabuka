@@ -34,6 +34,7 @@ import {
   refreshTicketing,
   removeLink,
   ticketingInputSchema,
+  verifyWebhookSignature,
 } from './waitapp.js';
 import { buildIcs, formatEventLocation, googleCalendarUrl, matchSchema } from '@chabuka/shared';
 import { loadServerEnv } from './env.js';
@@ -221,6 +222,29 @@ app.post('/api/webhooks/waitapp', express.raw({ type: '*/*', limit: '100kb' }), 
   }
 });
 
+// WaitApp -> Chabuka: a race or golf day entry made on WaitApp (waitappEntries.ts). Signed exactly like the webhook
+// above, so only WaitApp's server can make guest entries.
+app.post('/api/partner/waitapp/entries', express.raw({ type: '*/*', limit: '50kb' }), async (req, res) => {
+  try {
+    const raw = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : '';
+    if (!verifyWebhookSignature(raw, req.header('x-waitapp-timestamp') ?? '', req.header('x-waitapp-signature') ?? '')) {
+      res.status(401).json({ error: 'Bad signature.' });
+      return;
+    }
+    const { guestEntry } = await import('./waitappEntries.js');
+    let body: unknown;
+    try {
+      body = JSON.parse(raw);
+    } catch {
+      res.status(400).json({ error: 'Bad request.' });
+      return;
+    }
+    res.json(await guestEntry(createServiceClient(), body));
+  } catch (err) {
+    sendError(res, err, 'waitapp entry');
+  }
+});
+
 // Gaffer takes up to 3 attached photos (data URLs), well past the 100 KB
 // default, so it parses its own larger body before the default parser runs.
 app.use('/api/helper', express.json({ limit: '16mb' }));
@@ -276,6 +300,28 @@ const helperBodySchema = z.object({
 // "Ask Gaffer" in the web nav lands here. Same auth shape as the
 // action layer; the model acts as the signed-in user via runAction.
 // Public, read-only: the sport feed WaitApp's Discover shows (sportFeed.ts). Trimmed, no identities, cached briefly.
+// What a share link shows before sign-in (invites.ts): the game or team, and the inviter's first name and photo.
+app.get('/api/public/invite/:code', async (req, res) => {
+  try {
+    const { invitePreview } = await import('./invites.js');
+    res.set('Cache-Control', 'no-store');
+    res.json(await invitePreview(createServiceClient(), String(req.params['code'] ?? '')));
+  } catch (err) {
+    sendError(res, err, 'invite preview');
+  }
+});
+
+// The entry form for a race or golf day, for WaitApp to show (waitappEntries.ts). Public: the event page shows it all.
+app.get('/api/public/entry-form/:competitionId', async (req, res) => {
+  try {
+    const { entryForm } = await import('./waitappEntries.js');
+    res.set('Cache-Control', 'no-store');
+    res.json(await entryForm(createServiceClient(), String(req.params['competitionId'] ?? '')));
+  } catch (err) {
+    sendError(res, err, 'entry form');
+  }
+});
+
 app.get('/api/public/sport-feed', async (req, res) => {
   const num = (v: unknown) => (typeof v === 'string' && v !== '' && Number.isFinite(Number(v)) ? Number(v) : null);
   const sport = typeof req.query['sport'] === 'string' ? req.query['sport'].slice(0, 40) : undefined;

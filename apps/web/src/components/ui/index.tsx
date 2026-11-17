@@ -9,18 +9,17 @@ export function cx(...parts: (string | false | null | undefined)[]): string {
 
 /* ---------- Brand ---------- */
 
-// The original Chabuka whistle-and-ball artwork, shown as a rounded tile so it
-// sits the same on light and dark backgrounds.
+// The Chabuka whistle on its own, no background tile (a transparent cutout of the original artwork).
 export function LogoMark({ size = 28, className }: { size?: number; className?: string }) {
   return (
     <img
-      src="/brand/logo-mark.png"
+      src={size > 60 ? '/brand/logo-whistle.png' : '/brand/logo-whistle-120.png'}
       alt=""
       aria-hidden="true"
       width={size}
       height={size}
-      className={cx('shrink-0', className)}
-      style={{ width: size, height: size, borderRadius: Math.round(size * 0.24) }}
+      className={cx('shrink-0 object-contain', className)}
+      style={{ width: size, height: size }}
     />
   );
 }

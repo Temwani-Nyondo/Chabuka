@@ -81,6 +81,21 @@ describe('golf days: entering', () => {
     await expect(gd.enterGolfDay(w.client, STRANGER, { competitionId: gid, playerName: 'Late', handicapIndex: 5, phone: '0977000004' }, { now: NOW })).rejects.toThrow(/full/);
   });
 
+  it('a guest entry from WaitApp: same handicap limit, no account, email kept, nobody notified, form shows the rules', async () => {
+    const w = world();
+    const gid = await golfDay(w, { maxHandicap: 36 });
+    const before = sent.length;
+    await expect(gd.enterGolfDay(w.client, null, { competitionId: gid, playerName: 'Guest', handicapIndex: 40, phone: '0977000009' }, { now: NOW, guestEmail: 'g@x.test' })).rejects.toThrow(/up to 36/);
+    const e = await gd.enterGolfDay(w.client, null, { competitionId: gid, playerName: 'Guest', handicapIndex: 18, phone: '0977000009' }, { now: NOW, guestEmail: 'g@x.test' });
+    expect(e.state).toBe('confirmed');
+    expect(w.t.golf_entries!.get(e.entryId)).toMatchObject({ user_id: null, guest_email: 'g@x.test', source: 'waitapp' });
+    expect(sent.length).toBe(before + 1);
+    expect(sent.at(-1)!.ids).toEqual([null]);
+    await expect(gd.enterGolfDay(w.client, null, { competitionId: gid, playerName: 'Guest', handicapIndex: 18, phone: '0977000009' }, { now: NOW, guestEmail: 'g@x.test' })).rejects.toThrow(/already entered/);
+    const form = await gd.golfEntryForm(w.client, gid, NOW);
+    expect(form).toMatchObject({ kind: 'golf_day', open: true, maxHandicap: 36, entryFee: 0 });
+  });
+
   it('a paid entry goes to WaitApp checkout with the golf ref and is confirmed by the ticket, refunded by a refund', async () => {
     const w = world();
     const gid = await golfDay(w, { entryFee: 500 });

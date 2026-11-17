@@ -1013,6 +1013,11 @@ export const ACTION_NAMES = [
   'report_team',
   'block_user',
   'unblock_user',
+  // Share links (invites.ts) and golf actions Gaffer can take.
+  'share_link',
+  'invite_to_match',
+  'enter_golf_day',
+  'log_round',
 ] as const;
 export const actionNameSchema = z.enum(ACTION_NAMES);
 export type ActionName = z.infer<typeof actionNameSchema>;
@@ -1189,6 +1194,46 @@ export const inviteCodeSchema = z.object({
   code: z.string().trim().min(4).max(64),
 });
 export type InviteCodeInput = z.infer<typeof inviteCodeSchema>;
+
+/** A reusable share link: for one game (matchId), or the player's personal "join Chabuka" link (no matchId). */
+export const shareLinkSchema = z.object({
+  matchId: z.string().uuid().optional(),
+});
+export type ShareLinkInput = z.infer<typeof shareLinkSchema>;
+
+/** Nudge one of the player's circles or teams about a game they are in (exactly one of circleId / teamId). */
+export const inviteToMatchSchema = z
+  .object({
+    matchId: z.string().uuid(),
+    circleId: z.string().uuid().optional(),
+    teamId: z.string().uuid().optional(),
+  })
+  .refine((v) => (v.circleId ? 1 : 0) + (v.teamId ? 1 : 0) === 1, { message: 'Pick one circle or one team to invite.' });
+export type InviteToMatchInput = z.infer<typeof inviteToMatchSchema>;
+
+/** What a share link shows before anyone signs in (GET /api/public/invite/:code). */
+export interface InvitePreview {
+  code: string;
+  valid: boolean;
+  /** Why it can't be used: revoked, expired, used, or not_found. */
+  reason?: 'revoked' | 'expired' | 'used' | 'not_found';
+  kind: 'platform' | 'team' | 'match';
+  inviter: { firstName: string; avatarUrl: string | null } | null;
+  team?: { id: string; name: string } | null;
+  game?: {
+    id: string;
+    title: string;
+    sport: string | null;
+    startsAt: string;
+    area: string | null;
+    venueName: string | null;
+    format: string | null;
+    level: string | null;
+    joined: number;
+    capacity: number;
+    status: string;
+  } | null;
+}
 
 // Safety basics (Amendment 4, section 4): one-tap report and block.
 export const reportUserSchema = z.object({

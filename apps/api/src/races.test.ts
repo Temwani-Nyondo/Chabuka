@@ -130,6 +130,26 @@ describe('entering', () => {
     await expect(r.enterRace(w.client, RUNNER, runner(w.competitionId, w.distanceIds[1]!, { birthDate: '2012-01-01' }), { now: NOW })).rejects.toThrow(/at least 18/);
   });
 
+  it('a guest entry from WaitApp: no account, same age rule, email kept, duplicates caught by email', async () => {
+    const w = await race([dist('5K', 5, 1), dist('Half', 21.1, 500, { minAge: 18 })]);
+    await expect(r.enterRace(w.client, null, runner(w.competitionId, w.distanceIds[1]!, { birthDate: '2012-01-01' }), { now: NOW, guestEmail: 'kid@x.test' })).rejects.toThrow(/at least 18/);
+    await expect(r.enterRace(w.client, null, runner(w.competitionId, w.distanceIds[0]!), { now: NOW })).rejects.toThrow(/email/);
+    const out = (await r.enterRace(w.client, null, runner(w.competitionId, w.distanceIds[0]!), { now: NOW, guestEmail: 'Ann@X.test' })) as { state: string; entryId: string; bib: number };
+    expect(out).toMatchObject({ state: 'confirmed', bib: 1 });
+    expect(w.t.race_entries!.get(out.entryId)).toMatchObject({ user_id: null, guest_email: 'ann@x.test', source: 'waitapp' });
+    await expect(r.enterRace(w.client, null, runner(w.competitionId, w.distanceIds[0]!), { now: NOW, guestEmail: 'ann@x.test' })).rejects.toThrow(/already entered/);
+    // The same runner from a Chabuka account is a different entrant.
+    await expect(r.enterRace(w.client, RUNNER, runner(w.competitionId, w.distanceIds[0]!), { now: NOW })).resolves.toMatchObject({ state: 'confirmed' });
+  });
+
+  it('the entry form lists distances with their age rules and spots left', async () => {
+    const w = await race([dist('5K', 5, 1), dist('Half', 21.1, 500, { minAge: 18 })]);
+    await r.enterRace(w.client, RUNNER, runner(w.competitionId, w.distanceIds[0]!), { now: NOW });
+    const form = await r.raceEntryForm(w.client, w.competitionId, NOW);
+    expect(form).toMatchObject({ kind: 'race', open: true, name: 'Lusaka Fun Run' });
+    expect(form.distances.map((d) => [d.name, d.minAge, d.spotsLeft])).toEqual([['5K', null, 2], ['Half', 18, 3]]);
+  });
+
   it('a paid distance: on sale on WaitApp, entry pending with a checkout link, ticket.issued confirms once', async () => {
     const w = await race([dist('10K', 10, 500, { price: 250 })]);
     await expect(r.enterRace(w.client, RUNNER, runner(w.competitionId, w.distanceIds[0]!), { now: NOW })).rejects.toThrow(/not open yet/);

@@ -38,6 +38,7 @@ import GameVenueBooking from '../components/GameVenueBooking';
 import ScoreboardButton from '../components/scoreboard/ScoreboardButton';
 import { AvailabilityCard, LineupsPanel } from '../components/MatchDay';
 import SeriesPanel from '../components/SeriesPanel';
+import { ShareInvite } from '../components/ShareInvite';
 import { dayLabel, placeLabel, sportBackdrop, sportLabel, statusBadge, timeLabel } from '../components/GameCard';
 import {
   Avatar,
@@ -286,6 +287,16 @@ export default function GamePage() {
       <div className="flex flex-col gap-5 px-4">
         {sides ? <VersusStrip home={sides.home.teamId} away={sides.away.teamId} /> : null}
         {isOrganiser && !cancelled && !finished ? <FreeNearbyPanel matchId={match.id} /> : null}
+        {/* Share link: anyone can pass on a public game; a private one only its players. */}
+        {match.kind === 'players' && !cancelled && !finished && !started && (isOrganiser || isParticipant || match.visibility !== 'private') ? (
+          <Card className="flex items-center justify-between gap-3 p-3.5">
+            <span className="min-w-0 text-[14px]">
+              <strong className="block">{spotsLeft > 0 ? `${spotsLeft} spot${spotsLeft === 1 ? '' : 's'} left` : 'Game is full'}</strong>
+              <span className="text-muted">Send the link to friends. They can sign up and join from it.</span>
+            </span>
+            <ShareInvite matchId={match.id} canNotify={isOrganiser || isParticipant} size="sm" variant={isOrganiser ? 'primary' : 'secondary'} />
+          </Card>
+        ) : null}
         {cancelled ? (
           <Card className="border-live p-3.5 text-[14px]">
             <strong className="text-danger">This game was cancelled.</strong>

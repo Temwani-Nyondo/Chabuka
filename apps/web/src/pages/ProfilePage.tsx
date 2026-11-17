@@ -19,6 +19,7 @@ import { fetchMyRecord } from '../lib/records';
 import type { MyRecordView } from '../lib/records';
 import { FreeTonightCard, RecordCard } from '../components/Records';
 import { GolfRecord } from '../components/golf/GolfRecord';
+import { ShareInvite } from '../components/ShareInvite';
 import type { Sport } from '@chabuka/shared';
 import type { MyRace } from '../lib/races';
 import { formatDuration, pace } from '@chabuka/shared';
@@ -187,6 +188,15 @@ export default function ProfilePage() {
         <FreeTonightCard sports={allSports} />
         {/* Golf: shown once there is golf in their life here (or golf among their sports, to start logging rounds). */}
         <GolfRecord always={sports.some((sp) => sp.name.toLowerCase() === 'golf')} />
+
+        {/* Personal invite link: friends who sign up with it are recorded as brought by this player. */}
+        <Card className="flex items-center justify-between gap-3 p-3.5">
+          <span className="min-w-0 text-[14px]">
+            <strong className="block">Bring your people</strong>
+            <span className="text-muted">More friends on Chabuka means fuller games near you.</span>
+          </span>
+          <ShareInvite size="sm" />
+        </Card>
 
         <Section title="Schedule" count={upcoming.length + bookings.length} action={<SectionLink to="/explore">Find games</SectionLink>}>
           <span id="schedule" className="sr-only" />

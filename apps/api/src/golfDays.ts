@@ -54,7 +54,9 @@ interface GolfDayRow {
 interface EntryRow {
   id: string;
   competition_id: string;
-  user_id: string;
+  /** Null for a guest entry made on WaitApp (no Chabuka account): see guest_email. */
+  user_id: string | null;
+  guest_email?: string | null;
   player_name: string;
   handicap_index: number | string;
   phone: string | null;
@@ -176,6 +178,8 @@ export async function openGolfEntries(svc: SupabaseClient, userId: string, raw: 
       method: 'POST',
       body: {
         chabukaMatchId: g.id,
+        // Tickets for this event are only sold through an entry (WaitApp refuses a bare ticket without one).
+        entryKind: 'golf_day',
         title: g.name,
         ...(g.description ? { description: g.description.slice(0, 1000) } : {}),
         date: s.firstTeeAt,
@@ -197,7 +201,8 @@ export async function openGolfEntries(svc: SupabaseClient, userId: string, raw: 
 
 // --- Entering ---------------------------------------------------------------------------------------
 
-export async function enterGolfDay(svc: SupabaseClient, userId: string, raw: unknown, deps: Deps = {}) {
+/** Enter a golfer. `userId` null = a guest entry made on WaitApp, identified by deps.guestEmail. Same rules apply. */
+export async function enterGolfDay(svc: SupabaseClient, userId: string | null, raw: unknown, deps: Deps & { guestEmail?: string } = {}) {
   const parsed = enterGolfDaySchema.safeParse(raw);
   if (!parsed.success) throw new ActionError(400, parsed.error.issues[0]?.message ?? 'Check the entry.');
   const input = parsed.data;
@@ -209,7 +214,10 @@ export async function enterGolfDay(svc: SupabaseClient, userId: string, raw: unk
   if (input.handicapIndex > s.maxHandicap) throw new ActionError(409, `This golf day takes handicaps up to ${s.maxHandicap}.`);
   const entries = await entriesOf(svc, g.id);
   if (entries.filter((e) => holding(e, now)).length >= s.fieldLimit) throw new ActionError(409, 'The field is full.');
-  if (entries.some((e) => e.user_id === userId && holding(e, now) && e.player_name.toLowerCase() === input.playerName.toLowerCase())) {
+  const guestEmail = userId ? null : (deps.guestEmail ?? '').trim().toLowerCase() || null;
+  if (!userId && !guestEmail) throw new ActionError(400, 'An email is needed for a guest entry.');
+  const sameOwner = (e: EntryRow) => (userId ? e.user_id === userId : !e.user_id && e.guest_email === guestEmail);
+  if (entries.some((e) => sameOwner(e) && holding(e, now) && e.player_name.toLowerCase() === input.playerName.toLowerCase())) {
     throw new ActionError(409, `${input.playerName} is already entered.`);
   }
   const id = crypto.randomUUID();
@@ -218,6 +226,7 @@ export async function enterGolfDay(svc: SupabaseClient, userId: string, raw: unk
     id,
     competition_id: g.id,
     user_id: userId,
+    ...(guestEmail ? { guest_email: guestEmail, source: 'waitapp' } : {}),
     player_name: input.playerName,
     handicap_index: input.handicapIndex,
     phone: input.phone,
@@ -406,7 +415,7 @@ export async function publishGolfResults(svc: SupabaseClient, userId: string, ra
   const at = (deps.now ?? new Date()).toISOString();
   await svc.from('competitions').update({ golf_results_published_at: at, status: 'finished' }).eq('id', g.id);
   const confirmed = (await entriesOf(svc, g.id)).filter((e) => e.status === 'confirmed');
-  const users = [...new Set(confirmed.map((e) => e.user_id))];
+  const users = [...new Set(confirmed.map((e) => e.user_id).filter((u): u is string => !!u))];
   await notifyUsers(users, 'golf_results', { competitionId: g.id, title: g.name });
   // Complete cards go on each golfer's record (G5). An account that entered several players (a parent, a captain)
   // only gets the round played in the account holder's own name.
@@ -422,6 +431,8 @@ export async function publishGolfResults(svc: SupabaseClient, userId: string, ra
     const { data: names } = users.length ? await svc.from('profiles').select('id,name').in('id', users) : { data: [] };
     const nameOf = new Map(((names ?? []) as { id: string; name: string | null }[]).map((p) => [p.id, (p.name ?? '').trim().toLowerCase()]));
     const own = confirmed.filter((e) => {
+      // A guest entry (from WaitApp) has no Chabuka record to put the round on.
+      if (!e.user_id) return false;
       const n = nameOf.get(e.user_id);
       const several = confirmed.filter((x) => x.user_id === e.user_id).length > 1;
       return !several || (!!n && e.player_name.trim().toLowerCase() === n);
@@ -429,7 +440,7 @@ export async function publishGolfResults(svc: SupabaseClient, userId: string, ra
     await roundsFromGolfDay(
       svc,
       g,
-      own.map((e) => ({ userId: e.user_id, handicapIndex: hcp(e), playingHcp: playingHandicap(hcp(e), g.golf_settings.allowancePct, course.holes), scores: byEntry.get(e.id) ?? {} })),
+      own.map((e) => ({ userId: e.user_id as string, handicapIndex: hcp(e), playingHcp: playingHandicap(hcp(e), g.golf_settings.allowancePct, course.holes), scores: byEntry.get(e.id) ?? {} })),
     );
   } catch {
     // Records never block publishing.
@@ -522,4 +533,35 @@ export async function getGolfEntries(svc: SupabaseClient, userId: string, id: st
     .filter((e) => e.status !== 'cancelled')
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
     .map((e) => ({ entryId: e.id, name: e.player_name, handicapIndex: hcp(e), phone: e.phone, status: e.status, flightId: e.flight_id, paid: !!e.paid_ref }));
+}
+
+/** What someone needs to fill in to enter this golf day from outside Chabuka (WaitApp). Public; rechecked on entry. */
+export async function golfEntryForm(svc: SupabaseClient, golfDayId: string, now = new Date()) {
+  const g = await loadGolfDay(svc, golfDayId);
+  const s = g.golf_settings;
+  const taken = (await entriesOf(svc, g.id)).filter((e) => holding(e, now)).length;
+  const open = g.status === 'registration' && !(g.registration_closes_at && new Date(g.registration_closes_at) < now);
+  let courseName: string | null = null;
+  try {
+    courseName = (await getCourse(svc, s.courseId)).name;
+  } catch {
+    courseName = null;
+  }
+  return {
+    kind: 'golf_day' as const,
+    competitionId: g.id,
+    name: g.name,
+    area: (g['area'] as string | null) ?? null,
+    location: (g['location'] as string | null) ?? null,
+    bannerUrl: (g['banner_url'] as string | null) ?? null,
+    courseName,
+    firstTeeAt: s.firstTeeAt,
+    scoring: s.scoring,
+    open,
+    closesAt: g.registration_closes_at,
+    entryFee: s.entryFee,
+    currency: s.currency,
+    maxHandicap: s.maxHandicap,
+    spotsLeft: Math.max(0, s.fieldLimit - taken),
+  };
 }

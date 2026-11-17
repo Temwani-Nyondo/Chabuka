@@ -61,6 +61,7 @@ export default function App() {
       <Route path="/" element={<LandingGate />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
+      <Route path="/i/:code" element={<InvitePage />} />
       <Route path="/invite/:code" element={<InvitePage />} />
       <Route path="/invite" element={<InvitePage />} />
       <Route path="/privacy" element={<PrivacyPage />} />

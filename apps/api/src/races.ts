@@ -33,6 +33,7 @@ import {
   type RaceSettings,
   type ResultStatus,
   type RoutePoint,
+  TSHIRT_SIZES,
 } from '@chabuka/shared';
 import { ActionError, notifyUsers } from './actions.js';
 import { detailColumns } from './competitions.js';
@@ -91,7 +92,9 @@ interface EntryRow {
   id: string;
   competition_id: string;
   distance_id: string;
-  user_id: string;
+  /** Null for a guest entry made on WaitApp (no Chabuka account): see guest_email. */
+  user_id: string | null;
+  guest_email?: string | null;
   runner_name: string;
   gender: 'female' | 'male';
   birth_date: string;
@@ -332,6 +335,8 @@ export async function openRaceEntries(svc: SupabaseClient, userId: string, raw: 
       method: 'POST',
       body: {
         chabukaMatchId: race.id,
+        // Tickets for this event are only sold through an entry (WaitApp refuses a bare ticket without one).
+        entryKind: 'race',
         title: race.name,
         ...(race.description ? { description: race.description.slice(0, 1000) } : {}),
         date: first.starts_at,
@@ -376,7 +381,11 @@ async function assignBib(svc: SupabaseClient, entry: EntryRow, distance: Distanc
   throw new ActionError(409, 'Could not give out a bib number. Try again.');
 }
 
-export async function enterRace(svc: SupabaseClient, userId: string, raw: unknown, deps: Deps = {}) {
+/**
+ * Enter a runner. `userId` is the Chabuka account entering; null for a guest entry made on WaitApp, which carries
+ * the WaitApp customer's email instead (deps.guestEmail). Every rule (age, field size, questions) applies the same.
+ */
+export async function enterRace(svc: SupabaseClient, userId: string | null, raw: unknown, deps: Deps & { guestEmail?: string } = {}) {
   const input = enterRaceSchema.parse(raw);
   const now = deps.now ?? new Date();
   const race = await loadRace(svc, input.competitionId);
@@ -394,8 +403,14 @@ export async function enterRace(svc: SupabaseClient, userId: string, raw: unknow
   const entries = await entriesOf(svc, race.id);
   const live = entries.filter((e) => e.distance_id === distance.id && holding(e, now));
   if (live.length >= distance.field_limit) throw new ActionError(409, `The ${distance.name} is full.`);
+  const guestEmail = userId ? null : (deps.guestEmail ?? '').trim().toLowerCase() || null;
+  if (!userId && !guestEmail) throw new ActionError(400, 'An email is needed for a guest entry.');
   const dupe = entries.find(
-    (e) => e.user_id === userId && holding(e, now) && e.runner_name.toLowerCase() === input.runnerName.toLowerCase() && e.birth_date === input.birthDate,
+    (e) =>
+      (userId ? e.user_id === userId : !e.user_id && e.guest_email === guestEmail) &&
+      holding(e, now) &&
+      e.runner_name.toLowerCase() === input.runnerName.toLowerCase() &&
+      e.birth_date === input.birthDate,
   );
   if (dupe) throw new ActionError(409, `${input.runnerName} is already entered in this race.`);
   const settings = settingsOf(race);
@@ -409,6 +424,7 @@ export async function enterRace(svc: SupabaseClient, userId: string, raw: unknow
     competition_id: race.id,
     distance_id: distance.id,
     user_id: userId,
+    ...(guestEmail ? { guest_email: guestEmail, source: 'waitapp' } : {}),
     runner_name: input.runnerName,
     gender: input.gender,
     birth_date: input.birthDate,
@@ -935,4 +951,41 @@ export async function myRaces(svc: SupabaseClient, userId: string) {
       };
     })
     .sort((a, b) => (b.distance?.startsAt ?? '').localeCompare(a.distance?.startsAt ?? ''));
+}
+
+/**
+ * What someone needs to fill in to enter this race, for an entry form outside Chabuka (WaitApp). Public: the race
+ * page already shows all of this. Rules are checked again by enterRace when the entry is sent.
+ */
+export async function raceEntryForm(svc: SupabaseClient, raceId: string, now = new Date()) {
+  const race = await loadRace(svc, raceId);
+  const settings = settingsOf(race);
+  const entries = await entriesOf(svc, race.id);
+  const distances = (await distancesOf(svc, race.id)).map((d) => ({
+    id: d.id,
+    name: d.name,
+    km: d.distance_km,
+    startsAt: d.starts_at,
+    price: d.price,
+    currency: d.currency,
+    minAge: d.min_age,
+    spotsLeft: Math.max(0, d.field_limit - entries.filter((e) => e.distance_id === d.id && holding(e, now)).length),
+  }));
+  const open = race.status === 'registration' && !(race.registration_closes_at && new Date(race.registration_closes_at) < now);
+  return {
+    kind: 'race' as const,
+    competitionId: race.id,
+    name: race.name,
+    area: race.area,
+    location: race.location,
+    startsOn: race.starts_on,
+    bannerUrl: race.banner_url,
+    open,
+    closesAt: race.registration_closes_at,
+    distances,
+    tshirts: settings.tshirts,
+    tshirtSizes: TSHIRT_SIZES,
+    waiverText: settings.waiverText,
+    questions: (race.registration_questions ?? []).map((q) => ({ label: q.label, required: q.required })),
+  };
 }

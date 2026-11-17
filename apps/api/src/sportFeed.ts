@@ -26,6 +26,13 @@ export interface FeedItem {
   chabukaUrl: string;
   checkoutUrl: string | null;
   bookingUrl: string | null;
+  /** Who it's for and what it asks, in short plain lines: "Intermediate", "5v5", "Half marathon: 16+". */
+  rules: string[];
+  /**
+   * Races and golf days are entered through a form (runner's age, a golfer's handicap...), never a bare ticket:
+   * WaitApp shows that form itself (GET /api/public/entry-form/:id) and sends it to POST /api/partner/waitapp/entries.
+   */
+  entry: 'race' | 'golf_day' | null;
 }
 
 export interface SportFeed {
@@ -39,6 +46,22 @@ function money(amount: number, currency: string | null | undefined): string {
   const c = (currency ?? 'ZMW').toUpperCase();
   const n = Number.isInteger(amount) ? String(amount) : amount.toFixed(2);
   return c === 'ZMW' ? `K${n}` : `${c} ${n}`;
+}
+
+const LEVELS: Record<string, string> = { recreational: 'Recreational', intermediate: 'Intermediate', competitive: 'Competitive' };
+const CATEGORIES: Record<string, string> = {
+  community: 'Community', competitive: 'Competitive', charity: 'Charity', corporate: 'Corporate teams', school: 'School teams', social: 'Social',
+};
+const categoryLabel = (c: string) => CATEGORIES[c] ?? c;
+
+/** A game's level, format and the start of the organiser's note: what someone checks before they turn up. */
+function gameRules(g: { level?: string | null; format?: string | null; notes?: string | null }): string[] {
+  const note = (g.notes ?? '').replace(/\s+/g, ' ').trim();
+  return [
+    g.level ? LEVELS[g.level] ?? g.level : null,
+    g.format?.trim() || null,
+    note ? (note.length > 90 ? `${note.slice(0, 87).trimEnd()}...` : note) : null,
+  ].filter((x): x is string => !!x);
 }
 
 function appUrl(): string {
@@ -66,7 +89,7 @@ export async function readSportFeed(
   // --- Games: public, open, coming up. One per weekly series (the next one), so a series doesn't fill the page. ---
   let gq = svc
     .from('matches')
-    .select('id,title,sport_id,starts_at,area,venue_name,lat,lng,capacity,visibility,status,series_id')
+    .select('id,title,sport_id,starts_at,area,venue_name,lat,lng,capacity,visibility,status,series_id,level,format,notes')
     .eq('status', 'open')
     .eq('visibility', 'public')
     .gte('starts_at', now.toISOString())
@@ -77,6 +100,7 @@ export async function readSportFeed(
   const games = (gameRows ?? []) as {
     id: string; title: string; sport_id: string; starts_at: string; area: string | null; venue_name: string | null;
     lat: number | null; lng: number | null; capacity: number; series_id: string | null;
+    level?: string | null; format?: string | null; notes?: string | null;
   }[];
   const seenSeries = new Set<string>();
   const firstOfSeries = games.filter((g) => {
@@ -119,13 +143,15 @@ export async function readSportFeed(
       chabukaUrl: `${base}/games/${g.id}`,
       checkoutUrl: tix?.checkout_url ?? null,
       bookingUrl: null,
+      rules: gameRules(g),
+      entry: null,
     });
   }
 
   // --- Events: tournaments and leagues taking entries, races with entries open (events are always public). ---
   let cq = svc
     .from('competitions')
-    .select('id,name,kind,sport_id,starts_on,status,area,location,banner_url,max_entries,waitapp_checkout_url,golf_settings')
+    .select('id,name,kind,sport_id,starts_on,status,area,location,banner_url,max_entries,waitapp_checkout_url,golf_settings,category')
     .eq('status', 'registration')
     .lte('starts_on', until.slice(0, 10))
     .gte('starts_on', now.toISOString().slice(0, 10));
@@ -135,19 +161,21 @@ export async function readSportFeed(
   const comps = ((compRows ?? []) as {
     id: string; name: string; kind: string; sport_id: string; starts_on: string; area: string | null; location: string | null;
     banner_url: string | null; max_entries: number; waitapp_checkout_url: string | null;
-    golf_settings?: { entryFee?: number; currency?: string; firstTeeAt?: string; fieldLimit?: number } | null;
+    golf_settings?: { entryFee?: number; currency?: string; firstTeeAt?: string; fieldLimit?: number; maxHandicap?: number; scoring?: string } | null;
+    category?: string | null;
   }[]);
   const raceIds = comps.filter((c) => c.kind === 'race').map((c) => c.id);
-  const raceMeta = new Map<string, { starts: string | null; min: number | null; currency: string | null }>();
+  const raceMeta = new Map<string, { starts: string | null; min: number | null; currency: string | null; ages: string[] }>();
   if (raceIds.length) {
-    const { data: dists } = await svc.from('race_distances').select('competition_id,starts_at,price,currency').in('competition_id', raceIds);
-    for (const d of (dists ?? []) as { competition_id: string; starts_at: string; price: number | string; currency: string }[]) {
-      const cur = raceMeta.get(d.competition_id) ?? { starts: null, min: null, currency: d.currency };
+    const { data: dists } = await svc.from('race_distances').select('competition_id,name,starts_at,price,currency,min_age').in('competition_id', raceIds);
+    for (const d of (dists ?? []) as { competition_id: string; name?: string; starts_at: string; price: number | string; currency: string; min_age?: number | null }[]) {
+      const cur = raceMeta.get(d.competition_id) ?? { starts: null, min: null, currency: d.currency, ages: [] };
       const price = Number(d.price);
       raceMeta.set(d.competition_id, {
         starts: !cur.starts || d.starts_at < cur.starts ? d.starts_at : cur.starts,
         min: cur.min == null ? price : Math.min(cur.min, price),
         currency: d.currency,
+        ages: d.min_age ? [...cur.ages, `${d.name ?? 'Race'}: ${d.min_age}+`] : cur.ages,
       });
     }
   }
@@ -185,8 +213,14 @@ export async function readSportFeed(
         spotsLeft: Math.max(0, (gs.fieldLimit ?? c.max_entries) - (golfEntered.get(c.id) ?? 0)),
         image: c.banner_url,
         chabukaUrl: `${base}/golf/${c.id}`,
-        checkoutUrl: fee > 0 ? c.waitapp_checkout_url : null,
+        // Entered through the form (handicap, phone), never a bare ticket: see `entry`.
+        checkoutUrl: null,
         bookingUrl: null,
+        rules: [
+          gs.maxHandicap != null && Number(gs.maxHandicap) < 54 ? `Handicap ${gs.maxHandicap} or under` : 'Any handicap',
+          gs.scoring === 'stroke' ? 'Stroke play' : 'Stableford',
+        ],
+        entry: 'golf_day',
       });
       continue;
     }
@@ -206,8 +240,11 @@ export async function readSportFeed(
       spotsLeft: race ? null : Math.max(0, c.max_entries - (entered.get(c.id) ?? 0)),
       image: c.banner_url,
       chabukaUrl: `${base}/${race ? 'races' : 'competitions'}/${c.id}`,
-      checkoutUrl: race && meta?.min ? c.waitapp_checkout_url : null,
+      // Races are entered through the form (date of birth for the age rule), never a bare ticket: see `entry`.
+      checkoutUrl: null,
       bookingUrl: null,
+      rules: race ? (meta?.ages.length ? meta.ages : ['All ages']) : c.category ? [categoryLabel(c.category)] : [],
+      entry: race ? 'race' : null,
     });
   }
 
@@ -258,6 +295,8 @@ export async function readSportFeed(
         chabukaUrl: `${base}/venues/${v.id}`,
         checkoutUrl: null,
         bookingUrl: null,
+        rules: [],
+        entry: null,
       });
     }
     const space = spaceMin.get(v.id);
@@ -281,6 +320,8 @@ export async function readSportFeed(
         chabukaUrl: `${base}/venues/${v.id}`,
         checkoutUrl: null,
         bookingUrl: booking.get(v.id) ?? null,
+        rules: [],
+        entry: null,
       });
     }
   }
