@@ -1,3 +1,4 @@
+import { lazy, Suspense } from 'react';
 import { Navigate, Route, Routes } from 'react-router-dom';
 import ProtectedRoute from './auth/ProtectedRoute';
 import { useAuth } from './auth/AuthContext';
@@ -5,43 +6,50 @@ import AppShell from './components/AppShell';
 import LandingPage from './pages/LandingPage';
 import InvitePage from './pages/InvitePage';
 import LoginPage from './pages/LoginPage';
-import ResetPasswordPage from './pages/ResetPasswordPage';
 import NotificationsPage from './pages/NotificationsPage';
-import { CommunityPage, DataDeletionPage, PrivacyPage, TermsPage } from './pages/PolicyPages';
-import OnboardingPage from './pages/OnboardingPage';
-import WaitAppConnectPage from './pages/WaitAppConnectPage';
-import VenueWaitAppReturnPage from './pages/VenueWaitAppReturnPage';
-import GolfDayCreatePage from './pages/GolfDayCreatePage';
-import GolfDayPage from './pages/GolfDayPage';
-import ScoreboardViewPage from './pages/ScoreboardViewPage';
-import ScoreboardControlPage from './pages/ScoreboardControlPage';
-import AdminVenuesPage from './pages/AdminVenuesPage';
 import CirclesPage from './pages/CirclesPage';
-import CompetitionsPage from './pages/CompetitionsPage';
-import GafferPage from './pages/GafferPage';
 import HomePage from './pages/HomePage';
 import ExplorePage from './pages/ExplorePage';
 import TeamDetailPage from './pages/TeamDetailPage';
 import TeamsPage from './pages/TeamsPage';
 import ProfilePage from './pages/ProfilePage';
-import VenueProfilePage from './pages/VenueProfilePage';
-import VenueDashboardPage from './pages/VenueDashboardPage';
-import VenueManagePage from './pages/VenueManagePage';
 import GamePage from './pages/GamePage';
-import SettingsPage from './pages/SettingsPage';
-import LineupPage from './pages/LineupPage';
-import RulesPage from './pages/RulesPage';
-import CompetitionPage from './pages/CompetitionPage';
-import CompetitionCreatePage from './pages/CompetitionCreatePage';
-import RaceCreatePage from './pages/RaceCreatePage';
 import CircleChannelPage from './pages/CircleChannelPage';
-import CreatorPage, { CreatorPostPage } from './pages/CreatorPage';
-import CreatorStudioPage from './pages/CreatorStudioPage';
-import PlayerPage from './pages/PlayerPage';
-import RacePage from './pages/RacePage';
-import RaceEnterPage from './pages/RaceEnterPage';
-import FinishLinePage from './pages/FinishLinePage';
-import CompetitionRegisterPage from './pages/CompetitionRegisterPage';
+
+// Screens most people open rarely (venue tools, races, golf, scoreboard, studio, admin...) load when first opened,
+// so the first visit downloads only the everyday app. They used to be one 1.4 MB file loaded before anything showed.
+const WaitAppConnectPage = lazy(() => import('./pages/WaitAppConnectPage'));
+const VenueWaitAppReturnPage = lazy(() => import('./pages/VenueWaitAppReturnPage'));
+const GolfDayCreatePage = lazy(() => import('./pages/GolfDayCreatePage'));
+const GolfDayPage = lazy(() => import('./pages/GolfDayPage'));
+const ScoreboardViewPage = lazy(() => import('./pages/ScoreboardViewPage'));
+const ScoreboardControlPage = lazy(() => import('./pages/ScoreboardControlPage'));
+const AdminVenuesPage = lazy(() => import('./pages/AdminVenuesPage'));
+const CompetitionsPage = lazy(() => import('./pages/CompetitionsPage'));
+const GafferPage = lazy(() => import('./pages/GafferPage'));
+const VenueProfilePage = lazy(() => import('./pages/VenueProfilePage'));
+const VenueDashboardPage = lazy(() => import('./pages/VenueDashboardPage'));
+const VenueManagePage = lazy(() => import('./pages/VenueManagePage'));
+const SettingsPage = lazy(() => import('./pages/SettingsPage'));
+const LineupPage = lazy(() => import('./pages/LineupPage'));
+const RulesPage = lazy(() => import('./pages/RulesPage'));
+const CompetitionPage = lazy(() => import('./pages/CompetitionPage'));
+const CompetitionCreatePage = lazy(() => import('./pages/CompetitionCreatePage'));
+const RaceCreatePage = lazy(() => import('./pages/RaceCreatePage'));
+const CreatorStudioPage = lazy(() => import('./pages/CreatorStudioPage'));
+const PlayerPage = lazy(() => import('./pages/PlayerPage'));
+const RacePage = lazy(() => import('./pages/RacePage'));
+const RaceEnterPage = lazy(() => import('./pages/RaceEnterPage'));
+const FinishLinePage = lazy(() => import('./pages/FinishLinePage'));
+const CompetitionRegisterPage = lazy(() => import('./pages/CompetitionRegisterPage'));
+const OnboardingPage = lazy(() => import('./pages/OnboardingPage'));
+const ResetPasswordPage = lazy(() => import('./pages/ResetPasswordPage'));
+const CommunityPage = lazy(() => import('./pages/PolicyPages').then((m) => ({ default: m.CommunityPage })));
+const DataDeletionPage = lazy(() => import('./pages/PolicyPages').then((m) => ({ default: m.DataDeletionPage })));
+const PrivacyPage = lazy(() => import('./pages/PolicyPages').then((m) => ({ default: m.PrivacyPage })));
+const TermsPage = lazy(() => import('./pages/PolicyPages').then((m) => ({ default: m.TermsPage })));
+const CreatorPage = lazy(() => import('./pages/CreatorPage'));
+const CreatorPostPage = lazy(() => import('./pages/CreatorPage').then((m) => ({ default: m.CreatorPostPage })));
 
 function LandingGate() {
   const { loading, user } = useAuth();
@@ -57,6 +65,7 @@ function LandingGate() {
 
 export default function App() {
   return (
+    <Suspense fallback={<div className="page"><p className="muted">Loading…</p></div>}>
     <Routes>
       <Route path="/" element={<LandingGate />} />
       <Route path="/login" element={<LoginPage />} />
@@ -113,5 +122,6 @@ export default function App() {
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   );
 }

@@ -519,7 +519,15 @@ export async function setFreeTonight(svc: SupabaseClient, userId: string, raw: u
     lat = (data as { lat: number | null } | null)?.lat ?? null;
     lng = (data as { lng: number | null } | null)?.lng ?? null;
   }
-  if (lat == null || lng == null) throw new ActionError(400, 'Add your area in Settings (or allow location) so nearby organisers can find you.');
+  // The profile's area is only a name; use a pinned place of theirs (home ground, a usual pitch) before giving up.
+  if (lat == null || lng == null) {
+    const { data: places } = await svc.from('user_places').select('lat,lng').eq('user_id', userId);
+    const pinned = ((places ?? []) as { lat: number | null; lng: number | null }[]).find((p) => p.lat != null && p.lng != null);
+    if (pinned) ({ lat, lng } = pinned);
+  }
+  if (lat == null || lng == null) {
+    throw new ActionError(400, 'Allow your location, or pin your usual place to play under You, so nearby organisers can find you.');
+  }
   const until = endOfTonightLusaka(now);
   const { data: existing } = await svc.from('free_tonight').select('notified_at,until').eq('user_id', userId).maybeSingle();
   const keepNotified = existing && new Date((existing as { until: string }).until) > now ? (existing as { notified_at: string | null }).notified_at : null;

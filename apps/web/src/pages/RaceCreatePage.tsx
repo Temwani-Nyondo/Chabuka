@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Trash2 } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_CATEGORIES, DEFAULT_AGE_BANDS, RACE_PRESETS, createRaceSchema } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_CATEGORIES, DEFAULT_AGE_BANDS, RACE_PRESETS, createRaceSchema, formatMoney } from '@chabuka/shared';
 import type { CompetitionCategory, Sport, Wave } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { runAction } from '../lib/api';
@@ -301,7 +301,7 @@ export default function RaceCreatePage() {
               <span className="font-semibold">
                 {d.name} <span className="font-normal text-muted">{d.km} km, {d.time}</span>
               </span>
-              <Badge tone={Number(d.price) > 0 ? 'neutral' : 'brand'}>{Number(d.price) > 0 ? `ZMW ${d.price}` : 'Free'}</Badge>
+              <Badge tone={Number(d.price) > 0 ? 'neutral' : 'brand'}>{Number(d.price) > 0 ? formatMoney(d.price, 'ZMW') : 'Free'}</Badge>
             </div>
           ))}
           <p className="m-0 pt-2 text-[13px] text-muted">Next you draw each course on the map{anyPaid ? ' and put paid entries on sale through WaitApp' : ''}.</p>

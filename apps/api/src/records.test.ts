@@ -28,7 +28,7 @@ function world() {
   const names = [
     'matches', 'challenges', 'scoreboards', 'scoreboard_players', 'scoreboard_events', 'match_participants', 'fixtures', 'competitions', 'teams',
     'team_members', 'team_ratings', 'rating_events', 'player_stats', 'sports', 'race_entries', 'race_distances', 'profiles', 'user_sports',
-    'user_availability', 'free_tonight', 'venues', 'platform_admins', 'user_follows',
+    'user_availability', 'free_tonight', 'venues', 'platform_admins', 'user_follows', 'user_places',
   ];
   const t: Record<string, Map<string, Row>> = Object.fromEntries(names.map((n) => [n, new Map<string, Row>()]));
   const keys: Record<string, (x: Row) => string> = {
@@ -207,6 +207,15 @@ describe('Free tonight', () => {
     expect(told).toMatchObject({ count: 1 });
     expect(sent.at(-1)).toMatchObject({ ids: [FREE1], type: 'free_tonight_game' });
     await expect(r.notifyFreePlayers(w.client, ORG, { matchId: GAME }, { now: NOW })).rejects.toThrow(/already told/);
+  });
+
+  it('free tonight uses a pinned place when the profile has no coordinates, and says how to fix it when there is none', async () => {
+    const w = world();
+    w.t.profiles!.set(FREE1, { id: FREE1, area: 'Avondale', lat: null, lng: null });
+    await expect(r.setFreeTonight(w.client, FREE1, { sports: [SPORT], radiusKm: 5 }, { now: NOW })).rejects.toThrow(/pin your usual place/);
+    w.t.user_places!.set('pl1', { id: 'pl1', user_id: FREE1, label: 'Home pitch', lat: -15.38, lng: 28.33 });
+    await expect(r.setFreeTonight(w.client, FREE1, { sports: [SPORT], radiusKm: 5 }, { now: NOW })).resolves.toMatchObject({ state: 'on' });
+    expect(w.t.free_tonight!.get(FREE1) ?? [...w.t.free_tonight!.values()][0]).toMatchObject({ lat: -15.38, lng: 28.33 });
   });
 
   it('the create form sees a count only from three free players up, and only for tonight', async () => {

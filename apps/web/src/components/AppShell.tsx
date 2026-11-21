@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, Suspense } from 'react';
 import type { ReactNode } from 'react';
 import { Link, NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import {
@@ -19,6 +19,7 @@ import {
   Footprints,
   Users,
   Volleyball,
+  LogOut,
 } from 'lucide-react';
 import CreateMatchForm from './CreateMatchForm';
 import CreateTeamForm from './CreateTeamForm';
@@ -57,7 +58,7 @@ export default function AppShell() {
   const navigate = useNavigate();
   const { pathname } = useLocation();
   const unread = useUnreadCount();
-  const { session } = useAuth();
+  const { session, signOut } = useAuth();
   const isAdmin = useIsAdmin();
   const claimedFor = useRef<string | null>(null);
 
@@ -159,6 +160,13 @@ export default function AppShell() {
           <SideLink to="/you/settings" icon={<Settings size={20} />} on={pathname === '/you/settings'}>
             Settings
           </SideLink>
+          <button
+            type="button"
+            onClick={() => void signOut()}
+            className="flex h-11 cursor-pointer items-center gap-3 rounded-xl border-0 bg-transparent px-3 text-left font-semibold text-muted hover:bg-surface-2 hover:text-ink"
+          >
+            <LogOut size={20} /> Sign out
+          </button>
         </div>
       </aside>
 
@@ -179,7 +187,10 @@ export default function AppShell() {
         </header>
 
         <main className={cx(detail ? 'pb-28' : 'pb-28 lg:pb-12')}>
-          <Outlet />
+          {/* A screen that loads on first open shows this inside the frame; the navigation stays put. */}
+          <Suspense fallback={<div className="px-4 py-6 text-[14px] text-muted">Loading…</div>}>
+            <Outlet />
+          </Suspense>
         </main>
       </div>
 

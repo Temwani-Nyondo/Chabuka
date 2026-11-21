@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Building, List, Map as MapIcon, Radio, Search, Swords, Trophy, Volleyball } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, formatLabel } from '@chabuka/shared';
+import { CATEGORY_LABELS, competitionStatusLabel, formatLabel } from '@chabuka/shared';
 import type { Competition, Sport, Venue } from '@chabuka/shared';
 import ChallengeCard from '../components/ChallengeCard';
 import TeamSuggestions from '../components/TeamSuggestions';
@@ -352,7 +352,7 @@ export default function ExplorePage() {
                 }
                 title={competition.name}
                 sub={compSub(competition, entryTeamIds.length, sports)}
-                trailing={<Badge tone={competition.status === 'registration' ? 'hl' : competition.status === 'live' ? 'brand' : 'muted'}>{COMPETITION_STATUS_LABELS[competition.status]}</Badge>}
+                trailing={<Badge tone={competition.status === 'registration' ? 'hl' : competition.status === 'live' ? 'brand' : 'muted'}>{competitionStatusLabel(competition.status, competition.starts_on)}</Badge>}
               />
             ))}
           </Card>

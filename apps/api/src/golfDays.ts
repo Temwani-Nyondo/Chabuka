@@ -30,6 +30,9 @@ import { waitappCall } from './waitapp.js';
 const PENDING_HOLD_MS = 30 * 60_000;
 type Deps = { now?: Date; fetch?: typeof fetch };
 
+/** Scores can be entered from this long before the first tee time. */
+const SCORING_OPENS_BEFORE_MS = 30 * 60_000;
+
 interface GolfDayRow {
   id: string;
   organiser_id: string;
@@ -365,6 +368,12 @@ export async function saveGolfScores(svc: SupabaseClient, userId: string, raw: u
   const input = saveGolfScoresSchema.parse(raw);
   const g = await loadGolfDay(svc, input.competitionId);
   if (g.golf_results_published_at) throw new ActionError(409, 'Results are published: scores are locked.');
+  // Scoring opens shortly before the first tee time. Earlier, a stray score would mark the day live, close entries
+  // and take it off listings days ahead.
+  const opensAt = new Date(g.golf_settings.firstTeeAt).getTime() - SCORING_OPENS_BEFORE_MS;
+  if ((deps.now ?? new Date()).getTime() < opensAt) {
+    throw new ActionError(409, 'Scoring opens on the day, 30 minutes before the first tee time.');
+  }
   const course = await getCourse(svc, g.golf_settings.courseId);
   const entries = await entriesOf(svc, g.id);
   const flights = await flightsOf(svc, g.id);

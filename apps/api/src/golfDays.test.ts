@@ -29,6 +29,8 @@ const STRANGER = id(5);
 const VENUE = id(10);
 const GOLF = id(40);
 const NOW = new Date('2026-12-01T08:00:00Z');
+/** On the golf day, after the first tee time (scoring is open). */
+const PLAYDAY = new Date('2026-12-05T06:20:00Z');
 
 function world() {
   const names = ['competitions', 'sports', 'golf_courses', 'golf_holes', 'venues', 'venue_staff', 'golf_entries', 'golf_flights', 'golf_scores', 'golf_side_results', 'golf_rounds', 'profiles'];
@@ -132,15 +134,22 @@ describe('golf days: flights and scoring', () => {
     await expect(gd.buildFlights(w.client, P1, { competitionId: gid })).rejects.toMatchObject({ status: 403 });
   });
 
+  it('scores are refused before the day (a stray score must not mark it live and close entries)', async () => {
+    const { w, gid, ids } = await ready();
+    await expect(gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] }, { now: NOW })).rejects.toThrow(/Scoring opens on the day/);
+    expect(w.t.competitions!.get(gid)!['status']).not.toBe('live');
+    await expect(gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] }, { now: new Date('2026-12-05T05:40:00Z') })).resolves.toBeTruthy();
+  });
+
   it('before anyone keeps the card players enter their own; then only the scorer (or organiser) can', async () => {
     const { w, gid, ids, flightId } = await ready();
-    await gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] });
-    await expect(gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Banda']!, holeNo: 1, strokes: 5 }] })).rejects.toMatchObject({ status: 403 });
+    await gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] }, { now: PLAYDAY });
+    await expect(gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Banda']!, holeNo: 1, strokes: 5 }] }, { now: PLAYDAY })).rejects.toMatchObject({ status: 403 });
     await gd.claimScorer(w.client, P2, { competitionId: gid, flightId });
-    await gd.saveGolfScores(w.client, P2, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 2, strokes: 5 }, { entryId: ids['Phiri']!, holeNo: 1, strokes: 3 }] });
-    await expect(gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 3, strokes: 4 }] })).rejects.toMatchObject({ status: 403 });
-    await expect(gd.saveGolfScores(w.client, P2, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 12, strokes: 4 }] })).rejects.toThrow(/9 holes/);
-    await gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Banda']!, holeNo: 1, strokes: null }] });
+    await gd.saveGolfScores(w.client, P2, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 2, strokes: 5 }, { entryId: ids['Phiri']!, holeNo: 1, strokes: 3 }] }, { now: PLAYDAY });
+    await expect(gd.saveGolfScores(w.client, P1, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 3, strokes: 4 }] }, { now: PLAYDAY })).rejects.toMatchObject({ status: 403 });
+    await expect(gd.saveGolfScores(w.client, P2, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 12, strokes: 4 }] }, { now: PLAYDAY })).rejects.toThrow(/9 holes/);
+    await gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Banda']!, holeNo: 1, strokes: null }] }, { now: PLAYDAY });
     const view = await gd.getGolfDayView(w.client, P1, gid);
     expect(view.leaderboard.find((r) => r.name === 'Mwila')!.thru).toBe(2);
     // Stableford: Mwila 3 + 2 points over two holes beats Phiri's 4 on one.
@@ -150,7 +159,7 @@ describe('golf days: flights and scoring', () => {
   it('publishing puts every complete card on the golfer\'s record, once', async () => {
     const { w, gid, ids } = await ready();
     const all = (entryId: string, strokes: number) => Array.from({ length: 9 }, (_, i) => ({ entryId, holeNo: i + 1, strokes }));
-    await gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [...all(ids['Mwila']!, 5), ...all(ids['Phiri']!, 4)] });
+    await gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [...all(ids['Mwila']!, 5), ...all(ids['Phiri']!, 4)] }, { now: PLAYDAY });
     await gd.publishGolfResults(w.client, ORG, { competitionId: gid });
     await gd.publishGolfResults(w.client, ORG, { competitionId: gid });
     const rounds = [...w.t.golf_rounds!.values()];
@@ -162,7 +171,7 @@ describe('golf days: flights and scoring', () => {
     const { w, gid, ids } = await ready();
     await gd.publishGolfResults(w.client, ORG, { competitionId: gid });
     expect(sent.at(-1)!.type).toBe('golf_results');
-    await expect(gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] })).rejects.toThrow(/locked/);
+    await expect(gd.saveGolfScores(w.client, ORG, { competitionId: gid, scores: [{ entryId: ids['Mwila']!, holeNo: 1, strokes: 4 }] }, { now: PLAYDAY })).rejects.toThrow(/locked/);
   });
 
   it('side contests: only the ones set up, won by a player in the field', async () => {

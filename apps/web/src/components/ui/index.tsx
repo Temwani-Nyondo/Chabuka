@@ -249,7 +249,8 @@ export function Badge({ tone = 'neutral', children, className }: { tone?: Tone; 
 }
 
 export function initials(name: string | null | undefined): string {
-  const parts = (name ?? '').trim().split(/\s+/).filter(Boolean);
+  // Words only: "Sim Kabulonga XI (test)" gave "S(" from the bracketed word.
+  const parts = (name ?? '').replace(/[^\p{L}\p{N}\s]/gu, ' ').trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return '?';
   return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '')).toUpperCase();
 }
@@ -324,7 +325,8 @@ export function FormGuide({ results, size }: { results: Result[]; size?: number 
 export function StatTile({ value, label }: { value: ReactNode; label: string }) {
   return (
     <div className="flex flex-col items-center rounded-2xl border border-line bg-surface px-2 py-3">
-      <span className="tnum text-[22px] font-extrabold leading-tight">{value}</span>
+      {/* Never wraps ("0-1-0" used to break onto two lines on a phone); long values step down a size instead. */}
+      <span className={cx('tnum whitespace-nowrap font-extrabold leading-tight', String(value ?? '').length > 4 ? 'text-[18px]' : 'text-[22px]')}>{value}</span>
       <span className="text-[11px] font-bold text-muted">{label}</span>
     </div>
   );

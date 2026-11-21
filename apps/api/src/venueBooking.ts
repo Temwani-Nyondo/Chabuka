@@ -761,6 +761,22 @@ function fits(av: AvailabilityView, startTime: string, hours: number, players = 
   return av.tee ? slot.unitsFree >= players : slot.maxHours >= hours;
 }
 
+const hhmm = (min: number) => `${String(Math.floor(min / 60) % 24).padStart(2, '0')}:${String(min % 60).padStart(2, '0')}`;
+
+/** Why a single requested time can't be booked, in words a player can act on (not just "no longer free"). */
+function whyNotFree(av: AvailabilityView, venue: VenueRow, date: string, startTime: string, hours: number): string {
+  if (av.closed) return 'The venue is closed that day. Pick another day.';
+  const window = venue.opening_hours && !isLinked(venue) ? openWindowFor(date, venue.opening_hours) : null;
+  const [h, m] = startTime.split(':').map(Number);
+  const start = (h ?? 0) * 60 + (m ?? 0);
+  if (window && (start < window.open || start >= window.close)) return `The venue is open ${hhmm(window.open)} to ${hhmm(window.close)} that day.`;
+  if (window && !av.tee && start + hours * 60 > window.close) return `The venue closes at ${hhmm(window.close)}, so the latest a ${hours}-hour booking can start is ${hhmm(window.close - hours * 60)}.`;
+  const slot = av.slots.find((s) => s.start === startTime);
+  if (slot && av.tee && slot.unitsFree > 0) return `Only ${slot.unitsFree} ${slot.unitsFree === 1 ? 'place is' : 'places are'} left at that tee time.`;
+  if (slot && !av.tee && slot.maxHours > 0) return `Only ${slot.maxHours} ${slot.maxHours === 1 ? 'hour is' : 'hours are'} free from ${startTime}.`;
+  return 'That time is already taken. Pick another time.';
+}
+
 /** A tee time is one interval long; anything else runs for its hours. */
 function teeWindow(date: string, startTime: string, tee: TeeConfig): { startsAt: string; endsAt: string } {
   const startsAt = venueInstant(date, startTime).toISOString();
@@ -902,7 +918,11 @@ export async function requestSpace(svc: SupabaseClient, userId: string, raw: unk
     if (av.tee && !input.players) throw new ActionError(400, 'How many golfers?');
     (fits(av, input.startTime, input.hours, input.players ?? 1) ? free : taken).push(d);
   }
-  if (free.length === 0) throw new ActionError(409, dates.length === 1 ? 'That time is no longer free.' : 'None of those weeks are free at that time.');
+  if (free.length === 0) {
+    if (dates.length > 1) throw new ActionError(409, 'None of those weeks are free at that time.');
+    const av = await getAvailability(svc, venue.id, input.spaceId, input.date, deps);
+    throw new ActionError(409, whyNotFree(av, venue, input.date, input.startTime, input.hours));
+  }
   if (taken.length > 0 && !input.skipTaken) return { state: 'needs_confirm', free, taken };
 
   let groupId: string | null = null;

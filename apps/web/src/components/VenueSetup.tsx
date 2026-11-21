@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link2, Plus, Trash2, UserPlus } from 'lucide-react';
-import { DAY_LABELS, venueInstant, venueTime, venueYmd } from '@chabuka/shared';
+import { DAY_LABELS, venueInstant, venueTime, venueYmd, formatMoney } from '@chabuka/shared';
 import type { DayKey, WeeklyHours } from '@chabuka/shared';
 import { runAction } from '../lib/api';
 import { fetchStaff, fetchWaitAppInfo, setWaitAppLink, startWaitAppConnect } from '../lib/venueBooking';
@@ -122,8 +122,8 @@ export function SpacesCard({ venueId, cal, token, act, venueSports }: { venueId:
                 s.booking_kind === 'tee' && s.tee ? `Tee times every ${s.tee.intervalMin} min, up to ${s.tee.playersPerSlot}` : null,
                 s.booking_kind !== 'tee' && s.unit_count > 1 ? `${s.unit_count} units` : null,
                 s.booking_kind === 'tee'
-                  ? s.tee?.pricePerPlayer ? `${s.currency ?? 'ZMW'} ${s.tee.pricePerPlayer} per player` : 'Free'
-                  : s.hourly_price ? `${s.currency ?? ''} ${s.hourly_price}/hr`.trim() : 'Free',
+                  ? s.tee?.pricePerPlayer ? `${formatMoney(s.tee.pricePerPlayer, s.currency)} per player` : 'Free'
+                  : s.hourly_price ? `${formatMoney(s.hourly_price, s.currency)}/hr` : 'Free',
                 s.booking_mode === 'instant' ? 'Instant, paid up front' : 'You approve each request',
               ]
                 .filter(Boolean)

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useSearchParams } from 'react-router-dom';
 import { Plus, Trophy } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_CATEGORIES, COMPETITION_STATUS_LABELS, formatLabel } from '@chabuka/shared';
+import { CATEGORY_LABELS, COMPETITION_CATEGORIES, competitionStatusLabel, formatLabel } from '@chabuka/shared';
 import type { CompetitionCategory, Sport } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { supabase } from '../lib/supabase';
@@ -77,7 +77,7 @@ export default function CompetitionsPage() {
             {[sportName(c.sport_id), formatLabel(c.format), c.area].filter(Boolean).join(' · ')}
           </span>
           <span className="mt-1 flex flex-wrap items-center gap-1.5">
-            <Badge tone={c.status === 'registration' ? 'hl' : c.status === 'live' ? 'brand' : 'muted'}>{COMPETITION_STATUS_LABELS[c.status]}</Badge>
+            <Badge tone={c.status === 'registration' ? 'hl' : c.status === 'live' ? 'brand' : 'muted'}>{competitionStatusLabel(c.status, c.starts_on)}</Badge>
             {isRace ? null : (
               <span className="text-[12px] font-semibold text-muted">
                 {l.entryTeamIds.length}/{c.max_entries} teams

@@ -14,7 +14,16 @@ export interface Note {
 const READ_EVENT = 'chabuka:notifications-read';
 
 function text(value: unknown): string {
+  // Numbers too (a bib, a position, a count): they used to vanish, leaving "is in: bib".
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
   return typeof value === 'string' ? value : '';
+}
+
+/** "Sat 22 Nov, 08:00" rather than the browser's raw "22/11/2026, 08:00:00". */
+function when(value: unknown): string {
+  const d = new Date(text(value));
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
 }
 
 // One place that turns a stored notification into words and a destination.
@@ -28,6 +37,12 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         title: 'New event in your circle',
         body: text(p.title),
         href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
+      };
+    case 'sport_requested':
+      return {
+        title: `A player asked for a new sport: ${text(p.name) || 'unnamed'}`,
+        body: 'Add it to the sports list if it should be on Chabuka.',
+        href: '/admin/venues',
       };
     case 'game_invite':
       return {
@@ -67,7 +82,7 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
             : decision === 'decline'
               ? 'Your booking was declined'
               : 'Your booking was answered',
-        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : '', text(p.note)].filter(Boolean).join(' - '),
+        body: [text(p.title), when(p.startsAt), text(p.note)].filter(Boolean).join(' - '),
         href: text(p.venueId) ? `/venues/${text(p.venueId)}` : '/explore',
       };
     }
@@ -177,7 +192,7 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
     case 'booking_cancelled_by_player':
       return {
         title: Number(p.count ?? 1) > 1 ? `${text(p.count)} bookings were cancelled` : 'A booking was cancelled',
-        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        body: [text(p.title), when(p.startsAt)].filter(Boolean).join(' - '),
         href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage` : '/venues/dashboard',
       };
     case 'venue_staff_added':
@@ -203,10 +218,10 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
         href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : null,
       };
     case 'game_postponed': {
-      const when = text(p.newDate) ? new Date(text(p.newDate)).toLocaleString() : '';
+      const newTime = when(p.newDate);
       return {
         title: text(p.newDate) ? 'A game you joined has a new time' : 'A game you joined was postponed',
-        body: [text(p.title), when ? `now ${when}` : '', text(p.reason)].filter(Boolean).join(' - '),
+        body: [text(p.title), newTime ? `now ${newTime}` : '', text(p.reason)].filter(Boolean).join(' - '),
         href: text(p.matchId) ? `/games/${encodeURIComponent(text(p.matchId))}` : '/explore',
       };
     }
@@ -233,22 +248,22 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
     case 'space_booking_requested':
       return {
         title: p.instant ? 'New booking, waiting for payment' : 'New booking request',
-        body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        body: [text(p.title), text(p.spaceName), when(p.startsAt)].filter(Boolean).join(' - '),
         href: '/venues/dashboard',
       };
     case 'space_booking_accepted':
       return { title: 'The venue accepted your booking', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
     case 'space_booking_paid':
-      return { title: 'Your booking is confirmed', body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+      return { title: 'Your booking is confirmed', body: [text(p.title), text(p.spaceName), when(p.startsAt)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
     case 'space_booking_cancelled':
       return { title: 'Your booking was cancelled', body: [text(p.title), text(p.spaceName)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
     case 'space_booking_paid_owner':
-      return { title: 'A booking was paid', body: [text(p.title), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '), href: '/venues/dashboard' };
+      return { title: 'A booking was paid', body: [text(p.title), text(p.spaceName), when(p.startsAt)].filter(Boolean).join(' - '), href: '/venues/dashboard' };
     case 'booking_requested': {
       const weeks = Number(p.weeks ?? 1);
       return {
         title: weeks > 1 ? `New booking request, every week for ${weeks} weeks` : 'New booking request',
-        body: [text(p.who), text(p.spaceName), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        body: [text(p.who), text(p.spaceName), when(p.startsAt)].filter(Boolean).join(' - '),
         href: text(p.venueId) ? `/venues/${text(p.venueId)}/manage?tab=requests` : '/venues/dashboard',
       };
     }
@@ -288,7 +303,7 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
     case 'availability_requested':
       return {
         title: 'Are you available?',
-        body: [text(p.title), text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : ''].filter(Boolean).join(' - '),
+        body: [text(p.title), when(p.startsAt)].filter(Boolean).join(' - '),
         href: text(p.subjectType) === 'match' && text(p.subjectId) ? `/games/${text(p.subjectId)}` : text(p.teamId) ? `/teams/${text(p.teamId)}` : null,
       };
     case 'team_join_request':
@@ -328,7 +343,7 @@ export function describeNote(n: Note): { title: string; body: string; href: stri
     case 'fixture_cancelled':
       return {
         title: n.type === 'fixture_cancelled' ? `${text(p.name)}: a game was cancelled` : n.type === 'fixture_postponed' ? `${text(p.name)}: a game was postponed` : `${text(p.name)}: game scheduled`,
-        body: text(p.startsAt) ? new Date(text(p.startsAt)).toLocaleString() : '',
+        body: when(p.startsAt),
         href: `/competitions/${text(p.competitionId)}?tab=fixtures`,
       };
     case 'result_to_confirm':

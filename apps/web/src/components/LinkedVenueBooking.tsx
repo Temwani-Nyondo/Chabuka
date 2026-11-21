@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { formatMoney } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import {
   bookVenueSpace,
@@ -14,7 +15,7 @@ const todayYmd = () => {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 };
 
-const money = (n: number, currency: string | null) => `${currency ?? ''} ${n % 1 === 0 ? n : n.toFixed(2)}`.trim();
+const money = (n: number, currency: string | null) => formatMoney(n, currency);
 
 const STATUS_TEXT: Record<SpaceBooking['status'], string> = {
   pending: 'Waiting for the venue',

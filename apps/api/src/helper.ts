@@ -749,6 +749,8 @@ const GENERAL_PROMPT = [
   'they returned in the same reply. When the user asks "are you done", answer from tool results already',
   'in the conversation instead of re-running the same searches.',
   'Never restate facts the player already knows: their name, area, sport, or stated time preference.',
+  'Answer only what the latest message asks. Do not repeat their schedule or anything you already told them earlier in',
+  'the conversation unless they ask for it again. Quote prices and age limits exactly as the tools give them, per distance.',
   'No filler agreement, no rule lectures unless asked. At most one question per reply.',
   'Transcripts garble place names: resolve every ambiguous place against the player\'s profile area,',
   'memories, and home city first. A far-flung place that sounds like a local one (Osaka for Lusaka)',
@@ -1040,7 +1042,43 @@ const AFFIRMATIVE =
   /\b(yes|yep|yeah|yup|sure|ok|okay|confirm(?:ed)?|go ahead|do it|please do|book it|send it|post it|sounds good|let'?s do it|that'?s right|correct)\b/i;
 
 // Everything Gaffer can call: context reads first, then the actions.
-const HELPER_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [...READ_TOOL_DEFS, ...ACTION_TOOLS];
+export const HELPER_TOOLS: OpenAI.Chat.ChatCompletionTool[] = [...READ_TOOL_DEFS, ...ACTION_TOOLS];
+
+// --- Tool router -----------------------------------------------------------------------------------------------------
+// Every tool description goes to the model on every call: all 72 are ~16,500 tokens, which is most of what makes a
+// Gaffer reply slow. Before calling the model, pick the tools this conversation is about from plain words in the
+// player's message and the last few turns (so "yes" still has the booking tool Gaffer just offered). A core set is
+// always there; a message that matches no topic and isn't small talk gets every tool, so nothing is lost.
+const CORE_TOOLS = ['get_my_schedule', 'get_my_teams', 'search_matches', 'games_for_you', 'get_my_brief', 'save_memory', 'get_my_memories'];
+const TOOL_GROUPS: { words: RegExp; tools: string[] }[] = [
+  { words: /\b(golf|tee|handicap|stableford|birdie|par|round|course|fairway|green fee)\b/i, tools: ['get_my_golf', 'golf_courses', 'enter_golf_day', 'log_round', 'find_events', 'search_venues', 'venue_spaces', 'space_availability', 'request_space', 'cancel_space_booking'] },
+  { words: /\b(book|booking|pitch|court|venue|ground|field|hall|slot|space|reserve|hire|rent)\w*/i, tools: ['search_venues', 'venue_spaces', 'space_availability', 'venue_slots', 'request_space', 'request_booking', 'cancel_space_booking', 'cancel_booking', 'get_my_venues', 'add_place'] },
+  { words: /\b(race|run|running|marathon|10k|5k|half|tournament|league|cup|competition|event|enter|entry|register|series)\w*/i, tools: ['find_events', 'enter_race', 'register_team', 'register_entry', 'follow_competition', 'join_series', 'follow', 'unfollow'] },
+  { words: /\b(game|match|play|kick|5[- ]a[- ]side|pickup|join|leave|host|organi[sz]e|score|result|free tonight|tonight)\w*/i, tools: ['create_match', 'join_match', 'withdraw_match', 'propose_time', 'report_score', 'post_result', 'set_free_tonight', 'get_my_results', 'poll_status'] },
+  { words: /\b(team|squad|captain|challenge|opponent|rival|fixture|poll|position|lineup|line-up)\w*/i, tools: ['create_team', 'update_team', 'post_challenge', 'accept_challenge', 'decline_challenge', 'suggest_opponents', 'team_record', 'head_to_head', 'report_result', 'confirm_result', 'set_position', 'create_poll', 'answer_poll', 'register_team', 'poll_status'] },
+  { words: /\b(circle|group|community|announce|post)\w*/i, tools: ['get_my_circles', 'circle_posts', 'create_circle', 'join_circle', 'leave_circle', 'update_circle', 'post_announcement'] },
+  { words: /\b(invite|link|share|friend|bring|recruit|send)\w*/i, tools: ['share_link', 'invite_to_match', 'create_invite_link', 'claim_invite_link', 'get_my_circles'] },
+  { words: /\b(record|stats?|form|win|won|lost|draw|goals?|streak|history|rating|profile|sport|level|available|availability|area|name|follow\w*|news)\b/i, tools: ['get_my_record', 'get_my_results', 'team_record', 'head_to_head', 'get_my_profile', 'update_profile', 'set_sports', 'set_availability', 'set_game_types', 'add_discipline', 'add_place', 'remove_place', 'get_following', 'follow', 'unfollow'] },
+  { words: /\b(remember|forget|memory|memories)\b/i, tools: ['forget_memory', 'get_my_memories', 'save_memory'] },
+];
+// Small talk ("thanks", "how are you") needs nothing beyond the core tools. Any other message that names no topic
+// ("plan something") gets every tool, so a vague request is never answered with less than before.
+const SMALL_TALK = /^\s*(hi|hello|hey|hiya|yo|thanks|thank you|thx|cheers|ok|okay|cool|nice|great|good (morning|afternoon|evening|night)|how are you|how's it going|bye|see you|lol|haha)\b[\s!.?,]*\S{0,20}[\s!.?]*$/i;
+
+/** The tools for this turn, picked from the words in the latest message and the last few turns. */
+export function routeTools(message: string, recent: { role: string; content?: unknown }[]): OpenAI.Chat.ChatCompletionTool[] {
+  const text = [message, ...recent.slice(-3).map((m) => (typeof m.content === 'string' ? m.content : ''))].join('\n');
+  const wanted = new Set<string>(CORE_TOOLS);
+  let matched = false;
+  for (const g of TOOL_GROUPS) {
+    if (g.words.test(text)) {
+      matched = true;
+      for (const t of g.tools) wanted.add(t);
+    }
+  }
+  if (!matched && !SMALL_TALK.test(message)) return HELPER_TOOLS;
+  return HELPER_TOOLS.filter((t) => t.type === 'function' && wanted.has(t.function.name));
+}
 
 export interface HelperActionTaken {
   name: string;
@@ -1342,7 +1380,7 @@ export async function runHelperTurn(
       : known
         ? `${HELPER_SYSTEM_PROMPT} ${known}`
         : `${HELPER_SYSTEM_PROMPT} Loaded context: not available this turn, so use get_my_profile and get_my_memories if you need them.`;
-  const toolset = mode === 'onboarding' ? ONBOARDING_TOOLS : HELPER_TOOLS;
+  const toolset = mode === 'onboarding' ? ONBOARDING_TOOLS : routeTools(params.message, params.history ?? []);
   const chat: ChatFn = deps?.chat ?? chatOnce;
   const execute: ExecuteFn = deps?.execute ?? ((name, body) => runAction(params.db, params.userId, name, body));
   const read: ReadToolFn =

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Download, Flag, HandHeart, MapPin, Search, Timer, Upload, Users } from 'lucide-react';
-import { CATEGORY_LABELS, POI_LABELS, RESULT_STATUS_LABELS, formatDuration, pace, parseResultsCsv, toGpx, venueTime, venueYmd } from '@chabuka/shared';
+import { CATEGORY_LABELS, POI_LABELS, RESULT_STATUS_LABELS, formatDuration, pace, parseResultsCsv, toGpx, venueTime, venueYmd, formatMoney } from '@chabuka/shared';
 import type { CompetitionCategory, CsvResultRow } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { runAction } from '../lib/api';
@@ -23,7 +23,7 @@ import { fieldCls } from '../components/CompetitionForms';
 type Tab = 'overview' | 'route' | 'runners' | 'results' | 'manage';
 
 const dayFmt = (iso: string) => new Date(`${iso.slice(0, 10)}T12:00:00Z`).toLocaleDateString(undefined, { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
-const money = (d: RaceDistance) => (d.price > 0 ? `${d.currency} ${d.price}` : 'Free');
+const money = (d: RaceDistance) => (d.price > 0 ? formatMoney(d.price, d.currency) : 'Free');
 
 function countdown(iso: string): string | null {
   const ms = new Date(iso).getTime() - Date.now();

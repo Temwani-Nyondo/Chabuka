@@ -64,6 +64,12 @@ function gameRules(g: { level?: string | null; format?: string | null; notes?: s
   ].filter((x): x is string => !!x);
 }
 
+function raceLabel(meta: { min: number | null; max: number; currency: string | null } | undefined): string {
+  if (!meta || !meta.max) return 'Free entry';
+  if (!meta.min) return `Free to ${money(meta.max, meta.currency)}`;
+  return meta.min === meta.max ? money(meta.min, meta.currency) : `From ${money(meta.min, meta.currency)}`;
+}
+
 function appUrl(): string {
   return (process.env.APP_URL ?? 'https://chabuka.waitapp.online').replace(/\/+$/, '');
 }
@@ -165,15 +171,16 @@ export async function readSportFeed(
     category?: string | null;
   }[]);
   const raceIds = comps.filter((c) => c.kind === 'race').map((c) => c.id);
-  const raceMeta = new Map<string, { starts: string | null; min: number | null; currency: string | null; ages: string[] }>();
+  const raceMeta = new Map<string, { starts: string | null; min: number | null; max: number; currency: string | null; ages: string[] }>();
   if (raceIds.length) {
     const { data: dists } = await svc.from('race_distances').select('competition_id,name,starts_at,price,currency,min_age').in('competition_id', raceIds);
     for (const d of (dists ?? []) as { competition_id: string; name?: string; starts_at: string; price: number | string; currency: string; min_age?: number | null }[]) {
-      const cur = raceMeta.get(d.competition_id) ?? { starts: null, min: null, currency: d.currency, ages: [] };
+      const cur = raceMeta.get(d.competition_id) ?? { starts: null, min: null, max: 0, currency: d.currency, ages: [] };
       const price = Number(d.price);
       raceMeta.set(d.competition_id, {
         starts: !cur.starts || d.starts_at < cur.starts ? d.starts_at : cur.starts,
         min: cur.min == null ? price : Math.min(cur.min, price),
+        max: Math.max(cur.max, price),
         currency: d.currency,
         ages: d.min_age ? [...cur.ages, `${d.name ?? 'Race'}: ${d.min_age}+`] : cur.ages,
       });
@@ -236,7 +243,8 @@ export async function readSportFeed(
       lat: null,
       lng: null,
       startsAt: meta?.starts ?? `${c.starts_on}T00:00:00.000Z`,
-      priceLabel: race ? (meta?.min ? `From ${money(meta.min, meta.currency)}` : 'Free entry') : null,
+      // A race with a free and a paid distance is neither "free" nor "from K0": say both ends.
+      priceLabel: race ? raceLabel(meta) : null,
       spotsLeft: race ? null : Math.max(0, c.max_entries - (entered.get(c.id) ?? 0)),
       image: c.banner_url,
       chabukaUrl: `${base}/${race ? 'races' : 'competitions'}/${c.id}`,

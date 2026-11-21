@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useDataChanged } from '../lib/dataChanged';
-import { Link } from 'react-router-dom';
-import { Building, CalendarDays, Plus, Radio, Settings, Shield } from 'lucide-react';
+import { Link, useSearchParams } from 'react-router-dom';
+import { Building, CalendarDays, LogOut, Plus, Radio, Settings, Shield } from 'lucide-react';
 import { LEVEL_LABELS, ageBand } from '@chabuka/shared';
 import type { Level } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
@@ -25,7 +25,7 @@ import type { MyRace } from '../lib/races';
 import { formatDuration, pace } from '@chabuka/shared';
 import { dayShort, sportLabel, statusBadge, timeLabel } from '../components/GameCard';
 import { requestCreate } from '../components/AppShell';
-import { Avatar, Badge, ButtonLink, Card, Crest, EmptyState, ListRow, Section, SectionLink, Skeleton, StatTile, cx } from '../components/ui';
+import { Avatar, Badge, Button, ButtonLink, Card, Crest, EmptyState, ListRow, Section, SectionLink, Segmented, Skeleton, StatTile, cx } from '../components/ui';
 
 interface SportLevel {
   name: string;
@@ -42,8 +42,11 @@ function weekStart(t: number): number {
 const WEEKS = 16;
 
 export default function ProfilePage() {
-  const { profile, user, session } = useAuth();
+  const { profile, user, session, signOut } = useAuth();
   const token = session?.access_token;
+  const [params, setParams] = useSearchParams();
+  const tab: 'profile' | 'stats' = params.get('tab') === 'stats' ? 'stats' : 'profile';
+  const setTab = (t: 'profile' | 'stats') => setParams(t === 'stats' ? { tab: 'stats' } : {}, { replace: true });
   const [upcoming, setUpcoming] = useState<MatchListing[]>([]);
   const [past, setPast] = useState<MatchListing[]>([]);
   const [bookings, setBookings] = useState<MyBooking[]>([]);
@@ -134,9 +137,15 @@ export default function ProfilePage() {
         <div className="flex flex-col gap-4 px-4 pb-5">
           <div className="-mt-9 flex items-end justify-between gap-3">
             <Avatar name={profile?.name} src={profile?.photo_url} size={76} className="border-4 border-surface" />
-            <ButtonLink to="/you/settings" size="sm" icon={<Settings size={15} />}>
-              Settings
-            </ButtonLink>
+            {/* Sign out sits right here: it used to be at the very bottom of Settings. */}
+            <div className="flex items-center gap-2">
+              <ButtonLink to="/you/settings" size="sm" icon={<Settings size={15} />}>
+                Settings
+              </ButtonLink>
+              <Button size="sm" variant="ghost" icon={<LogOut size={15} />} onClick={() => void signOut()}>
+                Sign out
+              </Button>
+            </div>
           </div>
           <div>
             <h1 className="m-0">{profile?.name ?? 'New player'}</h1>
@@ -152,195 +161,211 @@ export default function ProfilePage() {
               ))}
             </div>
           ) : null}
-          {myRecord ? (
-            <RecordCard data={myRecord} />
-          ) : (
-          <>
-          <div className="grid grid-cols-4 gap-2">
-            <StatTile value={loading ? '–' : record.played} label="Played" />
-            <StatTile value={loading ? '–' : record.hosted} label="Hosted" />
-            <StatTile value={loading ? '–' : `${record.streak}`} label="Wk streak" />
-            <StatTile value={loading ? '–' : teams.length} label="Teams" />
-          </div>
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between">
-              <span className="text-[12px] font-bold text-muted">Last {WEEKS} weeks</span>
-              {record.bySport.length > 0 ? (
-                <span className="text-[12px] text-muted">{record.bySport.map(([n, c]) => `${sportLabel(n)} ${c}`).join(' · ')}</span>
-              ) : null}
-            </div>
-            <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }} role="img" aria-label={`Games per week over the last ${WEEKS} weeks`}>
-              {record.grid.map((g) => (
-                <span
-                  key={g.w}
-                  title={`${new Date(g.w).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}: ${g.n} game${g.n === 1 ? '' : 's'}`}
-                  className={cx('h-6 rounded-[5px]', g.n === 0 ? 'bg-surface-2' : g.n === 1 ? 'bg-brand/45' : g.n === 2 ? 'bg-brand/70' : 'bg-brand')}
-                />
-              ))}
-            </div>
-          </div>
-          </>
-          )}
         </div>
       </section>
 
       <div className="flex flex-col gap-6 px-4">
-        <FreeTonightCard sports={allSports} />
-        {/* Golf: shown once there is golf in their life here (or golf among their sports, to start logging rounds). */}
-        <GolfRecord always={sports.some((sp) => sp.name.toLowerCase() === 'golf')} />
-
-        {/* Personal invite link: friends who sign up with it are recorded as brought by this player. */}
-        <Card className="flex items-center justify-between gap-3 p-3.5">
-          <span className="min-w-0 text-[14px]">
-            <strong className="block">Bring your people</strong>
-            <span className="text-muted">More friends on Chabuka means fuller games near you.</span>
-          </span>
-          <ShareInvite size="sm" />
-        </Card>
-
-        <Section title="Schedule" count={upcoming.length + bookings.length} action={<SectionLink to="/explore">Find games</SectionLink>}>
-          <span id="schedule" className="sr-only" />
-          {loading ? (
-            <Skeleton className="h-24" />
-          ) : upcoming.length + bookings.length === 0 ? (
-            <EmptyState icon={<CalendarDays size={22} />} title="Nothing booked" body="Games you join or host, and courts you book, line up here." />
-          ) : (
-            <Card className="overflow-hidden">
-              {upcoming.map((l) => (
-                <ListRow
-                  key={l.match.id}
-                  to={`/games/${l.match.id}`}
-                  leading={<DateBlock iso={l.match.starts_at} />}
-                  title={l.match.title}
-                  sub={[sportLabel(l.sport?.name), l.isOrganiser ? 'You host' : null, statusBadge(l)?.label].filter(Boolean).join(' · ')}
-                />
-              ))}
-              {bookings.map((b) => (
-                <ListRow
-                  key={b.id}
-                  to={`/venues/${b.venueId}`}
-                  leading={<DateBlock iso={b.startsAt} />}
-                  title={`${b.venueName} · ${b.spaceName}`}
-                  sub={[
-                    `${timeLabel(b.startsAt)}`,
-                    b.status === 'confirmed' ? (b.checkoutUrl ? 'Accepted, payment due' : 'Booked') : 'Waiting for the venue',
-                    b.code ? `code ${b.code}` : null,
-                    b.groupId ? 'weekly' : null,
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                />
-              ))}
-            </Card>
-          )}
-        </Section>
-
-        {past.length > 0 ? (
-          <Section title="Recent games">
-            <Card className="overflow-hidden">
-              {past.slice(0, 6).map((l) => {
-                const scored = l.match.home_score != null && l.match.away_score != null;
-                return (
-                  <ListRow
-                    key={l.match.id}
-                    to={`/games/${l.match.id}`}
-                    leading={<DateBlock iso={l.match.starts_at} />}
-                    title={l.match.title}
-                    sub={[sportLabel(l.sport?.name), l.match.status === 'finished' ? 'Played' : statusBadge(l)?.label].filter(Boolean).join(' · ')}
-                    trailing={scored ? <span className="tnum font-extrabold">{l.match.home_score}–{l.match.away_score}</span> : undefined}
+        {/* Numbers and history live on their own tab: the profile itself stays about what's next and who you play with. */}
+        <Segmented
+          label="Profile sections"
+          options={[{ value: 'profile', label: 'Profile' }, { value: 'stats', label: 'Stats' }]}
+          value={tab}
+          onChange={setTab}
+        />
+        {tab === 'stats' ? (
+          <>
+            <Card className="flex flex-col gap-3 p-3.5">
+            {myRecord ? (
+              <RecordCard data={myRecord} />
+            ) : (
+            <>
+            <div className="grid grid-cols-4 gap-2">
+              <StatTile value={loading ? '–' : record.played} label="Played" />
+              <StatTile value={loading ? '–' : record.hosted} label="Hosted" />
+              <StatTile value={loading ? '–' : `${record.streak}`} label="Wk streak" />
+              <StatTile value={loading ? '–' : teams.length} label="Teams" />
+            </div>
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between">
+                <span className="text-[12px] font-bold text-muted">Last {WEEKS} weeks</span>
+                {record.bySport.length > 0 ? (
+                  <span className="text-[12px] text-muted">{record.bySport.map(([n, c]) => `${sportLabel(n)} ${c}`).join(' · ')}</span>
+                ) : null}
+              </div>
+              <div className="grid gap-1" style={{ gridTemplateColumns: `repeat(${WEEKS}, minmax(0, 1fr))` }} role="img" aria-label={`Games per week over the last ${WEEKS} weeks`}>
+                {record.grid.map((g) => (
+                  <span
+                    key={g.w}
+                    title={`${new Date(g.w).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}: ${g.n} game${g.n === 1 ? '' : 's'}`}
+                    className={cx('h-6 rounded-[5px]', g.n === 0 ? 'bg-surface-2' : g.n === 1 ? 'bg-brand/45' : g.n === 2 ? 'bg-brand/70' : 'bg-brand')}
                   />
-                );
-              })}
+                ))}
+              </div>
+            </div>
+            </>
+            )}
             </Card>
-          </Section>
-        ) : null}
+            {/* Golf: shown once there is golf in their life here (or golf among their sports, to start logging rounds). */}
+            <GolfRecord always={sports.some((sp) => sp.name.toLowerCase() === 'golf')} />
+            {past.length > 0 ? (
+              <Section title="Recent games">
+                <Card className="overflow-hidden">
+                  {past.slice(0, 6).map((l) => {
+                    const scored = l.match.home_score != null && l.match.away_score != null;
+                    return (
+                      <ListRow
+                        key={l.match.id}
+                        to={`/games/${l.match.id}`}
+                        leading={<DateBlock iso={l.match.starts_at} />}
+                        title={l.match.title}
+                        sub={[sportLabel(l.sport?.name), l.match.status === 'finished' ? 'Played' : statusBadge(l)?.label].filter(Boolean).join(' · ')}
+                        trailing={scored ? <span className="tnum font-extrabold">{l.match.home_score}–{l.match.away_score}</span> : undefined}
+                      />
+                    );
+                  })}
+                </Card>
+              </Section>
+            ) : null}
 
-        {myRaces.length > 0 ? <RacesSection races={myRaces} /> : null}
+            {myRaces.length > 0 ? <RacesSection races={myRaces} /> : null}
+          </>
+        ) : (
+          <>
+            <FreeTonightCard sports={allSports} />
 
-        <Section title="Teams" count={teams.length} action={<SectionLink to="/teams">Manage</SectionLink>}>
-          {teams.length === 0 ? (
-            <EmptyState
-              icon={<Shield size={22} />}
-              title="Not in a team yet"
-              body="Start one, or ask your captain for an invite link."
-              action={
-                <button type="button" onClick={() => requestCreate('team')} className="cursor-pointer border-0 bg-transparent text-[14px] font-bold text-brand-text">
-                  Start a team
-                </button>
-              }
-            />
-          ) : (
-            <Card className="overflow-hidden">
-              {teams.map(({ team, role }) => (
-                <ListRow
-                  key={team.id}
-                  to={`/teams/${team.id}`}
-                  leading={<Crest id={team.id} name={team.name} src={team.logo_url} />}
-                  title={team.name}
-                  sub={[team.area, team.category].filter(Boolean).join(' · ')}
-                  trailing={role !== 'player' ? <Badge tone="brand">{role === 'owner' ? 'Owner' : 'Captain'}</Badge> : undefined}
-                />
-              ))}
+            {/* Personal invite link: friends who sign up with it are recorded as brought by this player. */}
+            <Card className="flex items-center justify-between gap-3 p-3.5">
+              <span className="min-w-0 text-[14px]">
+                <strong className="block">Bring your people</strong>
+                <span className="text-muted">More friends on Chabuka means fuller games near you.</span>
+              </span>
+              <ShareInvite size="sm" />
             </Card>
-          )}
-        </Section>
 
-        <Section title="Circles" count={circles.length} action={<SectionLink to="/circles">{circles.length ? 'All' : 'Find circles'}</SectionLink>}>
-          {circles.length === 0 ? (
-            <p className="m-0 text-[14px] text-muted">Join a circle for your sport and area to hear about its games.</p>
-          ) : (
-            <Card className="overflow-hidden">
-              {circles.map(({ circle, memberCount }) => (
-                <ListRow
-                  key={circle.id}
-                  to="/circles"
-                  leading={
-                    circle.photo_url ? (
-                      <img src={circle.photo_url} alt="" className="h-10 w-10 shrink-0 rounded-xl object-cover" />
-                    ) : (
-                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-text">
-                        <Radio size={20} />
-                      </span>
-                    )
+            <Section title="Schedule" count={upcoming.length + bookings.length} action={<SectionLink to="/explore">Find games</SectionLink>}>
+              <span id="schedule" className="sr-only" />
+              {loading ? (
+                <Skeleton className="h-24" />
+              ) : upcoming.length + bookings.length === 0 ? (
+                <EmptyState icon={<CalendarDays size={22} />} title="Nothing booked" body="Games you join or host, and courts you book, line up here." />
+              ) : (
+                <Card className="overflow-hidden">
+                  {upcoming.map((l) => (
+                    <ListRow
+                      key={l.match.id}
+                      to={`/games/${l.match.id}`}
+                      leading={<DateBlock iso={l.match.starts_at} />}
+                      title={l.match.title}
+                      sub={[sportLabel(l.sport?.name), l.isOrganiser ? 'You host' : null, statusBadge(l)?.label].filter(Boolean).join(' · ')}
+                    />
+                  ))}
+                  {bookings.map((b) => (
+                    <ListRow
+                      key={b.id}
+                      to={`/venues/${b.venueId}`}
+                      leading={<DateBlock iso={b.startsAt} />}
+                      title={`${b.venueName} · ${b.spaceName}`}
+                      sub={[
+                        `${timeLabel(b.startsAt)}`,
+                        b.status === 'confirmed' ? (b.checkoutUrl ? 'Accepted, payment due' : 'Booked') : 'Waiting for the venue',
+                        b.code ? `code ${b.code}` : null,
+                        b.groupId ? 'weekly' : null,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                    />
+                  ))}
+                </Card>
+              )}
+            </Section>
+
+
+            <Section title="Teams" count={teams.length} action={<SectionLink to="/teams">Manage</SectionLink>}>
+              {teams.length === 0 ? (
+                <EmptyState
+                  icon={<Shield size={22} />}
+                  title="Not in a team yet"
+                  body="Start one, or ask your captain for an invite link."
+                  action={
+                    <button type="button" onClick={() => requestCreate('team')} className="cursor-pointer border-0 bg-transparent text-[14px] font-bold text-brand-text">
+                      Start a team
+                    </button>
                   }
-                  title={circle.name}
-                  sub={`${memberCount} member${memberCount === 1 ? '' : 's'}`}
                 />
-              ))}
-            </Card>
-          )}
-        </Section>
+              ) : (
+                <Card className="overflow-hidden">
+                  {teams.map(({ team, role }) => (
+                    <ListRow
+                      key={team.id}
+                      to={`/teams/${team.id}`}
+                      leading={<Crest id={team.id} name={team.name} src={team.logo_url} />}
+                      title={team.name}
+                      sub={[team.area, team.category].filter(Boolean).join(' · ')}
+                      trailing={role !== 'player' ? <Badge tone="brand">{role === 'owner' ? 'Owner' : 'Captain'}</Badge> : undefined}
+                    />
+                  ))}
+                </Card>
+              )}
+            </Section>
 
-        <Section title="Venues you run" action={<SectionLink to="/venues/dashboard">{myVenues.length ? 'Dashboard' : 'List a venue'}</SectionLink>}>
-          {myVenues.length === 0 ? (
-            <Link to="/venues/dashboard" className="flex items-center gap-3 rounded-2xl border border-dashed border-line-strong p-3.5 text-[14px] text-muted no-underline">
-              <Plus size={18} /> Own a pitch or court? List it and take bookings on Chabuka.
-            </Link>
-          ) : (
-            <Card className="overflow-hidden">
-              {myVenues.map((v) => (
-                <ListRow
-                  key={v.id}
-                  to={`/venues/${v.id}/manage`}
-                  leading={
-                    <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2">
-                      <Building size={20} />
-                    </span>
-                  }
-                  title={v.name}
-                  sub={[v.area, v.role === 'manager' ? 'Manager' : null].filter(Boolean).join(' · ')}
-                  trailing={
-                    v.waiting > 0 ? (
-                      <Badge tone="live">{v.waiting} waiting</Badge>
-                    ) : v.status !== 'approved' ? (
-                      <Badge tone={v.status === 'pending' ? 'hl' : 'live'}>{v.status === 'pending' ? 'In review' : 'Not approved'}</Badge>
-                    ) : undefined
-                  }
-                />
-              ))}
-            </Card>
-          )}
-        </Section>
+            <Section title="Circles" count={circles.length} action={<SectionLink to="/circles">{circles.length ? 'All' : 'Find circles'}</SectionLink>}>
+              {circles.length === 0 ? (
+                <p className="m-0 text-[14px] text-muted">Join a circle for your sport and area to hear about its games.</p>
+              ) : (
+                <Card className="overflow-hidden">
+                  {circles.map(({ circle, memberCount }) => (
+                    <ListRow
+                      key={circle.id}
+                      to="/circles"
+                      leading={
+                        circle.photo_url ? (
+                          <img src={circle.photo_url} alt="" className="h-10 w-10 shrink-0 rounded-xl object-cover" />
+                        ) : (
+                          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-brand-soft text-brand-text">
+                            <Radio size={20} />
+                          </span>
+                        )
+                      }
+                      title={circle.name}
+                      sub={`${memberCount} member${memberCount === 1 ? '' : 's'}`}
+                    />
+                  ))}
+                </Card>
+              )}
+            </Section>
+
+            <Section title="Venues you run" action={<SectionLink to="/venues/dashboard">{myVenues.length ? 'Dashboard' : 'List a venue'}</SectionLink>}>
+              {myVenues.length === 0 ? (
+                <Link to="/venues/dashboard" className="flex items-center gap-3 rounded-2xl border border-dashed border-line-strong p-3.5 text-[14px] text-muted no-underline">
+                  <Plus size={18} /> Own a pitch or court? List it and take bookings on Chabuka.
+                </Link>
+              ) : (
+                <Card className="overflow-hidden">
+                  {myVenues.map((v) => (
+                    <ListRow
+                      key={v.id}
+                      to={`/venues/${v.id}/manage`}
+                      leading={
+                        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-surface-2">
+                          <Building size={20} />
+                        </span>
+                      }
+                      title={v.name}
+                      sub={[v.area, v.role === 'manager' ? 'Manager' : null].filter(Boolean).join(' · ')}
+                      trailing={
+                        v.waiting > 0 ? (
+                          <Badge tone="live">{v.waiting} waiting</Badge>
+                        ) : v.status !== 'approved' ? (
+                          <Badge tone={v.status === 'pending' ? 'hl' : 'live'}>{v.status === 'pending' ? 'In review' : 'Not approved'}</Badge>
+                        ) : undefined
+                      }
+                    />
+                  ))}
+                </Card>
+              )}
+            </Section>
+          </>
+        )}
       </div>
     </div>
   );

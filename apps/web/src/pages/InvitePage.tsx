@@ -181,11 +181,13 @@ export default function InvitePage() {
               {busy ? 'One moment...' : cta}
             </Button>
           ) : (
-            <Card className="p-4">
-              <h2 className="mb-1 text-[16px] font-bold">Create your account to {preview.kind === 'match' ? 'join' : 'continue'}</h2>
-              <p className="mb-3 text-[13px] text-muted">It takes a minute. Already on Chabuka? Sign in instead.</p>
+            // One sign-up card, not a card inside a card: the form already has its own heading.
+            <div className="flex flex-col gap-2">
+              <p className="m-0 text-[13px] text-muted">
+                {preview.kind === 'match' ? 'Create your account to join. It takes a minute.' : 'Create your account to continue. It takes a minute.'} Already on Chabuka? Choose Log in.
+              </p>
               <AuthForm key={inviteCode} initialMode="signup" onAuthenticated={() => { autoClaim.current = true; }} />
-            </Card>
+            </div>
           )}
         </>
       ) : null}

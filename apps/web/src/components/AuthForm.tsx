@@ -290,7 +290,8 @@ export default function AuthForm({
             />
           </svg>
         </span>
-        {busy === 'google' ? <span className="sr-only">Opening…</span> : null}
+        {/* Words, not just the logo: an icon-only button read as an empty grey bar. */}
+        <span>{busy === 'google' ? 'Opening Google...' : 'Continue with Google'}</span>
       </button>
       </div>
       ) : null}

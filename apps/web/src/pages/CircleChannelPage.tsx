@@ -75,7 +75,8 @@ export default function CircleChannelPage() {
     <div className="mx-auto flex w-full max-w-5xl flex-col pb-28 lg:pb-8">
       <header className="relative overflow-hidden">
         {c.cover_url ? <img src={c.cover_url} alt="" className="h-28 w-full object-cover lg:mt-4 lg:rounded-t-3xl" /> : <div className="h-16 bg-brand-soft lg:mt-4 lg:rounded-t-3xl" />}
-        <div className="flex items-end gap-3 px-4 pb-3">
+        {/* On a phone the name gets its own full-width line under the photo and buttons (it was squeezed to "Avon..."). */}
+        <div className="flex flex-wrap items-end gap-3 px-4 pb-3">
           <Link to="/circles" aria-label="Back to circles" className="-ml-2 mb-1 inline-flex h-10 w-10 items-center justify-center rounded-xl text-ink hover:bg-surface-2">
             <ChevronLeft size={22} />
           </Link>
@@ -86,13 +87,13 @@ export default function CircleChannelPage() {
               <Megaphone size={26} />
             </span>
           )}
-          <div className="min-w-0 flex-1">
-            <h1 className="m-0 truncate text-[22px]">{c.name}</h1>
+          <div className="order-last min-w-0 basis-full sm:order-none sm:basis-auto sm:flex-1">
+            <h1 className="m-0 line-clamp-2 text-[22px] leading-tight">{c.name}</h1>
             <p className="m-0 text-[13px] text-muted">
               {[c.area, `${view.memberCount} member${view.memberCount === 1 ? '' : 's'}`, view.role ? (view.role === 'owner' ? 'You own this circle' : 'You are an admin') : null].filter(Boolean).join(' · ')}
             </p>
           </div>
-          <div className="flex shrink-0 items-center gap-2">
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {view.isMember ? <NotifyMenu value={view.notify} onChange={(n) => void act(() => runAction('set_circle_notify', { circleId: id, notify: n }, token))} /> : null}
             {view.role ? <Button size="sm" icon={<Settings2 size={15} />} onClick={() => setAdmin(true)}>Manage</Button> : null}
             {!view.isMember && !view.removed ? (

@@ -93,6 +93,13 @@ describe('native venue: spaces and availability', () => {
     await expect(vb.upsertSpace(w.client, STRANGER, { venueId: VENUE, name: 'Court' })).rejects.toThrow(/owner or its staff/);
   });
 
+  it('says why a time cannot be booked: outside the hours, past closing, or another day', async () => {
+    const w = await withSpace();
+    await expect(vb.requestSpace(w.client, PLAYER, { venueId: VENUE, spaceId: w.spaceId, date: THU, startTime: '12:00', hours: 1 }, deps)).rejects.toThrow('The venue is open 08:00 to 12:00 that day.');
+    await expect(vb.requestSpace(w.client, PLAYER, { venueId: VENUE, spaceId: w.spaceId, date: THU, startTime: '11:00', hours: 2 }, deps)).rejects.toThrow(/closes at 12:00, so the latest a 2-hour booking can start is 10:00/);
+    await expect(vb.requestSpace(w.client, PLAYER, { venueId: VENUE, spaceId: w.spaceId, date: '2026-11-20', startTime: '09:00', hours: 1 }, deps)).rejects.toThrow(/closed that day/);
+  });
+
   it('will not delete a space with upcoming bookings', async () => {
     const w = await withSpace();
     await vb.requestSpace(w.client, PLAYER, { venueId: VENUE, spaceId: w.spaceId, date: THU, startTime: '09:00', hours: 1 }, deps);

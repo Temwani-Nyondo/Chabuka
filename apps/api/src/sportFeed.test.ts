@@ -68,6 +68,15 @@ describe('the public sport feed', () => {
     expect(feed.items.find((i) => i.kind === 'event')).toMatchObject({ spotsLeft: 7, checkoutUrl: null });
   });
 
+  it('a race with a free and a paid distance is not called free', async () => {
+    const w = world();
+    w.t.competitions!.set(id(210), { id: id(210), name: 'Fun Run', kind: 'race', sport_id: RUNNING, starts_on: '2026-11-28', status: 'registration', area: 'Lusaka', location: null, banner_url: null, max_entries: 500, waitapp_checkout_url: null });
+    w.t.race_distances!.set('f1', { id: 'f1', competition_id: id(210), name: '5K', starts_at: '2026-11-28T05:00:00Z', price: 0, currency: 'ZMW' });
+    w.t.race_distances!.set('f2', { id: 'f2', competition_id: id(210), name: '10K', starts_at: '2026-11-28T05:30:00Z', price: 150, currency: 'ZMW', min_age: 16 });
+    const race = (await readSportFeed(w.client, {}, NOW)).items.find((i) => i.kind === 'race')!;
+    expect(race).toMatchObject({ priceLabel: 'Free to K150', rules: ['10K: 16+'] });
+  });
+
   it("a venue appears for each of its sports, and a linked one books on WaitApp", async () => {
     const w = world();
     w.t.venues!.set(id(300), { id: id(300), name: 'Arena Five', area: 'Kabulonga', lat: -15.42, lng: 28.33, sports: ['Football'], photos: ['https://img.test/v.jpg'], price_note: null, status: 'approved' });

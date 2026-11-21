@@ -22,6 +22,9 @@ export const API_BASE =
   (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ??
   'http://localhost:3001';
 
+/** Where Gaffer's streamed replies go: the API service itself (VITE_GAFFER_STREAM_URL), so they arrive word by word. */
+const GAFFER_STREAM_BASE = (import.meta.env.VITE_GAFFER_STREAM_URL as string | undefined)?.replace(/\/$/, '') || API_BASE;
+
 export async function runAction<T = ActionResult>(
   name: ActionName,
   body: unknown,
@@ -188,13 +191,21 @@ export async function askGafferStream(
 ): Promise<GafferTurn> {
   const timeout = AbortSignal.timeout(GAFFER_TIMEOUT_MS);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
-  let res: Response;
-  try {
-    res = await fetch(`${API_BASE}/api/helper/stream`, {
+  const send = (base: string) =>
+    fetch(`${base}/api/helper/stream`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', authorization: `Bearer ${accessToken}` },
       body: JSON.stringify({ message, history, images, ...(opts.mode ? { mode: opts.mode } : {}) }),
       signal: combined,
+    });
+  let res: Response;
+  try {
+    // Straight to the API service when it is configured: Firebase Hosting (our own domain) holds a streamed reply
+    // back until it is complete, so through it the words all arrive at the end. If the direct route fails
+    // (network, blocked), the same request goes through our domain instead.
+    res = await send(GAFFER_STREAM_BASE).catch((err) => {
+      if (GAFFER_STREAM_BASE === API_BASE || signal?.aborted || timeout.aborted) throw err;
+      return send(API_BASE);
     });
   } catch {
     if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');

@@ -524,6 +524,20 @@ export const COMPETITION_STATUS_LABELS: Record<CompetitionStatus, string> = {
   cancelled: 'Cancelled',
 };
 
+/** A price as players read it: Kwacha as "K150" (as on WaitApp), anything else as "USD 12.50". */
+export function formatMoney(amount: number | string | null | undefined, currency?: string | null): string {
+  const n = Number(amount ?? 0);
+  const v = Number.isInteger(n) ? String(n) : n.toFixed(2);
+  const c = (currency ?? 'ZMW').toUpperCase();
+  return c === 'ZMW' ? `K${v}` : `${c} ${v}`;
+}
+
+/** The status as players should read it: a competition with its fixtures out but not yet started is not "Live". */
+export function competitionStatusLabel(status: CompetitionStatus, startsOn?: string | null, now = new Date()): string {
+  if (status === 'live' && startsOn && startsOn.slice(0, 10) > now.toISOString().slice(0, 10)) return 'Fixtures out';
+  return COMPETITION_STATUS_LABELS[status];
+}
+
 export const FIXTURE_STATUSES = ['scheduled', 'finished', 'postponed', 'disputed', 'cancelled'] as const;
 export const fixtureStatusSchema = z.enum(FIXTURE_STATUSES);
 export type FixtureStatus = z.infer<typeof fixtureStatusSchema>;

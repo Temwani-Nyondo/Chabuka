@@ -11,6 +11,7 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
   private payload: Row | Row[] | null = null;
   private wantCount = false;
   private conflict: string | null = null;
+  private ignoreDuplicates = false;
 
   constructor(
     private table: Map<string, Row>,
@@ -81,10 +82,11 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
     return this;
   }
 
-  upsert(row: Row, opts?: { onConflict?: string }): this {
+  upsert(row: Row, opts?: { onConflict?: string; ignoreDuplicates?: boolean }): this {
     this.op = 'upsert';
     this.payload = row;
     this.conflict = opts?.onConflict ?? null;
+    this.ignoreDuplicates = !!opts?.ignoreDuplicates;
     return this;
   }
 
@@ -134,6 +136,8 @@ export class FakeQuery implements PromiseLike<{ data: unknown; count: number | n
         if (this.op === 'insert' && existing && this.conflict === null) {
           return { data: null, count: null, error: null };
         }
+        // ON CONFLICT DO NOTHING: the existing row stays exactly as it was.
+        if (this.op === 'upsert' && existing && this.ignoreDuplicates) continue;
         this.table.set(key, { ...(existing ?? {}), ...row });
         written.push(this.table.get(key) ?? row);
       }

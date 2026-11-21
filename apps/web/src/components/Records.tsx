@@ -76,7 +76,7 @@ export function RecordCard({ data }: { data: MyRecordView }) {
       {data.season.games ? (
         <p className="m-0 rounded-xl bg-brand-soft px-3 py-2 text-[13px] text-brand-text">
           This year: {data.season.games} game{data.season.games === 1 ? '' : 's'}
-          {data.season.opponents ? `, ${data.season.opponents} teams faced` : ''}
+          {data.season.opponents ? `, ${data.season.opponents} ${data.season.opponents === 1 ? 'team' : 'teams'} faced` : ''}
           {data.season.goals ? `, ${data.season.goals} goals` : ''}
           {data.season.bestMonth ? `. Busiest month: ${data.season.bestMonth}` : ''}.
         </p>

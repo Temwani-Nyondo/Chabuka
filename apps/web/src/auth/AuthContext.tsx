@@ -56,8 +56,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     let cancelled = false;
-    const load = async (s: Session | null) => {
+    // getSession and the listener's first event both report the same session at start-up, and every token refresh
+    // reports it again: the profile is only (re)loaded when the signed-in user changes or their account changed.
+    let loadedFor: string | null | undefined;
+    const load = async (s: Session | null, force = false) => {
       setSession(s);
+      const uid = s?.user?.id ?? null;
+      if (!force && uid === loadedFor) return;
+      loadedFor = uid;
       if (s?.user) {
         const { profile: p, sportsCount: n } = await fetchProfile(s.user.id);
         if (cancelled) return;
@@ -74,8 +80,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     const {
       data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, s) => {
-      void load(s);
+    } = supabase.auth.onAuthStateChange((event, s) => {
+      void load(s, event === 'USER_UPDATED');
     });
     return () => {
       cancelled = true;

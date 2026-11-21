@@ -15,7 +15,7 @@ import {
   Trophy,
   Users,
 } from 'lucide-react';
-import { CATEGORY_LABELS, COMPETITION_STATUS_LABELS, formatLabel, SPONSOR_TIERS, SPONSOR_TIER_LABELS, roundName } from '@chabuka/shared';
+import { CATEGORY_LABELS, competitionStatusLabel, formatLabel, SPONSOR_TIERS, SPONSOR_TIER_LABELS, roundName } from '@chabuka/shared';
 import type { Fixture } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { followCompetitionAction, runAction } from '../lib/api';
@@ -180,7 +180,7 @@ export default function CompetitionPage() {
             <span className="rounded-full bg-white/90 px-2.5 py-0.5 text-[12px] font-bold text-[#0e1411]">{CATEGORY_LABELS[c.category]}</span>
             <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{formatLabel(c.format)}</span>
             {view.sport ? <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{sportLabel(view.sport.name)}</span> : null}
-            <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{COMPETITION_STATUS_LABELS[c.status]}</span>
+            <span className="rounded-full bg-black/35 px-2.5 py-0.5 text-[12px] font-bold">{competitionStatusLabel(c.status, c.starts_on)}</span>
           </div>
           <h1 className="m-0 max-w-[22ch] text-[30px] leading-tight text-white sm:text-[38px]">{c.name}</h1>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[14px] text-white/90">
@@ -852,7 +852,7 @@ function Manage({
               Running. {unscheduled.length ? `${unscheduled.length} game${unscheduled.length === 1 ? '' : 's'} still need a date.` : 'Every game has a date.'}
             </p>
           ) : (
-            <p className="m-0 text-[14px]">{COMPETITION_STATUS_LABELS[c.status]}.</p>
+            <p className="m-0 text-[14px]">{competitionStatusLabel(c.status, c.starts_on)}.</p>
           )}
         </Card>
       </Section>

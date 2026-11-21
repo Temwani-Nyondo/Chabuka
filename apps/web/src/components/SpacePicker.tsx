@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CalendarClock, Repeat } from 'lucide-react';
-import { addDaysYmd, priceLine, venueYmd } from '@chabuka/shared';
+import { addDaysYmd, priceLine, venueYmd, formatMoney } from '@chabuka/shared';
 import type { SpaceSlot } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { runAction } from '../lib/api';
@@ -102,8 +102,8 @@ export default function SpacePicker({
           </div>
           <Badge tone={space.hourly_price || space.tee?.pricePerPlayer ? 'neutral' : 'brand'}>
             {space.booking_kind === 'tee'
-              ? space.tee?.pricePerPlayer ? `${space.currency ?? 'ZMW'} ${space.tee.pricePerPlayer} per player` : 'Free'
-              : space.hourly_price ? `${space.currency ?? ''} ${space.hourly_price}/hr`.trim() : 'Free'}
+              ? space.tee?.pricePerPlayer ? `${formatMoney(space.tee.pricePerPlayer, space.currency)} per player` : 'Free'
+              : space.hourly_price ? `${formatMoney(space.hourly_price, space.currency)}/hr` : 'Free'}
           </Badge>
         </div>
       </Card>
@@ -243,7 +243,7 @@ function BookingSheet({
   const maxHours = tee ? 0 : Math.min(3, slot.maxHours);
   const price = tee
     ? tee.pricePerPlayer
-      ? `${av?.currency === 'ZMW' || !av?.currency ? 'K' : `${av.currency} `}${tee.pricePerPlayer * players}, paid at the course`
+      ? `${formatMoney(tee.pricePerPlayer * players, av?.currency)}, paid at the course`
       : 'Free'
     : priceLine({ hourly_price: av?.price ?? space.hourly_price, currency: av?.currency ?? space.currency }, hours, linked);
   const endLabel = (() => {

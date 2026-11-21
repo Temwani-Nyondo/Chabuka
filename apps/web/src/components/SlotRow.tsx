@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { formatMoney } from '@chabuka/shared';
 import type { VenueSlot } from '../lib/venues';
 import { deleteVenueSlotAction, updateVenueSlotAction } from '../lib/api';
 
@@ -75,7 +76,7 @@ export default function SlotRow({ slot, confirmed, token, onChanged, onError }: 
       <div className="row slot-row">
         <span className="muted">
           {fmt.format(new Date(slot.starts_at))} – {fmt.format(new Date(slot.ends_at))} · {confirmed}/{slot.capacity} booked
-          {slot.price != null && slot.price > 0 ? ` · ${slot.currency ?? ''} ${slot.price}` : ' · free'}
+          {slot.price != null && slot.price > 0 ? ` · ${formatMoney(slot.price, slot.currency)}` : ' · free'}
         </span>
         <span className="actions-row">
           <button className="btn btn-ghost" type="button" disabled={busy} onClick={() => setEditing(true)}>

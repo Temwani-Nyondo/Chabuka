@@ -688,12 +688,14 @@ describe('onboarding profile (Amendment 3)', () => {
     const same = (await addDiscipline(client, PLAYER_A, { name: 'hikes' })) as { state: string };
     expect(same.state).toBe('exists');
     expect(sports.size).toBe(1);
-    const created = (await addDiscipline(client, PLAYER_A, { name: 'Chess' })) as {
-      state: string;
-      sport: { name: string };
-    };
-    expect(created.state).toBe('created');
-    expect(created.sport.name).toBe('Chess');
+    // A format of a listed sport is that sport, not a new one.
+    sports.set('s2', { id: 's2', name: 'Football', formats: ['5-a-side'] });
+    const fmt = (await addDiscipline(client, PLAYER_A, { name: '5 a side' })) as { state: string; sport: { id: string }; format: string };
+    expect(fmt).toMatchObject({ state: 'exists', sport: { id: 's2' }, format: '5-a-side' });
+    // An unknown sport is a request for the admins: nothing is added to the shared list.
+    const asked = (await addDiscipline(client, PLAYER_A, { name: 'Chess' })) as { state: string; name: string };
+    expect(asked).toMatchObject({ state: 'requested', name: 'Chess' });
+    expect(sports.size).toBe(2);
   });
 });
 
@@ -833,6 +835,18 @@ describe('team management (Amendment 4, section 1)', () => {
     await expect(
       setPosition(client, PLAYER_A, { teamId: TEAM, userId: ORGANISER, position: 'Striker' }),
     ).rejects.toMatchObject({ status: 403 });
+  });
+
+  it('setting a position never changes a role (an owner stays owner, a captain stays captain)', async () => {
+    const { client, members } = fakeDb();
+    const TEAM = await oneTeam(client, ORGANISER);
+    const roleBefore = members.get(`${TEAM}:${ORGANISER}`)?.['role'];
+    expect(roleBefore).toBe('owner');
+    await setPosition(client, ORGANISER, { teamId: TEAM, position: 'Midfield' });
+    expect(members.get(`${TEAM}:${ORGANISER}`)).toMatchObject({ role: 'owner', position: 'Midfield' });
+    members.set(`${TEAM}:${PLAYER_A}`, { team_id: TEAM, user_id: PLAYER_A, role: 'captain' });
+    await setPosition(client, PLAYER_A, { teamId: TEAM, position: 'Keeper' });
+    expect(members.get(`${TEAM}:${PLAYER_A}`)).toMatchObject({ role: 'captain', position: 'Keeper' });
   });
 
   it('stores profile and team covers', async () => {

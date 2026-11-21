@@ -324,8 +324,17 @@ export default function GamePage() {
               ) : (
                 <strong>{match.venue_name ?? 'Place to be confirmed'}</strong>
               )}
-              <br />
-              <span className="text-[13px] text-muted">{placeLabel(listing)}</span>
+              {(() => {
+                // The second line adds the area; it used to repeat the place name already shown above it.
+                const name = venue?.name ?? match.venue_name ?? '';
+                const rest = placeLabel(listing).split(' · ').filter((p) => p && p !== name).join(' · ');
+                return rest ? (
+                  <>
+                    <br />
+                    <span className="text-[13px] text-muted">{rest}</span>
+                  </>
+                ) : null;
+              })()}
             </span>
             {directionsUrl ? (
               <ButtonLink href={directionsUrl} size="sm" icon={<Navigation size={15} />}>

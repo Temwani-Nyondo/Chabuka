@@ -1774,9 +1774,11 @@ export async function setPosition(
   if (targetId !== userId) {
     await requireCaptain(db, input.teamId, userId);
   }
+  // Adds the player if they aren't in the team yet; an existing member keeps their role (an owner setting their own
+  // position used to be demoted to player and lose the team).
   const { error: joinError } = await db
     .from('team_members')
-    .upsert({ team_id: input.teamId, user_id: targetId, role: 'player' }, { onConflict: 'team_id,user_id' });
+    .upsert({ team_id: input.teamId, user_id: targetId, role: 'player' }, { onConflict: 'team_id,user_id', ignoreDuplicates: true });
   if (joinError) throw dbError(joinError);
   const { error } = await db
     .from('team_members')
@@ -1921,25 +1923,31 @@ export async function setRole(
 
 // Open-ended disciplines (Amendment 4, section 3): normalised, so "Hiking"
 // and "hikes" share one row. Anyone can add one straight away for now.
+/**
+ * A player names a sport they play. If Chabuka has it (or it is a format of one, like "5-a-side"), that sport comes
+ * back. If not, nothing is created: the sports list is shared by everyone, so a new sport is a request the platform
+ * admins add by hand (it used to insert straight into the list, which any player could fill with junk).
+ */
 export async function addDiscipline(
   db: SupabaseClient,
-  _userId: string,
+  userId: string,
   input: AddDisciplineInput,
 ): Promise<unknown> {
   const wanted = normaliseDisciplineName(input.name);
   const { data: existing, error: listError } = await db.from('sports').select('id,name,formats');
   if (listError) throw dbError(listError);
-  const hit = ((existing ?? []) as { id: string; name: string }[]).find(
-    (s) => normaliseDisciplineName(s.name) === wanted,
-  );
+  const sports = (existing ?? []) as { id: string; name: string; formats?: string[] | null }[];
+  const hit = sports.find((s) => normaliseDisciplineName(s.name) === wanted);
   if (hit) return { state: 'exists', sport: hit };
-  const { data, error } = await db
-    .from('sports')
-    .insert({ name: input.name.trim(), formats: [] })
-    .select('id,name,formats')
-    .single();
-  if (error) throw dbError(error);
-  return { state: 'created', sport: data };
+  const asFormat = sports.find((s) => (s.formats ?? []).some((f) => normaliseDisciplineName(f) === wanted));
+  if (asFormat) return { state: 'exists', sport: asFormat, format: (asFormat.formats ?? []).find((f) => normaliseDisciplineName(f) === wanted) };
+  try {
+    const { data: admins } = await createServiceClient().from('platform_admins').select('user_id');
+    await notifyUsers(((admins ?? []) as { user_id: string }[]).map((a) => a.user_id), 'sport_requested', { name: input.name.trim(), by: userId });
+  } catch {
+    // Best effort: the player is still told it was noted.
+  }
+  return { state: 'requested', name: input.name.trim(), note: 'Chabuka does not list this sport yet. The team has been asked to add it.' };
 }
 
 // Platform invite links (Amendment 4, section 2): any member can generate

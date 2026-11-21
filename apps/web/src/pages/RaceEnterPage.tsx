@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CheckCircle2 } from 'lucide-react';
-import { TSHIRT_SIZES, ageOn, formatDuration, venueTime, venueYmd } from '@chabuka/shared';
+import { TSHIRT_SIZES, ageOn, formatDuration, venueTime, venueYmd, formatMoney } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { runAction } from '../lib/api';
 import { fetchRace } from '../lib/races';
@@ -125,7 +125,7 @@ export default function RaceEnterPage() {
         <div className="flex flex-wrap gap-2">
           {view.distances.map((x) => (
             <Chip key={x.id} on={x.id === distanceId} onClick={() => setDistanceId(x.id)}>
-              {x.name} · {x.price > 0 ? `${x.currency} ${x.price}` : 'Free'}
+              {x.name} · {x.price > 0 ? formatMoney(x.price, x.currency) : 'Free'}
             </Chip>
           ))}
         </div>
@@ -214,7 +214,7 @@ export default function RaceEnterPage() {
       <div className={cx('sticky bottom-20 flex items-center gap-3 rounded-2xl border border-line bg-surface p-3 shadow-sm lg:bottom-4')}>
         <div className="flex-1">
           <span className="block text-[13px] text-muted">{d?.name}</span>
-          <strong>{d && d.price > 0 ? `${d.currency} ${d.price}` : 'Free'}</strong>
+          <strong>{d && d.price > 0 ? formatMoney(d.price, d.currency) : 'Free'}</strong>
           {d && d.price > 0 ? <Badge tone="muted" className="ml-2">Paid on WaitApp</Badge> : null}
         </div>
         <Button variant="primary" disabled={!ready || busy} onClick={() => void submit()}>

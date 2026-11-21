@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { formatMoney } from '@chabuka/shared';
 import { useParams } from 'react-router-dom';
 import { MapPin, Navigation, Phone, Settings2 } from 'lucide-react';
 import type { Venue } from '@chabuka/shared';
@@ -156,7 +157,7 @@ export default function VenueProfilePage() {
                 <ListRow
                   key={slot.id}
                   title={when.format(new Date(slot.starts_at))}
-                  sub={paid ? `${slot.currency ?? ''} ${slot.price}, pay at the venue`.trim() : 'Free'}
+                  sub={paid ? `${formatMoney(slot.price, slot.currency)}, pay at the venue` : 'Free'}
                   trailing={
                     full ? (
                       <Badge tone="muted">Full</Badge>

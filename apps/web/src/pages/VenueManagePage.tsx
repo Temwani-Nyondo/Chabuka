@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { CalendarDays, Check, Inbox, Settings2, Sun, TrendingUp, X } from 'lucide-react';
-import { addDaysYmd, venueTime, venueYmd, weekdayOf, DAY_KEYS, DAY_LABELS } from '@chabuka/shared';
+import { addDaysYmd, venueTime, venueYmd, weekdayOf, DAY_KEYS, DAY_LABELS, formatMoney } from '@chabuka/shared';
 import type { HourCell, Venue } from '@chabuka/shared';
 import { useAuth } from '../auth/AuthContext';
 import { runAction } from '../lib/api';
@@ -198,7 +198,7 @@ function bookingLine(b: CalBooking, teams: Record<string, string>): string {
     b.unitNo ? `unit ${b.unitNo}` : null,
     b.teamId && teams[b.teamId] ? teams[b.teamId] : null,
     b.source === 'walk_in' ? 'walk-in' : b.source === 'waitapp' ? 'booked on WaitApp' : null,
-    b.paid ? 'paid' : b.awaitingPayment ? 'payment due' : b.amount ? `${b.currency ?? ''} ${b.amount} at the venue`.trim() : null,
+    b.paid ? 'paid' : b.awaitingPayment ? 'payment due' : b.amount ? `${formatMoney(b.amount, b.currency)} at the venue` : null,
   ]
     .filter(Boolean)
     .join(' · ');

@@ -1,4 +1,5 @@
 import { API_BASE } from './api';
+import { formatMoney } from '@chabuka/shared';
 import { supabase } from './supabase';
 
 // Ticketed games: WaitApp sells, issues and scans the tickets. These helpers
@@ -126,7 +127,7 @@ export function priceLabel(ticketing: MatchTicketing): string {
   const min = Math.min(...prices);
   const max = Math.max(...prices);
   if (max <= 0) return 'Free ticket';
-  const fmt = (n: number) => `${ticketing.currency} ${n % 1 === 0 ? n : n.toFixed(2)}`;
+  const fmt = (n: number) => formatMoney(n, ticketing.currency);
   return min === max ? fmt(min) : `${fmt(min)} - ${fmt(max)}`;
 }
 

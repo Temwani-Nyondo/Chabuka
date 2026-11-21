@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { ActionError } from './actions.js';
-import { createReactionGate, runHelperTurn, tameReaction } from './helper.js';
+import { createReactionGate, HELPER_TOOLS, routeTools, runHelperTurn, tameReaction } from './helper.js';
 import type { ModelResult } from './model.js';
 
 const db = {} as SupabaseClient;
@@ -630,5 +630,43 @@ describe('createReactionGate', () => {
     gate.flush();
     expect(out).toEqual(['Ok.']);
     expect(gate.emitted).toBe(true);
+  });
+});
+
+describe('tool router', () => {
+  const names = (msg: string, recent: { role: string; content: string }[] = []) =>
+    new Set((routeTools(msg, recent) as { function: { name: string } }[]).map((t) => t.function.name));
+
+  it('small talk gets only the core tools', () => {
+    const n = names('thanks!');
+    expect(n.has('get_my_schedule')).toBe(true);
+    expect(n.has('request_space')).toBe(false);
+    expect(n.size).toBeLessThan(10);
+  });
+
+  it('a golf booking gets the golf and venue tools, not everything', () => {
+    const n = names('Can I book a tee time for 2 on Saturday?');
+    for (const t of ['request_space', 'space_availability', 'golf_courses', 'search_venues']) expect(n.has(t)).toBe(true);
+    expect(n.has('create_circle')).toBe(false);
+    expect(n.size).toBeLessThan(30);
+  });
+
+  it('"yes" keeps the tools of what Gaffer just offered', () => {
+    const n = names('yes', [
+      { role: 'user', content: 'book me a tee time at Avondale on Saturday' },
+      { role: 'assistant', content: 'I can grab 08:00 for two at K250 each. Want me to request it?' },
+    ]);
+    expect(n.has('request_space')).toBe(true);
+  });
+
+  it('invites, races and teams route to their tools', () => {
+    expect(names('send my circle the link to Tuesday').has('invite_to_match')).toBe(true);
+    expect(names('any 10K races this month?').has('enter_race')).toBe(true);
+    expect(names('challenge a team from Kabulonga').has('post_challenge')).toBe(true);
+  });
+
+  it('a long message that matches no topic gets every tool', () => {
+    const msg = 'I was thinking about what I could do differently this year to keep things interesting for everyone';
+    expect(routeTools(msg, []).length).toBe(HELPER_TOOLS.length);
   });
 });
